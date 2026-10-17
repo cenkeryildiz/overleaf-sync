@@ -1,0 +1,16 @@
+node_modules/
+dist/
+out-test/
+engine/target/
+bin/
+*.vsix
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+server/data/
+server/secrets/
+_work/
+# Explicitly reviewed synthetic validation evidence can be committed.
+!docs/validation/**/*.log

@@ -1,0 +1,20 @@
+{
+  "name": "overleaf-sync",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Planning and release infrastructure for Overleaf Sync",
+  "license": "SEE LICENSE IN LICENSE",
+  "publisher": "cenker-local",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cenkeryildiz/overleaf-sync.git"
+  },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "node scripts/check-syntax.mjs",
+    "test": "node --test test/repository.test.mjs",
+    "validate": "node scripts/validate.mjs",
+    "build": "node scripts/build-plan.mjs",
+    "test:package": "node scripts/check-package.mjs"
+  }
+}

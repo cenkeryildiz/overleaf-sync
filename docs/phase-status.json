@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 2,
+  "releaseStage": "planning",
+  "phases": [
+    {
+      "id": "R0",
+      "name": "Security and architecture baseline",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R1",
+      "name": "Fidelity and engine selection",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R2",
+      "name": "Durability and recovery",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R3",
+      "name": "Read-only mirror",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R4",
+      "name": "Native editing, presence and packaging",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R5",
+      "name": "Compilation pool, TeX and assets",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R6",
+      "name": "Deployment, hardening and compile load",
+      "status": "not_started",
+      "evidence": null
+    },
+    {
+      "id": "R7",
+      "name": "Pilot and release",
+      "status": "not_started",
+      "evidence": null
+    }
+  ]
+}
