@@ -1,54 +1,55 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "releaseStage": "planning",
   "phases": [
     {
       "id": "R0",
-      "name": "Security and architecture baseline",
+      "name": "Feasibility and local companion",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R1",
-      "name": "Fidelity and engine selection",
+      "name": "Read-only server mirror",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R2",
-      "name": "Durability and recovery",
+      "name": "Safe live text editing",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R3",
-      "name": "Read-only mirror",
+      "name": "Offline work and recovery",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R4",
-      "name": "Native editing, presence and packaging",
+      "name": "Review and presence",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R5",
-      "name": "Compilation pool, TeX and assets",
+      "name": "Project workflow",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R6",
-      "name": "Deployment, hardening and compile load",
+      "name": "Server compilation and operations",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R7",
-      "name": "Pilot and release",
+      "name": "Optional shared compilation",
       "status": "not_started",
       "evidence": null
     }
-  ]
+  ],
+  "releasePhase": null
 }

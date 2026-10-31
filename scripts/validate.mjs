@@ -6,9 +6,9 @@ import { createHash } from 'node:crypto';
 export function parseGateIndex(plan) {
   const start = '<!-- gate-index:start -->';
   const end = '<!-- gate-index:end -->';
-  if (plan.split(start).length !== 2 || plan.split(end).length !== 2 || plan.indexOf(end) < plan.indexOf(start)) throw new Error('Missing or duplicate ranked gate index');
+  if (plan.split(start).length !== 2 || plan.split(end).length !== 2 || plan.indexOf(end) < plan.indexOf(start)) throw new Error('Missing or duplicate release gate index');
   const rows = plan.slice(plan.indexOf(start) + start.length, plan.indexOf(end)).split('\n').filter(line => /^\| \d+ \|/.test(line));
-  if (rows.length !== 50) throw new Error('Ranked gate index requires 50 gates');
+  if (!rows.length) throw new Error('Release gate index is empty');
   const seen = new Set();
   return rows.map((line, index) => {
     const parts = line.split('|').map(part => part.trim());
@@ -17,12 +17,10 @@ export function parseGateIndex(plan) {
     const id = /^`([A-Z][A-Z0-9-]+)`$/.exec(wrappedId)?.[1];
     if (!id || seen.has(id)) throw new Error('Invalid or duplicate gate ID');
     seen.add(id);
-    const expectedTier = index < 12 ? 'A' : index < 28 ? 'B' : index < 46 ? 'C' : 'D';
-    if (tier !== expectedTier) throw new Error('Invalid gate tier');
+    if (!/^[a-z]+$/.test(tier)) throw new Error('Invalid gate category');
     const phases = assigned.split(', ');
     const expected = /^R[0-7]-/.test(id) ? [id.slice(0, 2)]
-      : id === 'INDEPENDENT-REVIEW' ? ['R1', 'R4', 'R7']
-      : ['SEC-REGRESSION', 'PERF-REGRESSION'].includes(id) ? Array.from({ length: 8 }, (_, i) => 'R' + i) : [];
+      : id === 'RELEASE-CHECK' ? Array.from({ length: 8 }, (_, i) => 'R' + i) : [];
     if (!expected.length || JSON.stringify(phases) !== JSON.stringify(expected)) throw new Error('Invalid gate phase assignment');
     return { rank: Number(rank), tier, id, phases, criterion };
   });
@@ -34,9 +32,11 @@ const requireThat = (ok, message) => { if (!ok) throw new Error(message); };
 const text = value => typeof value === 'string' && value.trim().length > 0;
 
 export function validateState(state, read = () => { throw new Error('Evidence is unavailable'); }, requiredGates = gateIds) {
-  requireThat(state.schemaVersion === 2, 'Unsupported phase schema');
+  requireThat(state.schemaVersion === 3, 'Unsupported phase schema');
   requireThat(['planning', 'development', 'candidate', 'production'].includes(state.releaseStage), 'Invalid release stage');
   requireThat(Array.isArray(state.phases) && state.phases.length === 8, 'Exactly eight phases required');
+  const releasing = ['candidate', 'production'].includes(state.releaseStage);
+  requireThat(releasing ? typeof state.releasePhase === 'string' && /^R[0-7]$/.test(state.releasePhase) : state.releasePhase === null, 'Invalid release phase target');
   let priorPassed = true;
   for (const [index, phase] of state.phases.entries()) {
     requireThat(phase.id === `R${index}` && text(phase.name), 'Invalid phase identity/order');
@@ -68,8 +68,7 @@ export function validateState(state, read = () => { throw new Error('Evidence is
       requireThat(log.length > 0 && sha256(log) === check.sha256, 'Evidence log missing or hash mismatch');
     }
   }
-  if (state.releaseStage === 'production') requireThat(priorPassed, 'Production requires all eight phases passed');
-  if (state.releaseStage === 'candidate') requireThat(state.phases.slice(0, 5).every(phase => phase.status === 'passed'), 'Candidates require R0 through R4 passed');
+  if (releasing) requireThat(state.phases.slice(0, Number(state.releasePhase.slice(1)) + 1).every(phase => phase.status === 'passed'), 'Release target requires all prerequisite phases passed');
   if (state.releaseStage === 'planning') requireThat(state.phases.every(phase => phase.status !== 'passed'), 'Planning release cannot claim completed application phases');
   return state;
 }
@@ -89,7 +88,6 @@ export function validateRepository(root = process.cwd()) {
   requireThat(phases.length === 8 && phases.every((id, i) => id === `R${i}`), 'Plan must define exactly eight ordered phases');
   requireThat(!/\bM\d+\b/.test(plan), 'Stale milestone IDs remain in plan');
   requireThat((plan.match(/^```/gm) ?? []).length % 2 === 0, 'Unclosed plan code fence');
-  requireThat((plan.match(/^### S\d+ —/gm) ?? []).length === 12, 'Missing simulation scenarios');
   for (const id of requiredGates.flat()) requireThat(plan.includes(`\`${id}\``), `Plan missing ${id}`);
   const pkg = JSON.parse(read('package.json'));
   requireThat(pkg.license === 'SEE LICENSE IN LICENSE' && pkg.private === true, 'Incorrect package licensing/publication policy');

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { validateState, validateRepository, gateIds, sha256, parseGateIndex } from '../scripts/validate.mjs';
 import { verifyAssets } from '../scripts/check-package.mjs';
 
-const initial = () => ({ schemaVersion: 2, releaseStage: 'planning', phases: gateIds.map((_, i) => ({ id: `R${i}`, name: `Phase R${i}`, status: 'not_started', evidence: null })) });
+const initial = () => ({ schemaVersion: 3, releaseStage: 'planning', releasePhase: null, phases: gateIds.map((_, i) => ({ id: `R${i}`, name: `Phase R${i}`, status: 'not_started', evidence: null })) });
 const report = () => ({ phase: 'R0', result: 'passed', sourceCommit: 'a'.repeat(40), testedAt: '2026-10-09T12:00:00Z', blockingDefects: 0,
   checks: gateIds[0].map(id => ({ id, result: 'passed', skipped: false, command: 'synthetic validation fixture', environment: 'test fixture only', log: `docs/validation/phase-R0/${id}.log`, sha256: sha256('fixture output') })) });
 const passedFirst = () => {
@@ -45,10 +45,6 @@ test('valid synthetic evidence permits only the next phase', () => {
   const state = passedFirst(); state.phases[1].status = 'in_progress'; validateState(state, reader(report()));
   state.phases[2].status = 'in_progress'; assert.throws(() => validateState(state, reader(report())), /predecessor/);
 });
-test('production and candidate status cannot bypass phases', () => {
-  const state = initial(); state.releaseStage = 'production'; assert.throws(() => validateState(state), /all eight/);
-  state.releaseStage = 'candidate'; assert.throws(() => validateState(state), /R0 through R4/);
-});
 test('package detects tampering, path traversal and duplicate roles', () => {
   const roles = ['implementation-plan', 'license', 'phase-status', 'source-archive'];
   const manifest = { schemaVersion: 1, kind: 'planning', applicationReady: false, completedApplicationPhases: 0, sourceCommit: 'a'.repeat(40),
@@ -62,21 +58,34 @@ test('package detects tampering, path traversal and duplicate roles', () => {
 
 test('old schema and reordered identities are rejected', () => {
   const state = initial(); state.schemaVersion = 1; assert.throws(() => validateState(state), /schema/);
-  state.schemaVersion = 2; state.phases[0].id = 'R1'; assert.throws(() => validateState(state), /identity/);
+  state.schemaVersion = 3; state.phases[0].id = 'R1'; assert.throws(() => validateState(state), /identity/);
 });
-test('security and performance evidence are mandatory', () => {
-  for (const id of ['SEC-REGRESSION', 'PERF-REGRESSION']) {
+test('early feasibility and actual release checks are mandatory', () => {
+  for (const id of ['R0-FEASIBILITY', 'RELEASE-CHECK']) {
     const evidence = report(); evidence.checks = evidence.checks.filter(check => check.id !== id);
     assert.throws(() => validateState(passedFirst(), reader(evidence)), /Missing gate/);
   }
 });
-test('R0 alone cannot publish a candidate or a planning completion', () => {
-  const state = passedFirst(); state.releaseStage = 'candidate';
-  assert.throws(() => validateState(state, reader(report())), /R0 through R4/);
-  state.releaseStage = 'planning'; assert.throws(() => validateState(state, reader(report())), /Planning release/);
+test('R0 can release independently but cannot claim R1 or planning completion', () => {
+  const state = passedFirst(); state.releasePhase = 'R0';
+  for (const stage of ['candidate', 'production']) {
+    state.releaseStage = stage; validateState(state, reader(report()));
+  }
+  state.releasePhase = 'R1'; assert.throws(() => validateState(state, reader(report())), /prerequisite/);
+  state.releaseStage = 'planning'; state.releasePhase = null;
+  assert.throws(() => validateState(state, reader(report())), /Planning release/);
 });
 
-test('candidate and production require their full ordered evidence chains', () => {
+test('release targets are required only for candidate and production', () => {
+  const state = initial(); state.releasePhase = 'R0'; assert.throws(() => validateState(state), /target/);
+  state.releaseStage = 'candidate';
+  for (const target of [null, 'R8', 'R0junk', ['R0'], 0]) {
+    state.releasePhase = target; assert.throws(() => validateState(state), /target/);
+  }
+  state.releasePhase = 'R0'; assert.throws(() => validateState(state), /prerequisite/);
+});
+
+test('every increment can release while later phases remain unstarted', () => {
   const state = initial(); state.releaseStage = 'development';
   const evidenceFiles = new Map();
   const read = path => { assert.ok(evidenceFiles.has(path)); return evidenceFiles.get(path); };
@@ -89,27 +98,30 @@ test('candidate and production require their full ordered evidence chains', () =
     }) };
     phase.status = 'passed'; phase.evidence = `${directory}report.json`;
     evidenceFiles.set(phase.evidence, Buffer.from(JSON.stringify(evidence)));
-    state.releaseStage = i >= 4 ? 'candidate' : 'development';
-    validateState(state, read);
-    if (i === 6) {
-      state.releaseStage = 'production'; assert.throws(() => validateState(state, read), /all eight/);
+    state.releasePhase = phase.id;
+    for (const stage of ['candidate', 'production']) {
+      state.releaseStage = stage; validateState(state, read);
+    }
+    if (i < 7) {
+      state.releasePhase = `R${i + 1}`;
+      assert.throws(() => validateState(state, read), /prerequisite/);
     }
   }
-  state.releaseStage = 'production'; validateState(state, read);
   state.phases[2].status = 'blocked'; state.phases[2].evidence = null;
   assert.throws(() => validateState(state, read), /predecessor/);
 });
 
-test('ranked index controls phase assignment without a parallel registry', () => {
+test('release gate table controls assignment without fixed quotas', () => {
   const plan = readFileSync(new URL('../docs/COLLABORATIVE_LATEX_PLAN.md', import.meta.url), 'utf8');
-  const index = parseGateIndex(plan); assert.equal(index.length, 50);
+  const index = parseGateIndex(plan); assert.ok(index.some(gate => gate.id === 'R0-FEASIBILITY'));
   for (let i = 0; i < 8; i++) {
-    assert.ok(gateIds[i].includes('SEC-REGRESSION')); assert.ok(gateIds[i].includes('PERF-REGRESSION'));
-    assert.equal(gateIds[i].includes('INDEPENDENT-REVIEW'), [1, 4, 7].includes(i));
-    assert.ok(!gateIds[i].includes('R0-LICENSE'));
+    assert.ok(gateIds[i].includes('RELEASE-CHECK'));
+    assert.ok(!gateIds[i].includes('SEC-REGRESSION'));
+    assert.ok(!gateIds[i].includes('PERF-REGRESSION'));
   }
-  assert.throws(() => parseGateIndex(plan.replace('R1, R4, R7 |', 'R0, R1, R4, R7 |')), /assignment/);
-  assert.throws(() => parseGateIndex(plan.replace('| 50 | D |', '| 49 | D |')), /row/);
+  assert.throws(() => parseGateIndex(plan.replace('| R1 | Real server', '| R0 | Real server')), /assignment/);
+  assert.throws(() => parseGateIndex(plan.replace('| 11 | release |', '| 10 | release |')), /row/);
   assert.throws(() => parseGateIndex(plan.replace('<!-- gate-index:end -->', '')), /index/);
-  assert.throws(() => parseGateIndex(plan.replace('| 2 | A | `R1-REVIEW`', '| 2 | A | `R1-OT`')), /duplicate/);
+  assert.throws(() => parseGateIndex(plan.replace('`R0-LOCAL`', '`R0-FEASIBILITY`')), /duplicate/);
+  assert.throws(() => parseGateIndex('<!-- gate-index:start -->\n<!-- gate-index:end -->'), /empty/);
 });

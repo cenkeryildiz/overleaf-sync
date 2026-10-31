@@ -1,18 +1,13 @@
 # Phase evidence
 
-All application phases start unpassed. Do not add fabricated sample passing reports.
+All application phases remain unpassed. Do not fabricate sample passing reports.
 
-A passed phase must reference `docs/validation/phase-RN/report.json` from `docs/phase-status.json`. The report contains:
+A passed phase references `docs/validation/phase-RN/report.json` in the schema-3 phase state. Reports contain `phase`, `result: passed`, tested `sourceCommit`, ISO `testedAt`, zero `blockingDefects` and `checks` covering the plan's gate table for that phase.
 
-- `phase`: the phase ID, R0 through R7; `result`: `passed`.
-- `sourceCommit`: the full commit actually tested; `testedAt`: an ISO timestamp.
-- `blockingDefects`: zero.
-- `checks`: results covering every mandatory gate ID in plan section 17. Each includes `id`, `result: passed`, `skipped: false`, the actual `command`, `environment`, and `log` path beneath that phase's evidence directory.
+Each check records `id`, `result: passed`, `skipped: false`, the actual `command`, `environment`, and a sanitized nonempty `log` beneath the phase directory with its `sha256`. Repeat a gate for native targets as needed. A report indexes real evidence; it cannot replace actual server or installed-host checks.
 
-Logs must be committed synthetic/redacted evidence, with a `sha256` field in each check. Include independent observations and artifact/server hashes in the report and supporting files. Repeat a gate ID for separate native platforms when needed. A JSON report is an index to real testing, not a replacement for it.
+R0 feasibility evidence records supported, unsupported or inconclusive outcomes and the resulting go/no-go decision. A conclusive negative capability probe may complete the investigation, but never passes a dependent live-feature gate. Missing required probe evidence blocks completion.
 
-An unavailable required runner, environment or test blocks the current phase. Preserve old reports when reopening a phase; reset dependent phases before advancing again. CI checks sequence, required gate coverage and log integrity. Application CI must also execute the actual tests before publication.
+Keep reports concise. Reuse early fixtures and run affected regressions; no blanket security/performance gates, fixed scenario counts or mandatory multi-day runs. `RELEASE-CHECK` covers actual artifacts and the changed workflow for each release.
 
-State schema 2 requires eight ordered phases. The ranked gate index in the plan is parsed directly by validation. Every phase requires SEC-REGRESSION and PERF-REGRESSION; INDEPENDENT-REVIEW applies only to R1, R4 and R7. Native R0 security checks cannot wait until packaging. Review logs identify the separate review pass, tested commit and independent upstream/server evidence.
-
-Use `development` while implementation has passed gates but has no distributable candidate; `candidate` requires R0–R4. `planning` is reserved for zero passed application phases. Reopening an earlier phase resets all dependents and can require downgrading the release stage.
+State `releasePhase` is null for planning/development and R0–R7 for candidate/production. Releases require passed prerequisites through that target. Earlier increments do not wait for later ones. Preserve historical evidence when reopening a phase, reset dependents and reevaluate release claims.

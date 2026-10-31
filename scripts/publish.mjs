@@ -53,7 +53,7 @@ const body = [
   '**Planning prerelease only — no installable extension or deployed server yet.**',
   '', `Auto-published after repository checks passed on Linux, macOS and Windows.`,
   `Source commit: ${manifest.sourceCommit}`, `CI: ${runUrl}`, '',
-  'Contains the eight-phase risk-first implementation plan, proprietary license, initial phase status, exact source archive and SHA-256 checksums.',
+  'Contains the incremental release plan with early feasibility probes, proprietary license, initial phase status, exact source archive and SHA-256 checksums.',
   'All application implementation phases are still unpassed. These checks do not establish application readiness.',
   '', ...files.map(name => `- ${name}`),
 ].join('\n');
