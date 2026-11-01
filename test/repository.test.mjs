@@ -119,7 +119,7 @@ test('release gate table controls assignment without fixed quotas', () => {
     assert.ok(!gateIds[i].includes('SEC-REGRESSION'));
     assert.ok(!gateIds[i].includes('PERF-REGRESSION'));
   }
-  assert.throws(() => parseGateIndex(plan.replace('| R1 | Real server', '| R0 | Real server')), /assignment/);
+  assert.throws(() => parseGateIndex(plan.replace('`R1-MIRROR` | R1 |', '`R1-MIRROR` | R0 |')), /assignment/);
   assert.throws(() => parseGateIndex(plan.replace('| 11 | release |', '| 10 | release |')), /row/);
   assert.throws(() => parseGateIndex(plan.replace('<!-- gate-index:end -->', '')), /index/);
   assert.throws(() => parseGateIndex(plan.replace('`R0-LOCAL`', '`R0-FEASIBILITY`')), /duplicate/);
