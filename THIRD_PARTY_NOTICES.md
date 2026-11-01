@@ -9,6 +9,7 @@ The release pattern was inspected in [data-file-viewer](https://github.com/cenke
 Before adding dependencies or vendored code, record the exact revision, license, copyright notice, modifications, distribution location and any source-delivery obligations in `docs/dependencies.md`. In particular:
 
 - Overleaf CE+ is separately licensed upstream; preserve its applicable AGPL terms and distribution/source obligations.
+- Overleaf Workshop is AGPL-3.0; this proprietary companion currently incorporates none of its source. Prefer existing extension interfaces; resolve distribution/licensing scope explicitly before any source-derived integration.
 - Audit upstream OT/reference-code reuse before copying or deriving implementation code. A separate process is not automatic proof of license compatibility.
 - Preserve the MIT notice if any jujuleaf code is reused.
 - Include required notices for compiler binaries, fonts and packages in the artifacts containing them.

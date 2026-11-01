@@ -1,180 +1,174 @@
 # Collaborative LaTeX — Incremental Release Plan
 
-Design revision: 24 October 2026. This is a delivery plan, not implemented functionality.
+Design revision: 1 November 2026. Planning/tooling only; no application or deployment is implemented.
 
 ## 1. Product and boundaries
 
-Build a Windows/macOS VS Code extension for native LaTeX editing, with an explicit per-window choice of **Local only** or **Connect to server**. Connected collaborators use one independent, self-hosted Overleaf CE+ server and its unchanged browser UI, with individual accounts. No Premium account dependency, server patches or upstream fork.
+Build a small Windows/macOS VS Code companion around existing tools. Its added value over Overleaf Workshop is **safe offline recovery, an explicit per-window Local only / Connect to server choice, and no silent overwrite of local work**. Do not rebuild the server, LaTeX editor, compiler integration or collaboration protocol merely to own the whole stack.
 
-Preserve local work, original assets, review identities and server permissions. Never silently overwrite divergent content or advertise a transport acknowledgement as a confirmed edit. Unsupported operations remain held/read-only or open the browser with a clear explanation.
+Use the previously selected [yu-i-i/overleaf-cep, branch `ext-ce`](https://github.com/yu-i-i/overleaf-cep/tree/ext-ce), an extended Community Edition distribution, as the intended self-hosted server. Its README advertises comments and real-time tracked changes, alongside SSO methods. **CE+ is not plain CE:** do not remove review from scope solely because official CE lacks it. Pin and probe the actual CE+ build. Keep that chosen distribution and its browser UI unmodified; no new server patches, fork maintained by us, or Premium-account dependency.
 
-Targets: Windows x64, Intel macOS and Apple Silicon macOS. Remote SSH, WSL, containers, browser VS Code and Windows ARM64 are deferred. The project remains proprietary; retain LICENSE, third-party notices and provenance for incorporated dependencies.
+Reuse Overleaf Workshop for supported connection/project/protocol behavior, and LaTeX Workshop for local compile, PDF preview, diagnostics and SyncTeX. First prove a companion can use their existing interfaces safely. Workshop is AGPL-3.0; this repository is proprietary. Prefer invoking the installed extension's available commands/filesystem interfaces. Reading source and sanitized wire traces informs probes; copying or deriving implementation code requires an explicit compatible licensing decision and notices. Do not assume an upstream API exists or that a separate process resolves licensing. If safe integration is unavailable, record that R0 result and choose a smaller read-only/browser route before writing a replacement engine.
+
+Preserve local buffers/files, original assets, review identities and permissions. Never silently overwrite divergence or mistake a transport acknowledgement for a confirmed edit. Targets remain Windows x64 and Intel/Apple Silicon macOS. Remote SSH/WSL/containers/browser VS Code, Windows ARM64, custom installers, Rust engines, shared daemons and compute pools are outside early scope.
 
 ## 2. Release strategy
 
-Each phase R0–R7 produces a usable, independently releasable increment. A release needs its own gates and completed prerequisites, not the entire roadmap. Version numbers below are intended feature milestones, not promised dates. Patch releases fix defects within an already delivered scope.
+R0–R7 remain independently scoped increments with the existing gate IDs and schema-3 status. **Ship R1 as soon as R0 and R1's actual gates pass; expanded R2 write/OT qualification may continue afterward.** Do not hold a useful no-write mirror for a custom outbox, review panel or full collaboration engine. No required R1 check is waived to ship early.
 
-| Phase / version | What the user receives | Deliberately deferred |
+| Phase / version | Minimum useful delivery | Shortcut / deferred work |
 |---|---|---|
-| R0 / 0.1 | Installable local LaTeX companion: local session, existing toolchain detection, compile/PDF commands through LaTeX Workshop; early feasibility findings | Server connection and custom installers |
-| R1 / 0.2 | Login, project selection and a safe read-only local mirror; browser link for collaboration | Remote writes |
-| R2 / 0.3 | Concurrent native text editing for proven document formats, durable pending edits and safe reconnect | Offline automatic replay, review actions, tree mutations |
-| R3 / 0.4 | Offline editing/reconciliation and recovery workflow, sleep/restart handling | Broad review and project-management UI |
-| R4 / 0.5 | Comments/tracked-change tools and presence for supported server capabilities | Distributed compilation |
-| R5 / 0.6 | Bibliography/assets, explicit file operations, supported history/settings and SyncTeX integration | Custom toolchain installation and compute pool |
-| R6 / 0.7 | Dedicated server compilation and a supported small-team server deployment/backup bundle | Multi-worker scheduling |
-| R7 / 0.8 | Optional compile pool, cache and failover, if measured demand justifies it | No obligation to implement unused scaling features |
+| R0 / 0.1 | Local/Connect choice with only local operation enabled; existing LaTeX Workshop/toolchain integration; early capability report | No server deployment framework or custom editor/compiler |
+| R1 / 0.2 | Cookie-first login, project selection, safe read-only mirror and browser handoff | No remote writes; ship independently of R2 live-readiness |
+| R2 / 0.3 | Narrow live text editing through a proven reusable operation path; durable pending intent and safe reconnect | No new OT algorithm; unsupported formats/review combinations remain read-only |
+| R3 / 0.4 | Recover offline candidates and offer explicit built-in diff/manual reconciliation | Automatic offline merge/replay is deferred unless upstream proves safe semantics |
+| R4 / 0.5 | Optional existing review/presence integration or read-only/browser handoff, according to R0 | No custom review panel by default; chat is optional |
+| R5 / 0.6 | Optional project conveniences with a demonstrated personal use | Reuse mirror files/LaTeX Workshop/browser for bibliography, assets, history, settings and tree operations |
+| R6 / 0.7 | Optional small-team CE+ setup/backup instructions when deployment is actually needed | Reuse CE+ Toolkit and existing compile service; no custom coordinator or compiler service |
+| R7 / 0.8 | Parked unless measured compile contention creates a concrete need | No pool/worker/cache implementation is currently scheduled |
 
-All releases retain earlier supported behavior. Early versions can be supported releases within their stated scope; “production” does not mean full Overleaf parity. A failed probe can reduce a documented capability, never justify an unsafe write or a false passing feature gate.
+Version numbers describe scope, not dates. Later optional phases cannot block an earlier release. Before starting R4–R7, name the user's concrete workflow and show why existing tools/browser handoff are insufficient. Otherwise defer it. The sequential status validator is unchanged: a later phase is not marked started/passed before prerequisites; exploratory findings can be recorded without claiming a phase has begun or passed.
 
 ## 3. First work: feasibility before substantial implementation
 
-R0 starts with disposable-project probes against one pinned CE+ image/source revision. Do these before building a custom synchronization engine, elaborate UI, recovery platform or coordinator. Prefer short executable experiments and sanitized traces over extensive framework construction. Use upstream source and independently read server/browser state as the oracle.
+Use disposable synthetic projects against a pinned CE+ build. Reuse a pinned Overleaf Workshop revision as a debugging/reference client on that same server: compare cookie handling, project listing, socket framing, join/catch-up and local-replica behavior with the unchanged browser/server responses. Trace headers, payload identities and errors with credentials removed. Avoid constructing a protocol framework before these short probes answer the integration questions.
 
-| Priority | Experiment | Decision before larger work |
+| Priority | Probe | Required decision |
 |---|---|---|
-| 1 | Authenticate distinct accounts; discover actual wire framing, document formats, versions, join/catch-up and permission revocation | Can an unchanged server support a narrow client? Which formats/routes work? |
-| 2 | Two clients plus browser: simultaneous insert/delete, Unicode, comments, tracked insertions and hidden deletions; compare authoritative text and review IDs/authorship/anchors | Is the existing upstream JS/TS OT/review implementation reusable? Which documents can safely be edited? |
-| 3 | Accept an operation, drop its application confirmation, reconnect with a new identity; inspect history/deduplication evidence | Can committed versus uncommitted intent be distinguished? If not, require a visible recovery hold; never blind replay |
-| 4 | Force a crash before/after a minimal durable intent record and send; restart and recover the exact local candidate; race a remote patch with local typing | Is the proposed write/recovery boundary viable before a full journal and editor bridge are built? |
-| 5 | Probe server capabilities for presence/review actions, conditional asset replacement and configuration-only separate CLSI routing | Which later features are available, require browser/one-way fallback, or cannot proceed? |
+| 1 | **Cookie login first:** logged-in browser cookie, account/project identity, logout/expiry/revocation, supported SSO/captcha browser flow; then secondary password login only where supported. Check actual distribution/version/image digest and available Workshop interfaces. | A working primary login and read path on an exact tested server. Password-only success does not prove cookie/SSO deployments work. No captcha solver or SSO reimplementation. |
+| 2 | **Review capability beside the OT experiment:** on the selected CE+ build inspect comments, tracking controls, existing tracked insertions/hidden deletions, IDs/authorship/anchors and actual route/permission behavior; exercise minimal two-client-plus-browser text operations with Unicode. | Record review separately as supported, unsupported or inconclusive. CE+ advertised support is a probe premise, not acceptance. Official plain CE restrictions are a comparator, not a verdict about CE+. |
+| 3 | Accept an operation, lose its application confirmation and reconnect with a new identity; inspect authoritative version/history/deduplication. | Can the reused adapter distinguish committed intent? Otherwise hold uncertain edits; never blind replay. R2 stays blocked for that write path. |
+| 4 | Minimal crash-before/after-intent/send experiment and local typing raced with a remote patch. | Can the reused path preserve the exact local candidate and a proven base? Choose a small durable outbox only if writes need one; no journal platform upfront. |
+| 5 | Read-only discovery of compile/preview, SyncTeX, cursor/presence, optional chat and existing browser/project operations. | Fill the reuse/defer checklist below; do not implement every available feature. |
 
-The first three experiments are the critical path. Keep priority 5 to capability probes, not implementations or load testing. Record source/image IDs, commands, observed outcome and feature consequence in the R0 report. Distinguish supported, unsupported and inconclusive; an unavailable probe stays unresolved. A negative conclusive result is a completed feasibility investigation, not a passing live-editing test.
+Run the early probes before dependent feature construction. The R0 report records each executed probe's command, pinned source/image, sanitized trace, outcome and feature consequence. Missing required local/read/auth/version evidence blocks the corresponding R0/R1 gate. A conclusive absent review capability reduces scope; an inconclusive write proof stays an explicit **R2 hold**, not a passing live test. R0 local delivery and subsequently proven R1 reads do not require all expanded R2 write proofs to be green. No unexecuted required check is relabeled passed.
 
-Before continuing beyond the probes, record a go/no-go decision: reusable adapter and safe write path; reduced read-only route; or required architectural reconsideration. Stop work on a disproven feature and revise its scope before spending on dependent implementation. R0 local-only delivery can proceed after a conclusive negative result; connected releases still require their actual capability gates. Missing required probe evidence blocks R0 completion.
+**R0 deliverable: tested compatibility matrix.** Record CE+ repository/source commit, image digest, server-reported base version, architecture, configuration, auth method, document format and per-feature results; pin the Workshop reference commit too. Keep planned, upstream-reported and actually tested entries distinct. Workshop's current README reports CE **3.5, 4.1, 4.2.4 and 5.0.4** (the earlier three-version list omitted 4.2.4). Those reports do not certify our CE+ target or client. Our tested list is initially empty. Unknown distribution/version/digest combinations refuse connection with a clear explanation until an explicit compatibility-probe run qualifies them; a probe is not ordinary connected use. A moving image tag is not a pin, and version discovery must not leak credentials to another origin.
+
+| Workflow | Default reuse decision | Add our own code only for |
+|---|---|---|
+| Account/project access and wire protocol | Workshop's compatible existing interface; browser for SSO/captcha | Session choice, validated cookie storage/origin and a narrow adapter proven in R0 |
+| Open Locally / local mirror | Use read APIs or an isolated provider only after R1's regression; never delegate an unsafe overwrite path | Own local-candidate protection, staging and explicit divergence hold |
+| Compile, diagnostics and PDF preview | LaTeX Workshop locally; existing CE+ browser/server compile remotely | Routing/status needed to preserve the correct source/PDF identity |
+| SyncTeX/reverse SyncTeX | LaTeX Workshop's existing commands; probe remote support in R0 | Proven project-path/source-generation mapping, not a new SyncTeX engine |
+| Cursor/presence indicators | Existing Workshop/browser capability | Safe session/coordinate plumbing if it is useful and available |
+| Comments/tracked changes | Existing CE+ browser or proven Workshop interface | Preservation and an explicit read-only/handoff state; custom actions only on demonstrated need |
+| Chat | Existing Workshop/browser; optional | Nothing scheduled |
+| Assets, bibliography, file tree, history/settings | Existing tools and browser; preserve mirrored source bytes | A specific missing workflow, separately justified in R5 |
+
+### Upstream references for probes
+
+- [CE+ README](https://github.com/yu-i-i/overleaf-cep/tree/ext-ce#readme) and [CE+ configuration/release wiki](https://github.com/yu-i-i/overleaf-cep/wiki): intended distribution, claimed capabilities and image configuration. Resolve and record an immutable server commit/image before testing.
+- [Workshop README](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/README.md): cookie guidance, features and upstream compatibility list, inspected at this reference commit. Revalidate before changing the compatibility matrix.
+- Workshop source at that same revision: `src/api/base.ts`, `src/api/extendedBase.ts`, `src/api/socketio.ts`, `src/api/socketioAlt.ts`, `src/core/remoteFileSystemProvider.ts`, `src/scm/localReplicaSCM.ts`. Use their actual server interactions to shorten probes; no new dependency/source incorporation is claimed.
+- [Workshop issue #353](https://github.com/overleaf-workshop/Overleaf-Workshop/issues/353) reports intermittent local overwrite after local and remote edits. It motivates R1's reconnect regression; it is not proof that every Workshop deployment loses data or that we reproduced the bug.
+- [Official edition permissions](https://docs.overleaf.com/on-premises/user-and-project-management/roles-and-permissions) distinguish plain CE from Server Pro; inspect CE+ directly rather than applying that restriction to its extensions.
+- [LaTeX Workshop](https://github.com/James-Yu/LaTeX-Workshop): reuse its supported compiler, viewer and SyncTeX integration. Record the installed version and commands actually tested.
 
 ## 4. Implementation choices
 
-Start with TypeScript in VS Code and reuse the pinned upstream JS/TS operation implementation where compatible. Rust is deferred until profiling identifies a specific problem that justifies a native engine. Do not build two production engines or run a language-comparison project as a prerequisite.
+Keep the first implementation TypeScript-only and as small as possible. Prefer the existing VS Code extension, editor, diff UI, filesystems and platform storage before dependencies or vendoring. Reuse only APIs/operations proven on the pinned server; a missing upstream interface triggers a scope decision rather than automatic construction of a second client.
 
-Use an extension-owned process initially. Enforce one editing owner per linked project on a machine; a second window is an observer or explicitly takes ownership after reconciliation. Do not build a shared daemon/lease system until a demonstrated need requires it. Closing the client never stops the independent server. Client-owned children must terminate on shutdown/crash recovery.
+R1 needs safe staging and a recoverable confirmed mirror, not a live-write journal. Before R2 sends, verify one maintained durable store on supported hosts; SQLite is a candidate only if an existing upstream mechanism is insufficient. No native/Rust engine, shared daemon, custom installer, dual-engine benchmark or broad package inventory is a prerequisite. One local editing owner per project is enough; another window observes or explicitly takes over after reconciliation. Client-owned children terminate on shutdown; closing a client never stops the independent server.
 
-Choose a maintained transactional local store before R2, verifying durability, supported platforms and packaging with the minimal crash experiment. SQLite is the preferred starting point, not a reason to introduce Rust. Record the selected binding, bundled version, license and durability settings. Avoid a large upfront package inventory; add locked dependencies when their release needs them.
+Intended locations only: `src/extension.ts` / `src/config.ts` (session choice), `src/server/*` (narrow auth/capability adapter), `src/mirror/*` (R1 safety), `src/sync/*` and `src/store/*` only if proven necessary for R2/R3. Add feature-specific tests with implementation. No application files or dependencies are introduced by this revision.
 
-| Area | Intended location | Introduced |
-|---|---|---|
-| Activation, session choice, configuration | `src/extension.ts`, `src/config.ts` | R0 |
-| Local compilation integration | `src/compile/*` | R0; extended R6 |
-| Login, server adapter, capability records | `src/server/*`, `test/fixtures/protocol/*` | R0 probes / R1 runtime |
-| Safe hydration and file mapping | `src/mirror/*` | R1 |
-| Text/review operations and editor bridge | `src/sync/*`, `src/documents.ts` | R2 |
-| Journal, pending intents, recovery | `src/store/*`, `src/recovery/*` | R2; extended R3 |
-| Review and presence | `src/review/*`, `src/views/*` | R4 |
-| Explicit assets/tree/history operations | `src/project/*` | R5 |
-| Deployment and server compilation | `server/*` | R6 |
-| Optional scheduler and workers | `coordinator/*`, `worker/*` | R7 only |
-| Actual tests and evidence | `test/*`, `docs/validation/phase-RN/*` | With owning feature |
+## 5. Session, authentication and mirror safety
 
-These are intended paths, not existing implementation claims. Keep user settings short and limited to genuine choices; internal queue sizes, RPC details and algorithm knobs belong in code.
+Each window explicitly chooses Local only or Connect to server. Local only makes no server calls or presence/job submissions through this companion; test upstream integration for unintended activation/contact. Connected use pins one normalized origin/account and reconciles divergence before any send. R1 is read-only remotely, including reconnect, and defaults to browser handoff for collaboration.
 
-## 5. Session and server contract
+**Cookie login is primary; password login is secondary.** Use an already authenticated browser for SSO/captcha deployments, then import only the required cookie through a secret input. Warn before storage that **the cookie gives full access as that account**, not just to this project. Store it only in VS Code SecretStorage, scoped by validated origin/account; never settings, workspace files, telemetry, trace logs, source archives or test evidence. Expired/revoked cookies visibly disconnect and preserve local work; logout removes the stored secret. No browser-profile scraping or automatic R0 credential collection.
 
-Local only performs local editing/compilation and cached viewing without server contact, presence or shared jobs. Connect to server authenticates the selected endpoint/account and reconciles local divergence before any send. R0 exposes only the usable local path; connection becomes available with R1.
+Parse URLs and validate scheme, hostname and effective port as an exact origin before saving or sending credentials. Reject userinfo (including `https://host@evil.com`), misleading/lookalike hosts, origin mismatches and redirects to another origin; do not use string-prefix checks. Normal deployed connections use HTTPS. Scope cookies to the validated origin and do not forward them across redirects. Read back the account/project identity after login and permission after reconnect; failures retain local candidates. Record negative origin/secret-redaction cases in R1, not just the happy login.
 
-Pin the actual server image/source and supported deployment combination. Individual credentials belong in VS Code SecretStorage scoped to normalized origin/account. Reject cross-origin credential forwarding. Recheck permissions after reconnect and when revoked; retain local edits when access ends. Use TLS for deployed connections, bounded messages/queues and validated project paths. Keep databases and internal compiler/control endpoints private.
+Mirror into an extension-owned dedicated folder. Hydrate through staging; never replace an existing user folder silently. Remote changes are candidates until local dirty buffers, disk state and the last confirmed base have been compared. Preserve all three states on divergence, offer VS Code diff/copy/browser choices, and never infer a remote delete/rename from a local file's absence. Reject path escapes, symlink/reparse escapes and case collisions. External editors can change even a nominally read-only mirror; uncertainty causes a hold, not an overwrite. No claim of universal filesystem compare-and-swap.
 
-R1 uses disposable development staging and documents the connection prerequisites. It does not require a production deployment platform. R6 supplies the supported production deployment bundle; administrators may supply an existing compatible server for earlier connected releases.
+**R1 mirror data-loss regression:** hydrate a synthetic project; dirty a VS Code buffer and independently change its on-disk mirror; change the same file remotely in the browser; disconnect/reconnect and trigger refresh (also restart with retained local state). Prove local-buffer, local-disk and remote candidates remain recoverable, conflicts are visible, no local candidate is silently replaced, and no remote mutation was submitted. Include dirty-at-initial-hydration and remote delete/rename. Use the upstream issue as a reproduction pattern, not an unsupported allegation. This is an R1 release gate, not deferred to R2/R3.
 
 ## 6. Minimum safety before live writes
 
-The hub owns confirmed shared state. The journal preserves outstanding local intent. Neither overwrites the other just because a connection resumes.
+R2 uses a proven upstream operation path; do not implement a new OT/review algorithm. Before any remote send, persist identity, exact intent, confirmed base/version, tracking decision and stable operation ID. Atomically record confirmation/base advancement. Distinguish durable, submitted, confirmed, ambiguous and held states. Storage failure stops sends and retains the editor candidate. Resolve one outstanding submitted operation before dependent work; loss of confirmation is not permission to replay. Use authoritative server evidence; text equality is insufficient. If proof is unavailable or expired, preserve the candidate and hold for explicit resolution.
 
-Before R2 remote sends, persist document/account identities, exact operation, base/version, tracking decision and stable local operation ID. Persist confirmation and advancement of the confirmed base atomically. Separate captured, durable, submitted, confirmed, ambiguous and held states. On storage failure, stop sends and stop claiming durability; keep the editor content and report the problem.
+Review gates follow the R0 capability record. If CE+ exposes review, prove concurrent text/review preservation, hidden deletions, IDs/authorship/anchors and legitimate metadata transformations on disposable projects. If review is conclusively absent, R2's review gate narrows to **preserve existing state**, do not synthesize/strip review metadata, and refuse writes to any document whose state/format cannot be safely understood. Unknown or partially readable review state stays read-only. This reduction never waives text, identity, concurrency or recovery tests. Do not advertise review actions in R2; R4 defaults to existing read-only/browser capability.
 
-Resolve at most one submitted unresolved operation per document before dependent work. Prove confirmation, catch-up and deduplication against the pinned server. After a lost confirmation, use authoritative evidence; text equality alone is insufficient. If evidence has expired or cannot distinguish the outcome, preserve the candidate and hold it for resolution. R2 detects disconnects and holds unsent work; R3 adds deliberate offline/rebase workflows. Basic crash safety is mandatory in R2.
+Exercise Unicode/UTF-16, line endings, IME, undo/redo, multi-cursor/format-on-save and remote edits against editor revisions in the real host. Suppress only the exact observed echo. Preserve dirty buffer/disk/remote candidates, permission-revoked work and original assets. R2 needs baseline crash/disconnect safety; R3 may reuse built-in diff and explicit manual choices rather than automatic offline merge. Never claim Workshop's existing behavior is safe without the regression.
 
-Use the upstream format's apply/transform/review semantics. Verify UTF-16 coordinates, emoji, combining marks, Turkish text, line endings and boundary edits. Never infer hidden tracked deletions from visible text. Preserve IDs, authorship, anchors and legitimate metadata transformations; counts alone are insufficient. R2 need not expose review actions, but it must preserve existing review state. Restrict unsupported documents before writes; do not classify them as safe from a stale or text-only observation.
+## 7. Compilation and later conveniences
 
-Apply remote changes against the expected editor revision. Suppress only the observed echo of that exact patch, never “the next edit.” Exercise undo/redo, IME, multi-cursor edits and format-on-save in the real host. A second local editor must not silently replace the owner buffer. Preserve dirty buffer, disk and remote candidates on divergence.
+Use LaTeX Workshop and installed TeX/latexmk for local build, preview, diagnostics, bibliography recipes and SyncTeX. Missing tools or compile failure leave usable source and an actionable status. No automatic tool/package installation. For connected compilation, prefer the existing CE+ compile/browser path; preserve source/PDF identity and show stale output rather than inventing a new service.
 
-Never infer a remote delete/rename from a missing local file. Reject path escapes, symlink/reparse escapes and case collisions. Closed-file writes use temporary files and supported atomic replacement, with recoverable prior content and a declared single-writer boundary. Arbitrary external programs do not provide universal file compare-and-swap; uncertainty causes a hold. Mirror into a dedicated folder and never overwrite an existing user folder without reconciliation.
-
-## 7. Compilation and project inputs
-
-R0 delegates recipes, PDF viewing and diagnostics to existing LaTeX Workshop/toolchains. Detect installed TeX and latexmk; missing dependencies receive actionable status. No automatic distribution/package installer is required. Local source remains usable when compilation fails. Do not silently install packages or external tools.
-
-R5 preserves `.bib` text, keys, comments and order, original figure bytes, plot data and custom styles. Include PDF figures when they are source inputs; exclude generated outputs by role/path. Do not run figure generators. Delegate BibTeX/Biber recipes and SyncTeX where the existing integration suffices.
-
-R6 uses a separate, restricted CLSI/compiler service; synchronization services never execute TeX. First ship one compatible dedicated worker and configuration-only routing established by the early probe. Preserve requester/project/build identities, bound jobs and clean build directories. Keep secrets outside the TeX job and enforce timeout, path and process limits. Capture the source generation and label stale PDFs. Probe actual browser refresh behavior; do not promise cross-user refresh without evidence.
-
-R7 is demand-driven. First measure queue wait and compile contention on R6. Only then add authenticated scheduling, project-scoped cache, worker compatibility, leases and failover. Validate signed/authorized results if untrusted worker transport requires them. Never enable client CPU contribution without an explicit choice. A pool distributes independent jobs; it does not inherently speed up a single TeX run.
+Keep `.bib` text/keys/comments/order, original figures (including PDF inputs), styles and data unchanged. Do not run figure generators. Browser tree/history/settings/review operations remain the default until a real need justifies a small native command. R6 may later document a pinned existing Toolkit/compiler deployment, private endpoints and tested backup/restore; it is not a custom CLSI rewrite. R7 has no scheduled architecture or implementation. Reconsider only if measured queue/compile contention and actual users justify it.
 
 ## 8. Proportionate testing policy
 
-Keep tests that establish feasibility, prevent source/review loss, or verify shipped behavior. Run focused checks while developing and the affected regression suite before release. Reuse R0 fixtures in later feature tests; do not rebuild the same oracle or repeat every exploratory experiment unchanged at each phase.
+Reuse disposable upstream/browser scenarios and fixtures; test only the feature or failure boundary introduced. No fixed test quotas, mandatory multi-day pilots, blanket performance/security certifications or dual engines.
 
-- R0 gets the critical server/OT/ambiguity/crash probes first, plus installed local startup/build checks.
-- R1 adds authentication, revocation, path safety, reconnect and divergent-file mirror checks.
-- R2 adds real-server concurrent editing and review-fidelity tests, dropped/duplicate messages, crash/journal failpoints, storage failures and real-host edit races.
-- R3 adds offline/rebase, restart/sleep, expired history and recovery conflicts.
-- R4–R7 add tests only for the features they introduce and affected earlier behavior.
+- R0: cookie-first auth/version/integration probes, review/OT capability discovery and installed local-only behavior; preserve inconclusive live findings as R2 holds.
+- R1: real cookie/project reads, strict origins/secret storage, expiry/revocation, safe hydration and the local-edit + remote-change + reconnect data-loss regression, proving zero remote writes.
+- R2: real-server text fidelity, capability-scoped existing review preservation, ambiguous/dropped confirmations, durable recovery and installed editor races.
+- R3: actual offline recovery/manual reconciliation, restart/sleep and expired-history conflicts.
+- R4–R7: only justified shipped conveniences or their truthful browser/read-only fallback; do not build speculative tests for parked systems.
 
-For each distributable release, install the actual VSIX on declared targets and exercise the changed workflow. Use one representative realistic project and a larger fixture where size affects the change. Measure startup/typing/queue behavior when that path changes; investigate visible regressions against the recorded baseline. Set numeric budgets only after measuring the supported workload/hardware. An artificial timing threshold on a shared CI runner is not an automatic blocker.
-
-Removed requirements: fixed 50-gate quotas and tiers, blanket security/performance reruns in every phase, obligatory separate reviewer at fixed phases, fixed scenario counts, mandatory fuzz/benchmark frameworks, dual-engine benchmarking, PGO/LTO tuning, dedicated daemon/RPC security infrastructure before it exists, strict synthetic CPU profiles, eight-hour load runs and a mandatory 48–72-hour pilot. Security checks remain attached to actual authentication, paths, persistence, compilation and distribution boundaries. Use a short multi-user session before the first live release; extend load/soak testing only for an observed failure or an explicit deployment workload.
-
-Do not remove a regression that guards a real defect to make a release pass. No skipped/mocked-only check can satisfy a gate needing a real server or installed host. Fix defects before advancing; a missing required environment remains missing evidence.
+Install real VSIXs on declared Windows/macOS targets and exercise changed behavior before claiming an application release. Record exact source/artifacts and supported rollback. Missing server/host evidence remains missing; mocks/skips cannot satisfy a gate requiring reality. A shorter plan never waives no-data-loss checks. All application phases currently remain `not_started`.
 
 ## 9. Delivery order and release gates
 
-The table below is the sole machine-parsed gate registry. Each criterion is scoped to its owning release. Earlier safety tests run again when the changed code can invalidate them. `RELEASE-CHECK` applies to every release; it is one reusable packaging/changed-workflow check, not a duplicate full certification program.
+This is the sole machine-parsed gate registry. Keep gate IDs and eight ordered phase records stable. An earlier usable release requires its own actual gates/prerequisites, not all later features. `RELEASE-CHECK` covers each shipped increment. A later read-only/browser fallback must itself be exercised; a parked feature is not falsely marked passed.
 
 <!-- gate-index:start -->
 | Rank | Category | Gate | Phase | Acceptance |
 |---|---|---|---|---|
-| 1 | feasibility | `R0-FEASIBILITY` | R0 | Run all five early probe groups; save pinned source/server evidence, supported/unsupported conclusions and go/no-go decisions before substantial feature work; unresolved required probes block completion. |
-| 2 | local | `R0-LOCAL` | R0 | Actual installed extension offers local-only editing/build/PDF integration on declared targets without contacting a server; missing TeX and compile failure preserve usable source. |
-| 3 | mirror | `R1-MIRROR` | R1 | Real server login, project hydration and reconnect work; credentials, permissions, divergent content, path escapes and case collisions are handled without overwrite or remote mutations. |
-| 4 | fidelity | `R2-LIVE` | R2 | Supported formats pass pinned-server concurrent text/review differential tests, Unicode and installed-host edit races; unknown formats/review interactions block writes before submission. |
-| 5 | durability | `R2-RECOVERY` | R2 | Persist before send, atomically confirm, recover crash/storage failures, retain permission-revoked work and hold lost/duplicate-confirmation ambiguity without blind replay or dropped edits. |
-| 6 | offline | `R3-OFFLINE` | R3 | Offline edits survive restart/sleep; reconcile concurrent remote edits and expired history; preserve all conflict candidates with an actionable resolution workflow. |
-| 7 | review | `R4-REVIEW` | R4 | Supported comment/change actions preserve IDs, authorship, hidden deletion content and permissions; presence coordinates survive edits; unsupported actions open browser or remain held. |
-| 8 | project | `R5-PROJECT` | R5 | Bibliography/assets retain source fidelity; ID-based tree operations and conditional replacement handle conflicts; history/settings/SyncTeX work where supported with visible fallbacks. |
-| 9 | server | `R6-SERVER` | R6 | Dedicated compiler routing, cancellation, source/PDF identity and job isolation work; deployed TLS/private endpoints, backup restore and upgrade rollback are exercised on staging. |
-| 10 | scale | `R7-POOL` | R7 | Measured R6 demand justifies pool; authorized compatible workers, project cache isolation, bounded queues and failover pass representative concurrent-job tests without harming editing. |
-| 11 | release | `RELEASE-CHECK` | R0, R1, R2, R3, R4, R5, R6, R7 | Run affected regressions, install actual artifacts on declared Windows/macOS targets, exercise changed workflow and verify exact source/hash/download provenance plus supported rollback. |
+| 1 | feasibility | `R0-FEASIBILITY` | R0 | Execute required local/read/auth/version probes; record pinned CE+ image/source, tested compatibility list, Workshop reference and explicit review/OT/write outcomes. Unresolved live-only proofs remain R2 holds, not passing write checks; required read evidence cannot be missing. |
+| 2 | local | `R0-LOCAL` | R0 | Actual installed companion uses local LaTeX Workshop compile/PDF commands on declared targets without server contact; missing tools/build failure preserve source. |
+| 3 | mirror | `R1-MIRROR` | R1 | Cookie-first login/project hydration and reconnect work with exact-origin SecretStorage/redaction/expiry checks. Local-buffer + disk edits + browser change + reconnect retain all candidates without overwrite or remote writes; path/permission failures preserve work. |
+| 4 | fidelity | `R2-LIVE` | R2 | Proven upstream text path passes pinned-server concurrent text and real-host Unicode/edit races; preserve existing review state according to R0 capability, fully test exposed CE+ review semantics and refuse unknown states/formats before writes. |
+| 5 | durability | `R2-RECOVERY` | R2 | Persist before send and atomically confirm; crash/storage/revoke/reconnect preserve intent and hold lost/duplicate-confirmation ambiguity without replay or dropped edits. |
+| 6 | offline | `R3-OFFLINE` | R3 | Local candidates survive restart/sleep and concurrent remote change; built-in diff/manual recovery or proven upstream reconciliation preserves all candidates when history expires. |
+| 7 | review | `R4-REVIEW` | R4 | Only useful proven upstream review/presence integration is exposed; otherwise exercise read-only/browser handoff with retained state. No bespoke panel or unsupported actions; chat is optional. |
+| 8 | project | `R5-PROJECT` | R5 | Only explicitly useful conveniences are added; existing tools/browser preserve bibliography/assets and tree/history/settings behavior; conditional binary/tree writes are not invented where safety is unproven. |
+| 9 | server | `R6-SERVER` | R6 | If a shared deployment is needed, reuse pinned CE+ Toolkit/compiler with source/PDF identity, private endpoints and isolated backup/restore/rollback checks; no custom service required. |
+| 10 | scale | `R7-POOL` | R7 | Park until measured contention and actual demand justify a separate scoped proposal; no pool readiness claim without real worker/isolation/failure evidence. |
+| 11 | release | `RELEASE-CHECK` | R0, R1, R2, R3, R4, R5, R6, R7 | Run affected regressions, install exact artifacts on declared targets and exercise changed workflow; verify source/hash/download provenance and supported rollback. |
 <!-- gate-index:end -->
 
 ### Phase R0 — Feasibility and local companion / 0.1
 
-Run section 3 first; record hard limits and adapter/store decisions. Then implement only local session/configuration, toolchain detection and existing compile/PDF integration. Add real VSIX packaging and native installation checks now. Exit: R0 gates pass; publishable local companion, with connected features visibly unavailable. No custom engine or installer.
+Run the short probes, populate the compatibility/reuse/capability report and ship local-only integration with real VSIX packaging. Required local/read findings must be recorded; unresolved live findings hold R2. No new server or synchronization engine. Exit: actual R0 gates, with connected features unavailable in this local release.
 
 ### Phase R1 — Read-only server mirror / 0.2
 
-Implement individual login, project picker, safe hydration, read-only review display where available and browser handoff. Use the pinned server and dedicated mirror folder. Exit: R1 gates pass; usable connected viewing without remote writes. Do not wait for the write journal or full OT engine to ship this release.
+Cookie-first login, project selection, protected mirror and browser handoff only. Prove the mirror data-loss regression and secret/origin checks. Exit: R0/R1 gates pass with zero remote writes. Ship now for real feedback while expanded R2 experiments continue; no outbox/full OT/review implementation dependency.
 
 ### Phase R2 — Safe live text editing / 0.3
 
-Reuse the proven operation adapter; build the minimal durable outbox and revision-bound editor bridge. Support only proven document formats/review interactions. Include baseline crash, revoke and ambiguous-send handling before the first write. Exit: R2 gates pass and a short Windows/Mac/browser co-edit session preserves authoritative source and review state. A failed fidelity proof blocks live delivery; read-only releases remain available.
+Use the proven upstream path, add only missing durable-intent/confirmation and editor-revision protection. Text/review qualification follows the actual CE+ capabilities, preserving existing state when review is absent. Exit: R2 gates pass on disposable projects and installed hosts. An ambiguous write or unknown review format blocks that write path; R1 remains usable.
 
 ### Phase R3 — Offline work and recovery / 0.4
 
-Extend R2 with offline capture, reconcile/rebase, recovery inspection and conflict choices. Exercise restart, sleep, history expiry, server restart and dirty buffer/disk divergence. Exit: R3 gates pass; deliberate offline editing can recover without silent overwrites. Do not weaken R2's baseline durability to defer it here.
+Protect offline candidates and provide explicit built-in diff/manual reconciliation first. Add automatic replay/merge only if proven upstream semantics and a concrete need justify it. Exit: real recovery checks pass without silent overwrite.
 
-### Phase R4 — Review and presence / 0.5
+### Phase R4 — Optional review/presence handoff / 0.5
 
-Add supported comment threads, tracking controls/change actions and remote carets. Retain browser fallbacks when server capability is absent. Exit: R4 gates pass; review UI and permissions match observed upstream semantics. Chat is optional future scope, not a release blocker.
+Default to existing CE+/Workshop review/presence or a read-only/browser handoff. R0 decides availability on the selected build; absence on plain CE is not evidence against CE+. Add native actions only for a demonstrated use. No new panel or chat requirement. Exit: truthful chosen fallback/integration passes its gate; defer the phase if unused.
 
-### Phase R5 — Project workflow / 0.6
+### Phase R5 — Optional project conveniences / 0.6
 
-Add explicit tree/upload commands, safe asset replacement, bibliography/source input handling and supported history/settings. Integrate existing SyncTeX support. Two-way binary replacement requires demonstrated conditional-write safety; otherwise ship one-way mirroring and browser upload. Exit: R5 gates pass; supported project workflows work without altering original sources. No custom TeX/package installer.
+Keep browser/LaTeX Workshop/mirror workflows unless a specific missing command is valuable. Preserve source inputs; unsafe binary/tree mutation stays browser-only. No broad project manager, history viewer or SyncTeX rewrite. Defer if unused.
 
-### Phase R6 — Server compilation and operations / 0.7
+### Phase R6 — Optional existing-server operations / 0.7
 
-Deliver one dedicated server compiler and pinned server deployment configuration. Add TLS/private endpoints, job limits/cleanup, backups with isolated restore, upgrade/rollback and administrator instructions. Measure editing responsiveness during representative compile load. Exit: R6 gates pass on staging; no requirement for a scheduler or multi-worker pool. Backup cadence explicitly determines acceptable unbacked-up state; a daily backup permits up to 24 hours of loss after server failure.
+Only when a real shared deployment is needed: document the pinned upstream Toolkit/compiler, TLS/private endpoints and a tested backup restore/upgrade rollback. Do not build a coordinator or duplicate compiler service. No speculative deployment platform.
 
-### Phase R7 — Optional shared compilation / 0.8
+### Phase R7 — Parked scaling / 0.8
 
-Start only when R6 measurements and actual usage justify distribution. Add minimal queue/cache/worker scheduling and failure recovery; client contribution is opt-in. Exit: R7 gates pass for the declared deployment workload. If no need exists, leave R7 not_started; R0–R6 releases remain valid and releasable.
+No current implementation work. Reopen only after measured demand warrants a separately scoped proposal; all earlier supported releases remain valid without it.
 
 ## 10. Status, publication and evidence
 
-Current status: plan and repository/release tooling only. No extension, server deployment, coordinator or pool is implemented. All R0–R7 phases remain `not_started`. This revision authorizes planning/tooling changes only, not application implementation or deployment.
+Current status: plan/repository tooling only. All R0–R7 remain `not_started`; no live probe, compatibility certification, VSIX or deployment was executed by this plan revision. Today’s source inspection is not a server experiment. Changes authorize planning/tooling only.
 
-`docs/phase-status.json` schema 3 retains eight ordered phase records and adds `releasePhase`: null for planning/development, or the target R0–R7 for candidate/production. Candidate and production require all gates through that target, not later features. Planning permits no passed application phases. A phase may pass only with actual recorded evidence. Reopen invalidated phases and dependent implementation status; retain historical evidence and previous known-good artifacts.
+Retain schema 3, ordered phases and `releasePhase`: null in planning/development, target R0–R7 in candidate/production. Actual evidence is required through the target; later phases cannot block an earlier release. Keep unresolved write probes in the capability report without marking R2 implementation started/passed prematurely. Reopen invalidated prerequisites and reset dependents; preserve historical evidence and known-good artifacts.
 
-Each passed phase references one report with the tested commit, time, blocking-defect count and its gate results. Each result includes the executed command/environment and hashed sanitized log. Reuse existing fixtures and concise evidence; no duplicate status document, mandatory screenshots or large prose dossiers. Record capability decisions in R0's report and update them when probes change.
+Each passed phase references one concise `docs/validation/phase-RN/report.json`: exact tested commit/time, zero blocking defects and its actual command/environment/hash-verified sanitized gate logs. Never put credentials/cookies in evidence. Record capability reductions and actual tested versions explicitly; absent/inconclusive is not supported. Planning package checks do not prove an application works.
 
-Current CI/build/publisher continue to produce planning assets only and must not claim application readiness. R0 must extend the actual pipeline to build/test/install real target VSIXs, verify the exact source and checksums, and support candidate and immutable versioned releases. CI remains a publication prerequisite; do not activate Marketplace publishing without explicit authorization. A schema change alone never enables application publication.
-
-For each release, keep a known-good VSIX and state backup. Exercise upgrades and rollback for state/schema changes; never erase newer local intent to downgrade. Reopening or invalidating an earlier gate requires reevaluating dependent release claims. Production deployment values belong to the administrator; keep synthetic tests isolated and do not touch user projects or unrelated containers.
+The current CI/builder/publisher remain planning-only. R0 adds actual VSIX packaging, native installed-host checks and immutable candidate/versioned artifacts with source/checksum verification. Publication stays CI-gated; Marketplace needs explicit authorization. No publication or deployment is requested here.

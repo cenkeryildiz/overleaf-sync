@@ -10,7 +10,7 @@ The package is still tooling, not an extension manifest. The builder/publisher r
 
 R0 must extend the actual pipeline to build and install real VSIXs for Windows x64, Intel macOS and Apple Silicon macOS. Use explicit target architecture and inspect exact artifacts. With a TypeScript-only client, do not introduce native binaries merely to distinguish packages. Check each supported native host and any native store binding actually shipped.
 
-Each R0–R7 phase has its own scoped release gates in the plan. A candidate or production release requires completed phases through its target, not later roadmap work. R7 is optional and cannot block a supported R0–R6 release. “Production” applies only to the documented feature/platform scope.
+Each R0–R7 phase has its own scoped release gates in the plan. A candidate or production release requires completed phases through its target, not later roadmap work. R4–R7 conveniences are optional; none block an earlier supported release. Ship R1 after its cookie/origin/mirror data-loss gates and R0 prerequisites pass, while expanded R2 live-write experiments continue. An unresolved live proof is not a passing write gate. “Production” applies only to the documented feature/platform scope.
 
 Add immutable versioned application releases, an accurately labelled rolling latest release, source/artifact checksums, real installed-host checks and a retained rollback artifact when R0 adds distribution. Run affected regressions; recheck persistence migrations and rollback when state changes. A missing required script, runner or artifact blocks distribution; no passing placeholder checks.
 

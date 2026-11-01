@@ -16,17 +16,19 @@ Planned Windows/macOS VS Code extension for local LaTeX editing and collaboratio
 | Phase / version | Usable increment |
 |---|---|
 | R0 / 0.1 | Early feasibility findings and installable local compile/PDF companion |
-| R1 / 0.2 | Authenticated read-only project mirror |
+| R1 / 0.2 | Cookie-first, protected read-only mirror; release before live writes |
 | R2 / 0.3 | Safe live text editing with baseline crash recovery |
 | R3 / 0.4 | Offline reconciliation and recovery workflow |
-| R4 / 0.5 | Review tools and presence |
-| R5 / 0.6 | Assets, bibliography and project operations |
-| R6 / 0.7 | Dedicated server compilation and deployment operations |
-| R7 / 0.8 | Optional compile pool, only if demand justifies it |
+| R4 / 0.5 | Optional upstream review/presence or browser handoff |
+| R5 / 0.6 | Only useful project conveniences; reuse existing tools |
+| R6 / 0.7 | Optional existing CE+ deployment/backup workflow |
+| R7 / 0.8 | Parked scaling; no implementation scheduled |
 
 Each release needs its own gates and completed prerequisites. Earlier supported releases do not wait for the pool. R0 probes server compatibility, review fidelity and ambiguous writes before substantial implementation. Unsafe or unproven live operations stay held/read-only.
 
-Start with TypeScript and compatible upstream operation code. Reuse LaTeX Workshop and installed local toolchains. Rust, custom installers and distributed compilation are deferred. Each window explicitly chooses local or connected use; local sessions make no server contact. Targets are Windows x64 and Intel/Apple Silicon macOS.
+Use [yu-i-i/overleaf-cep](https://github.com/yu-i-i/overleaf-cep) as the intended server; probe its actual review capabilities rather than assuming plain CE restrictions. Start as a thin TypeScript companion to Overleaf Workshop and LaTeX Workshop. Workshop is AGPL-3.0; prefer existing extension interfaces, and resolve licensing before copying implementation code. Reuse LaTeX Workshop and installed local toolchains. Rust, custom installers and distributed compilation are deferred. Each window explicitly chooses local or connected use; local sessions make no server contact. Targets are Windows x64 and Intel/Apple Silicon macOS.
+
+The added value is safe offline recovery, per-window Local/Connect choice and no silent overwrite. R0 probes cookie login and pins an actually tested server/version matrix. R1 must reproduce local edits + remote change + reconnect without losing any candidate or sending remote writes. R4–R7 stay optional and need a concrete use.
 
 The current rolling release is a **planning prerelease** containing documentation, license, phase status, source archive and checksums. The planning builder cannot produce application releases. R0 must add real VSIX packaging and installed-host checks. Marketplace publication is not enabled.
 
