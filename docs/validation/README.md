@@ -11,3 +11,12 @@ R0 feasibility evidence records supported, unsupported or inconclusive outcomes 
 Keep reports concise. Reuse early fixtures and run affected regressions; no blanket security/performance gates, fixed scenario counts or mandatory multi-day runs. `RELEASE-CHECK` covers actual artifacts and the changed workflow for each release.
 
 State `releasePhase` is null for planning/development and R0–R7 for candidate/production. Releases require passed prerequisites through that target. Earlier increments do not wait for later ones. Preserve historical evidence when reopening a phase, reset dependents and reevaluate release claims.
+
+## Planning revision verification — 1 November 2026
+
+In a temporary checkout outside Kod, `npm ci`, `npm run typecheck`, `npm test`
+(17 passed), `npm run validate`, `npm run build` and `npm run test:package` passed.
+The build reopened/verified six planning assets from committed source. The gate-
+assignment regression now identifies `R1-MIRROR` by gate ID rather than old prose.
+No VSIX, live CE+/Workshop/auth/review experiment, deployment or publication was
+performed; all application phases remain `not_started`.
