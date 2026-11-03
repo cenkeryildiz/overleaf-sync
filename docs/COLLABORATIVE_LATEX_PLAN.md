@@ -1,6 +1,6 @@
 # Collaborative LaTeX — Incremental Release Plan
 
-Design revision: 1 November 2026. Planning/tooling only; no application or deployment is implemented.
+Design revision: 3 November 2026. Planning/tooling only; no application or deployment is implemented.
 
 ## 1. Product and boundaries
 
@@ -66,6 +66,23 @@ Run the early probes before dependent feature construction. The R0 report record
 - [LaTeX Workshop](https://github.com/James-Yu/LaTeX-Workshop): reuse its supported compiler, viewer and SyncTeX integration. Record the installed version and commands actually tested.
 
 ## 4. Implementation choices
+
+### Verified reuse limits — 3 November 2026
+
+Read-only source inspection at Workshop commit `835a488a7eac760fa2d74685cf1072f95393b30d` found the following. These are source findings, not installed-host or live-server acceptance:
+
+| Boundary | Actual upstream behavior | Smallest safe next step |
+|---|---|---|
+| Extension interface | `src/extension.ts::activate` returns no API object. `src/core/remoteFileSystemProvider.ts` registers the `overleaf-workshop` filesystem and the internal `remoteFileSystem.prefetch` command, which returns a mutable VFS. | Prefer standard `workspace.fs` reads for an isolated probe; do not couple the companion to internal VFS objects or claim a supported authentication/project API. Prove activation side effects before connected use. |
+| Cookie storage | `src/api/base.ts::Identity` contains cookies; `src/utils/globalStateManager.ts::loginServer` persists that identity in `context.globalState`. The cookie input in `src/core/projectManagerProvider.ts` does not request password masking. | Unmodified upstream login does not satisfy our SecretStorage/masked-input boundary. Do not delegate our login to it, import its persisted credentials or claim SecretStorage in our companion fixes upstream storage. Use browser handoff until a compatible secure adapter is proven. |
+| Mirror direction | `src/scm/localReplicaSCM.ts` writes local hydration/merged content and can call `workspace.fs.writeFile` on the remote URI. The filesystem provider also exposes create/write/delete/rename. | Do not invoke Open Locally or attach its replica settings for R1. Probe read operations in a fresh disposable profile/project, preserve candidates in our staging area, and independently prove zero remote writes. Calling a read method alone is not proof of read-only session behavior. |
+| Local-only activation | `package.json` activates Workshop for its URI scheme or `.overleaf/settings.json`; `activate` can initialize a saved replica. | Use a clean local-only workspace/profile without replica settings for the first isolation test. Later exercise saved-settings/restart cases explicitly; our Local only choice cannot promise to disable an independently installed extension. |
+
+Pinned source references: [activation](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/extension.ts), [manifest](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/package.json), [filesystem](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/core/remoteFileSystemProvider.ts), [credential persistence](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/utils/globalStateManager.ts), [identity](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/api/base.ts), [login input](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/core/projectManagerProvider.ts), [replica](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/scm/localReplicaSCM.ts).
+
+**Result:** reuse the unchanged CE+ browser and LaTeX Workshop workflows first. Workshop remains a source/protocol reference and a candidate read provider, not an accepted secure/read-only adapter. Do not respond to these limits by building another synchronization engine. No upstream source is copied, no licensing decision is made and no existing safety gate is weakened.
+
+### Minimum implementation
 
 Keep the first implementation TypeScript-only and as small as possible. Prefer the existing VS Code extension, editor, diff UI, filesystems and platform storage before dependencies or vendoring. Reuse only APIs/operations proven on the pinned server; a missing upstream interface triggers a scope decision rather than automatic construction of a second client.
 
@@ -172,3 +189,13 @@ Retain schema 3, ordered phases and `releasePhase`: null in planning/development
 Each passed phase references one concise `docs/validation/phase-RN/report.json`: exact tested commit/time, zero blocking defects and its actual command/environment/hash-verified sanitized gate logs. Never put credentials/cookies in evidence. Record capability reductions and actual tested versions explicitly; absent/inconclusive is not supported. Planning package checks do not prove an application works.
 
 The current CI/builder/publisher remain planning-only. R0 adds actual VSIX packaging, native installed-host checks and immutable candidate/versioned artifacts with source/checksum verification. Publication stays CI-gated; Marketplace needs explicit authorization. No publication or deployment is requested here.
+
+### Current checkpoint — 2026-11-03 23:01 CET
+
+- Objective/scope: finish the reuse feasibility assessment before application construction; preserve the browser/local-tool shortcuts and data/secret boundaries. Application implementation, extension/tool installation and server deployment remain excluded from this planning continuation.
+- Project: `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, branch `main`, starting HEAD `05b0c4e99e173d0bff6794aeabe66bfb084bfb78`. Initial project tree clean; unrelated parent-repository edits are outside scope. This continuation changes this plan and its existing parent mirror only.
+- Last completed action: inspected the pinned Workshop entry point, manifest, credential identity/persistence, filesystem and replica paths through GitHub. Source findings and concrete reuse limits are recorded in section 4; all application phases remain `not_started`.
+- Environment discovery: `code --list-extensions --show-versions` reports neither Overleaf Workshop nor LaTeX Workshop installed in the default profile. Docker, `latexmk` and `pdflatex` are absent from PATH; Tectonic is present. No test-server origin, account or immutable CE+ image is supplied in this plan. Do not infer that no remote server exists or install tools automatically.
+- Pace: one bounded source-inspection pass replaced an assumed integration with specific findings; do not repeat it without an upstream revision/change. No runtime latency, throughput or resource result exists. Timebox the next installed-host probe to 30 minutes once prerequisites exist; a failed auth/isolation premise stops dependent work and returns to browser handoff.
+- Next action (`R0-DISCOVERY`, pending; no phase gate passed): obtain an explicitly designated disposable CE+ origin/source/image and safe test account, then identify the exact installed extension versions in an isolated profile. From this project run `code --list-extensions --show-versions` and `command -v docker latexmk tectonic pdflatex`; missing prerequisites are discovery failures, not passing/skipped application checks. Do not collect cookies in commands/logs. Test masked secret input/origin validation before credentials, then filesystem read activation and the local-only/restart boundary on synthetic data. Expected result: sanitized capability/compatibility findings with no source-data changes or remote mutations. If prerequisites or a safe reusable interface remain unavailable, retain browser handoff and hold connected implementation; do not silently replace the backend.
+- Recovery/ownership: no test server, extension-host process, worktree or lock was started. No user credentials were accessed. Tooling verification runs in a disposable checkout outside Kod; retain unfinished files on failure, and remove completed generated assets/checkouts only after the private remote snapshot is independently verified. Planning test results are recorded below when available.
