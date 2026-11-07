@@ -10,7 +10,7 @@ Read and follow the full applicable global, parent-directory and repository inst
 - Add only tests for actual capabilities, relevant failure boundaries and affected regressions. No fixed test counts, blanket performance/security certifications, mandatory multi-day pilots or dual-engine benchmarks. The plan gate table is authoritative. Do not remove regressions guarding actual defects.
 - Start with TypeScript and reusable upstream operation code. Rust, a shared daemon, custom installers and distributed compilation are not early-release prerequisites.
 - Planning assets contain no working extension. R0 adds the actual VSIX build/install pipeline before application distribution; never create passing placeholder application checks.
-- Maintain LICENSE, THIRD_PARTY_NOTICES.md and the inventory of dependencies actually introduced.
+- Maintain the inventory of dependencies actually introduced.
 - Before edits, inspect affected context and define scoped changes and validation. Do not modify adjacent projects.
 - Run `npm ci`, `npm run typecheck`, `npm test`, `npm run validate`, `npm run build`, and `npm run test:package` for repository/release changes. Build/package requires a commit containing the intended inputs; an isolated temporary Git snapshot is acceptable for local verification without committing the working checkout. Application phases add their actual tests.
 - Keep publication gated on CI and verify downloaded assets/source/checksums. No Marketplace publication without explicit authorization.
