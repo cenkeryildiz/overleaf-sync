@@ -44,4 +44,3 @@ npm run test:package
 ```
 
 Build from committed inputs, optionally in an isolated temporary Git snapshot for local verification. These commands check the current tooling, not future application behavior.
-
