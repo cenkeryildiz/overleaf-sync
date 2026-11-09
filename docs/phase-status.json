@@ -4,49 +4,49 @@
   "phases": [
     {
       "id": "R0",
-      "name": "Feasibility and local companion",
+      "name": "Web foundation and feasibility",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R1",
-      "name": "Read-only server mirror",
+      "name": "Protected server project access",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R2",
-      "name": "Safe live text editing",
+      "name": "Safe web live editing",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R3",
-      "name": "Offline work and recovery",
+      "name": "Offline web recovery",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R4",
-      "name": "Review and presence",
+      "name": "Review, presence and chat",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R5",
-      "name": "Project workflow",
+      "name": "Web editing and project workflows",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R6",
-      "name": "Server compilation and operations",
+      "name": "Shared server compilation and operations",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R7",
-      "name": "Optional shared compilation",
+      "name": "Multi-user server job distribution",
       "status": "not_started",
       "evidence": null
     }

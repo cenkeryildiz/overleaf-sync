@@ -1,71 +1,206 @@
-# Collaborative LaTeX — Incremental Release Plan
+# Collaborative LaTeX — Web Application and Incremental Release Plan
 
-Design revision: 3 November 2026. Planning/tooling only; no application or deployment is implemented.
+Design revision: 9 November 2026. The product is a web UI, retains nearly all selected upstream capabilities, and requires shared server job distribution for multi-person projects. Production application phases remain unstarted.
 
-## 1. Product and boundaries
+## 1. Product, scope and completion
 
-Build a small Windows/macOS VS Code companion around existing tools. Its added value over Overleaf Workshop is **safe offline recovery, an explicit per-window Local only / Connect to server choice, and no silent overwrite of local work**. Do not rebuild the server, LaTeX editor, compiler integration or collaboration protocol merely to own the whole stack.
+Build a self-hosted collaborative LaTeX **web application**, using the selected repositories as the capability baseline and adding recovery, explicit Local only / Connect to server sessions, and multi-user job distribution. Users open the application in a browser; no VS Code extension, VSIX, Marketplace listing or installed VS Code is required. Reduce implementation effort through reuse without reducing the finished product.
 
-Use the previously selected [yu-i-i/overleaf-cep, branch `ext-ce`](https://github.com/yu-i-i/overleaf-cep/tree/ext-ce), an extended Community Edition distribution, as the intended self-hosted server. Its README advertises comments and real-time tracked changes, alongside SSO methods. **CE+ is not plain CE:** do not remove review from scope solely because official CE lacks it. Pin and probe the actual CE+ build. Keep that chosen distribution and its browser UI unmodified; no new server patches, fork maintained by us, or Premium-account dependency.
+Use the selected [yu-i-i/overleaf-cep `ext-ce` distribution](https://github.com/yu-i-i/overleaf-cep/tree/ext-ce) as the intended browser/server foundation. Reuse its existing editor, collaboration engine, review, project management and compilation before constructing replacements. Overleaf Workshop and LaTeX Workshop are feature references and potential sources of reusable components, not the application's required runtime. Their VS Code APIs cannot simply run in a browser: equivalent web workflows need a proven CE+ feature, compatible component or explicit integration work.
 
-Reuse Overleaf Workshop for supported connection/project/protocol behavior, and LaTeX Workshop for local compile, PDF preview, diagnostics and SyncTeX. First prove a companion can use their existing interfaces safely. Prefer invoking the installed extension's available commands/filesystem interfaces. Reading source and sanitized wire traces informs probes. Do not assume an upstream API exists. If safe integration is unavailable, record that R0 result and choose a smaller read-only/browser route before writing a replacement engine.
+Retain nearly all capabilities across the selected repositories. Browser-native capabilities stay in the web UI; capabilities previously supplied through VS Code require useful web equivalents. Do not count a link to VS Code, a disabled button, preservation of metadata without its intended actions, or a browser handoff from another client as completed capability delivery. An earlier read-only increment can be useful without constituting the final product.
 
-Preserve local buffers/files, original assets, review identities and permissions. Never silently overwrite divergence or mistake a transport acknowledgement for a confirmed edit. Targets remain Windows x64 and Intel/Apple Silicon macOS. Remote SSH/WSL/containers/browser VS Code, Windows ARM64, custom installers, Rust engines, shared daemons and compute pools are outside early scope.
+The additions are safe local/offline recovery, visible session/connection state, no silent overwrite, durable edit intent where needed, and shared compile-job scheduling, capacity allocation and worker recovery. Preserve original text/assets, review identities and permissions. Use individual server accounts without an Overleaf Premium dependency. Initial client qualification targets browser use on Windows x64 and Intel/Apple Silicon macOS; exact browser/version and local-file support require WEB-01 discovery. Do not claim unsupported browsers work.
 
-## 2. Release strategy
+No feature exclusions are approved by this revision. Every discovered upstream feature must be inherited, integrated, deferred to a named phase, blocked with a resolution path, or explicitly excluded by the user. Disabled-by-default external integrations stay in scope without authorizing account linking, credentials, external transfers, paid use, script execution or deployment. Automatic uncertain replay, a new OT algorithm and custom installers are not prerequisites. A distributed worker implementation is a means to deliver required scheduling, not a reason to rebuild functioning upstream services.
 
-R0–R7 remain independently scoped increments with the existing gate IDs and schema-3 status. **Ship R1 as soon as R0 and R1's actual gates pass; expanded R2 write/OT qualification may continue afterward.** Do not hold a useful no-write mirror for a custom outbox, review panel or full collaboration engine. No required R1 check is waived to ship early.
+**Complete-project acceptance:** two or more individual accounts use the web application to edit/review the same project, exchange presence/chat, manage projects/assets/bibliography, compile and navigate source/PDF, disconnect/restart and recover candidates, while multiple users/projects submit jobs fairly and a failed worker recovers safely. The feature inventory must be reconciled with no unapproved omissions; every required phase must pass. Early releases explicitly name their remaining gaps.
 
-| Phase / version | Minimum useful delivery | Shortcut / deferred work |
+## 2. Architecture and reuse rules
+
+Start from CE+'s existing browser experience, not a new reduced editor shell. WEB-01 must establish whether additions can use existing integration points or require a small, maintained source-derived patch. The prior prohibition on any server/UI adaptation cannot force removal of requested functionality; document the minimum integration approach and update/rollback burden before implementation. Prefer upstream-compatible changes and preserve upstream UI/features. This planning task does not create a fork or change licenses.
+
+Keep browser editor/collaboration code in its existing JS/TypeScript host language and reuse the tested upstream state machine. Use Rust for custom backend persistence/recovery/scheduling components only where an existing service does not suffice. Do not rewrite the editor, transforms, preview engine or compiler solely to make them Rust. Intended areas, subject to WEB-01 source discovery: existing CE+ web editor/components, a narrow browser integration layer, custom Rust service/storage if needed, and upstream Toolkit/CLSI queue/worker configuration. Do not invent final source paths before inspecting the pinned source tree.
+
+**Local only** must remain usable without contacting the remote collaboration server, publishing presence or submitting remote jobs. A locally served web UI may use a loopback helper for local files/toolchains if browser APIs cannot meet the requirement. Whether such a helper is necessary is unresolved, not a delivered dependency. Distinguish remote-server isolation from loopback access. Browser filesystem permissions, supported file/directory APIs, refresh/close behavior, local compile and offline startup are early feasibility gates. If the chosen browser cannot safely support a workflow, record the gap and investigate the smallest alternative; do not silently drop local operation.
+
+**Connect to server** uses the designated deployment's browser login/session and project permissions. Prefer ordinary same-origin session authentication and upstream SSO rather than importing full browser cookies into a client. Do not transplant VS Code SecretStorage, extension activation, `workspace.fs` or VSIX packaging requirements into the web design. Browser-facing remote-service adapters must keep server secrets out of frontend code and storage.
+
+Licensing is an unresolved integration prerequisite. Existing original documentation remains under the repository's current license. Record exact revision, notices, modifications, source delivery and distribution boundaries before incorporating upstream code; the proprietary notice does not relicense upstream material. Do not assume process separation, plugin invocation or a private deployment resolves source obligations. If the reuse strategy conflicts with the current license, present the concrete decision before source incorporation. No license change or source copying is authorized by this documentation revision.
+
+## 3. Capability baseline and discovery
+
+Pinned feature references, read on 9 November 2026:
+
+- [CE+ README](https://github.com/yu-i-i/overleaf-cep/blob/ae07e781ab20dac2378420e5cf7a47f7d8bccbb5/README.md), commit `ae07e781ab20dac2378420e5cf7a47f7d8bccbb5`.
+- [Overleaf Workshop README](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/README.md), commit `835a488a7eac760fa2d74685cf1072f95393b30d`.
+- [LaTeX Workshop README/manual index](https://github.com/James-Yu/LaTeX-Workshop/blob/2f5a60a11a99f33013c1235f0499546cc831cfcb/README.md), commit `2f5a60a11a99f33013c1235f0499546cc831cfcb`.
+- [Toolkit](https://github.com/overleaf/toolkit), existing configuration/compiler services and CE+ wiki: inspect exact pinned deployment interfaces before using them. The historical experiment's Toolkit reference is `26f13760e04e5b66e6bcd344295d6525e390e88f`.
+
+These are upstream descriptions, not our runtime acceptance. The family list below is a starting inventory; a complete source/manifest/command audit remains pending. For every individual feature, record source/commit, original interface, web equivalent, inherited/integration/deferred/blocked status, phase, prerequisites, exact check and actual evidence. Missing rows are discovery gaps, not exclusions. A README claim or a private extension PoC cannot prove that the web application supplies the feature.
+
+| ID / source | Capability family to retain | Web delivery / phase | Current status and required proof |
+|---|---|---|---|
+| CAP-A / CE+, Workshop | Accounts, cookie/session and SSO login, project selection, live editing and concurrent clients | Existing browser/server plus additions / R1–R2 | Planned reuse; qualify actual login/session expiry, permissions and convergence |
+| CAP-B / Workshop, CE+ | Local project workflow, compilation/preview, forward/reverse SyncTeX | Browser editor/PDF and qualified local route / R0–R6 | Integration discovery; do not depend on opening an extension |
+| CAP-C / LaTeX Workshop | Build/auto-build/cancel, recipes/tools, multi-file projects, logs/errors and output cleanup | Existing server UI or integrated web equivalent / R0, R5–R6 | Map settings/actions individually; local recipe execution needs an authorized local tool boundary |
+| CAP-D / LaTeX Workshop | Citations/references/command/environment/file completion, snippets, formatting and linting | Web editor / R2, R5 | Qualify existing CE+ equivalents and port/integrate only missing capabilities |
+| CAP-E / LaTeX Workshop | Hover/equation/graphics/citation previews, structure/folding, word count and literate programming | Web editor / R5 | Inventory and browser qualification pending; not automatically inherited from the extension |
+| CAP-F / CE+, Workshop | Comments, tracked changes/actions, identities/anchors, presence and collaborator chat | Web editor/review/chat / R4 | Preserve complete workflows, not just hidden metadata; qualify concurrent review and permissions |
+| CAP-G / CE+, Workshop | Project/file tree, create/rename/delete, upload/download, assets, bibliography, history/settings and sharing | Web project UI / R5 | Audit exact feature support; verify byte fidelity, rollback and unauthorized mutation rejection |
+| CAP-H / CE+ | Sandboxed compilation and TeX Live image selection | Web build controls and server workers / R6 | Configuration/isolation discovery; do not enable unsafe shared compiles |
+| CAP-I / CE+ | Sign-up, LDAP, SAML, OIDC and administrator user/project tools | Existing server/browser / R1, R6 | Retain configurable availability; no unrequested identity-service activation |
+| CAP-J / CE+ | Symbol palette, template gallery, external-URL import and reference search/pick | Existing browser / R5 | Retain and verify configured behavior; inspect transfer and URL trust boundaries |
+| CAP-K / CE+ | Git, GitHub synchronization and Zotero integration | Existing browser/server integration / R5–R6 | Retain availability; enabling accounts/transfers requires authorization and secret isolation |
+| CAP-L / CE+ | Document import/export, Python script runner and logo tools | Existing browser/server / R5–R6 | Retain available workflows; preserve originals and qualify execution/conversion boundaries on synthetic inputs |
+| CAP-M / all | Other documented features, commands/settings, formats and host modes | Web equivalent or explicit applicability decision / phase assigned by CAP-01 | Audit pending; browser-only product makes extension packaging irrelevant, not its useful editing capabilities |
+| ADD-A / custom | Local/Connect choice, durable local candidates, safe reconnect/offline recovery | Web UI plus proven storage/backend / R0–R3 | Planned; storage/browser limits must be tested |
+| ADD-B / custom | Shared job distribution, fair progress, capacity control and failed-worker recovery | Server scheduler/workers plus web status / R6–R7 | Required, not parked pending demand; see JOB-01–03 |
+
+### Shared execution prerequisites and early gates
+
+All future runtime steps use pinned source/image identities, synthetic accounts/projects and recoverable original fixtures in a disposable environment outside Kod. No user project data or credentials belong in plans/logs. Obtain deployment authorization before starting a server. Discover actual setup/test commands from the archived experiment/upstream checkout and record them here when executed; unknown commands are not fabricated runnable instructions. Each step below starts with a 30-minute investigation checkpoint recording elapsed time, evidence and the next bounded action; it is not a delivery estimate. A failed prerequisite stops its dependent work while independent proven scope may continue.
+
+| Step / dependencies | Inputs, actions and expected output | Pass/fail and failure action |
 |---|---|---|
-| R0 / 0.1 | Local/Connect choice with only local operation enabled; existing LaTeX Workshop/toolchain integration; early capability report | No server deployment framework or custom editor/compiler |
-| R1 / 0.2 | Cookie-first login, project selection, safe read-only mirror and browser handoff | No remote writes; ship independently of R2 live-readiness |
-| R2 / 0.3 | Narrow live text editing through a proven reusable operation path; durable pending intent and safe reconnect | No new OT algorithm; unsupported formats/review combinations remain read-only |
-| R3 / 0.4 | Recover offline candidates and offer explicit built-in diff/manual reconciliation | Automatic offline merge/replay is deferred unless upstream proves safe semantics |
-| R4 / 0.5 | Optional existing review/presence integration or read-only/browser handoff, according to R0 | No custom review panel by default; chat is optional |
-| R5 / 0.6 | Optional project conveniences with a demonstrated personal use | Reuse mirror files/LaTeX Workshop/browser for bibliography, assets, history, settings and tree operations |
-| R6 / 0.7 | Optional small-team CE+ setup/backup instructions when deployment is actually needed | Reuse CE+ Toolkit and existing compile service; no custom coordinator or compiler service |
-| R7 / 0.8 | Parked unless measured compile contention creates a concrete need | No pool/worker/cache implementation is currently scheduled |
+| WEB-01 / shared prerequisites | Inspect pinned CE+ web/editor integration and licenses; test an existing web editor on the target browsers with Local only, refresh/offline startup, permitted local files and a small compile. Record exact commands/browser versions and source paths. | Pass only with a viable web integration, local file/compile route and explicit license decision path. Missing APIs/durability/local helper premise is a blocker to resolve before broad implementation; do not substitute an extension. |
+| CAP-01 / pinned source access; before integration commitment | Audit READMEs, manifests, editor commands, settings and relevant source. Expand CAP-A–M into individual rows in this same plan; deduplicate features across repos and assign web implementation/phase/check. | Every upstream feature accounted for or marked discovery pending. Do not claim complete coverage while audit gaps remain; repair omissions and obtain user decision for exclusions. |
+| AUTH-01 / WEB-01 | Probe exact CE+ image/source, browser account identity, login/SSO, expiry/revocation, origin/CSRF and session isolation. Record a compatibility matrix with supported/unsupported/inconclusive outcomes. | Required auth/read evidence must pass for R1. Unsafe/missing auth blocks connected use, not proven local operation. |
+| EDIT-01 / WEB-01, AUTH-01 | Two browser clients: concurrent inserts/deletes, review anchors, undo/redo, IME, multi-cursor/paste/replacement and supplementary Unicode. Reproduce the archived whole-document replacement/range-mapping failure. | Exact text/review convergence or recoverable visible hold; holds are safe failure, not full editing support. Diagnose shared editor/engine boundary before broad UI work. |
+| STORE-01 / selected editor/storage path | Commit exact identity/intent before send; kill browser/tab/backend around commit/send/confirm, exhaust quota or fail disk writes, then restart with expired history. | Every edit applied once authoritatively or retained exactly for explicit recovery; failed storage sends nothing. Failure blocks writes and requires persistence/ownership repair. Browser IndexedDB alone is not assumed power-loss/eviction proof. |
+| JOB-01 / pinned authorized deployment; inspect early during R0 | Inspect CE+/CLSI scheduler, queues and workers; establish actual job routing/cancellation/retry/isolation and run two competing users plus worker loss. | Record what upstream already supplies, missing distribution pieces and viable capacity topology. Missing fairness/isolation/recovery keeps shared-job acceptance blocked; investigate before committing to architecture. |
 
-Version numbers describe scope, not dates. Later optional phases cannot block an earlier release. Before starting R4–R7, name the user's concrete workflow and show why existing tools/browser handoff are insufficient. Otherwise defer it. The sequential status validator is unchanged: a later phase is not marked started/passed before prerequisites; exploratory findings can be recorded without claiming a phase has begun or passed.
+## 4. Editing, session and recovery safeguards
 
-## 3. First work: feasibility before substantial implementation
+Show Local only / Connect to server explicitly for each browser workspace session. Test refresh, restored tabs and saved settings for unintended remote contact. Local only does not send remote authentication, presence, telemetry, source or compile jobs. A required loopback helper must bind only to its intended local interface, authenticate/origin-check requests and avoid exposing files/commands to arbitrary sites. Browser downloads/imports or helper permissions must never silently grant arbitrary filesystem access.
 
-Use disposable synthetic projects against a pinned CE+ build. Reuse a pinned Overleaf Workshop revision as a debugging/reference client on that same server: compare cookie handling, project listing, socket framing, join/catch-up and local-replica behavior with the unchanged browser/server responses. Trace headers, payload identities and errors with credentials removed. Avoid constructing a protocol framework before these short probes answer the integration questions.
+Use upstream browser session authentication on the intended same origin, secure transport and supported cookie settings. Keep authentication tokens out of URLs, localStorage, source files, frontend bundles and logs. Preserve upstream CSRF, authorization and XSS boundaries; enforce project/role checks server-side on every edit, asset and job/result route. If a separate Rust service needs an adapter, qualify its exact authentication/origin boundary before access. Do not scrape browser profiles or collect raw full-access cookies as the default web login flow. Logout/revocation stops authorized server operations while retaining recoverable candidates according to explicit retention policy.
 
-| Priority | Probe | Required decision |
+Pin origin/account/project/document identity, confirmed base/version, editor revision and tracking state. Persist exact outgoing intent before transmission; atomically record definitive confirmation/base advancement. Distinguish durable, submitted, confirmed, ambiguous and held states. A queue/transport acknowledgement or matching text is not proof of application. Resolve uncertain submission through authoritative history/identity; if proof expires, preserve the candidate and hold rather than blind replay. Failed storage or revoked permissions stops sends.
+
+Preserve dirty editor buffers, persisted local candidates, last confirmed base and current remote state separately. Hydrate/import through staging; never silently replace a user folder, buffer or asset. Diff/reconcile in the web UI with explicit copy/export/manual choices. Reject path traversal, symlink/reparse escapes in any helper, archive path escapes and case collisions. Do not infer remote delete/rename from absent local files. Preserve original `.bib` keys/comments/order, figures including PDF inputs, styles and data; do not run generators or conversions automatically.
+
+**R1 no-write data-loss regression:** edit a browser buffer and independently modify its persisted candidate/local file; change the same file in another authenticated browser; disconnect/reconnect, refresh and restart. Include dirty-at-initial-hydration, permission failures and remote rename/delete. All candidates remain recoverable, divergence is visible and no remote mutation is emitted. The Workshop overwrite issue is a regression pattern, not proof that this web path has the same bug.
+
+Before R2 writes, qualify review-preserving concurrency, supplementary Unicode/UTF-16, line endings, undo/redo, IME, multi-cursor and replacement/formatting races in real browsers. Unknown review/format state stays held/read-only with preserved candidates. That is a temporary safety limit and open capability gap, not permission to drop R4 review. R3 must expose usable offline recovery; automatic uncertain merge/replay remains gated on proof. Exercise account/project switching so pending content never crosses identity boundaries. Closing the browser never stops the independent shared server.
+
+## 5. Compilation and required shared job distribution
+
+Retain browser build/preview, diagnostics, compiler/recipe controls and forward/reverse SyncTeX using the existing CE+/compiler machinery and applicable reusable components. Local compilation uses only the route qualified by WEB-01 and an existing authorized toolchain. Missing tools/build failure preserves source and shows an actionable error; no automatic package/tool installation. Source/PDF mapping includes project, source generation and compile inputs; stale output stays visibly stale.
+
+Shared job distribution is required for multi-person projects. Support competing users/projects, bounded concurrent work, fair progress, cancellation, capacity/backpressure, worker health and failure recovery, and visible queued/running/failed/completed state. Prefer existing CE+/CLSI queues/workers. JOB-01 determines whether they satisfy the requirements directly or need narrow coordination in Rust; it must distinguish safe single-host concurrency from actual dispatch across a worker pool. Multi-worker dispatch and capacity allocation must be qualified, not inferred from a single compile service. Participant computers are not enrolled as workers automatically, and Local only sessions contribute no capacity/jobs.
+
+Give each job a durable identity scoped to account/project, immutable source snapshot/digest, compiler/toolchain/recipe and options. Queue admission and worker dispatch must survive restart or fail visibly with recoverable source. Use the actual upstream lease/claim model where sufficient; recover abandoned work without duplicate publication. Compile execution may retry, but only the authorized current job/generation may publish the result. Reject stale/foreign results, duplicate completions and results arriving after cancellation/revocation. Bound retry counts and expose terminal failure. Any caching/deduplication must include permissions and full input/toolchain identity; preserve upstream caching safely without requiring a new cache.
+
+Workers receive only permitted job inputs and limited credentials; separate per-job directories, sandbox resource/network limits, restricted result channels and retention/cleanup are required. Establish a disposable restore path before queue/storage configuration changes. Source originals remain unchanged. TeX and optional Python execution are trust boundaries, not ordinary trusted text processing. No secrets or private payloads in status/metrics/evidence. Backup/restore covers project data and queued/running job reconciliation without restoring revoked access.
+
+| Step / dependencies | Workload, actions and measurable acceptance | Failure/recovery action |
 |---|---|---|
-| 1 | **Cookie login first:** logged-in browser cookie, account/project identity, logout/expiry/revocation, supported SSO/captcha browser flow; then secondary password login only where supported. Check actual distribution/version/image digest and available Workshop interfaces. | A working primary login and read path on an exact tested server. Password-only success does not prove cookie/SSO deployments work. No captcha solver or SSO reimplementation. |
-| 2 | **Review capability beside the OT experiment:** on the selected CE+ build inspect comments, tracking controls, existing tracked insertions/hidden deletions, IDs/authorship/anchors and actual route/permission behavior; exercise minimal two-client-plus-browser text operations with Unicode. | Record review separately as supported, unsupported or inconclusive. CE+ advertised support is a probe premise, not acceptance. Official plain CE restrictions are a comparator, not a verdict about CE+. |
-| 3 | Accept an operation, lose its application confirmation and reconnect with a new identity; inspect authoritative version/history/deduplication. | Can the reused adapter distinguish committed intent? Otherwise hold uncertain edits; never blind replay. R2 stays blocked for that write path. |
-| 4 | Minimal crash-before/after-intent/send experiment and local typing raced with a remote patch. | Can the reused path preserve the exact local candidate and a proven base? Choose a small durable outbox only if writes need one; no journal platform upfront. |
-| 5 | Read-only discovery of compile/preview, SyncTeX, cursor/presence, optional chat and existing browser/project operations. | Fill the reuse/defer checklist below; do not implement every available feature. |
+| JOB-02 / JOB-01, R6 deployment and qualified queue identity | Use 4 synthetic accounts, 3 projects and 2 isolated workers; submit 12 short fixture compiles plus 2 deliberately slow jobs from one account. Observe per-user/project progress, queue/status latency, bounded workers, CPU/RSS and exact source/PDF mapping. Baseline the same fixtures with upstream scheduling first. | Every admitted job gets a correct result or visible bounded failure/cancellation, and no account monopolizes available dispatch slots. Repair fairness/backpressure before R7 acceptance; never weaken correctness to meet speed targets. |
+| JOB-03 / JOB-02 | Kill a worker during compile, duplicate/delay completion, cancel/revoke while queued/running, restart scheduler and restore a disposable queue snapshot. Attempt foreign-project submission/result access, malformed payloads and result/path escape. | No lost admitted job, unauthorized data/result, stale publication or unbounded retry; abandoned work is retried within configured limits or visibly fails. Restore the pre-change queue/config snapshot and preserve sanitized failure evidence if identity/recovery fails. |
 
-Run the early probes before dependent feature construction. The R0 report records each executed probe's command, pinned source/image, sanitized trace, outcome and feature consequence. Missing required local/read/auth/version evidence blocks the corresponding R0/R1 gate. A conclusive absent review capability reduces scope; an inconclusive write proof stays an explicit **R2 hold**, not a passing live test. R0 local delivery and subsequently proven R1 reads do not require all expanded R2 write proofs to be green. No unexecuted required check is relabeled passed.
+**Initial performance targets, unmeasured:** on a declared small-team host, job admission p95 ≤500 ms and visible status update p95 ≤2 seconds, excluding upload/compile time; at most one simultaneous job per user while another user waits for available capacity. Start with two workers, one active job per worker, 60-second fixture timeout and at most one retry. With non-hung workers, each waiting account must receive a dispatch opportunity within two configured job timeouts. Record actual compile distributions, queue wait, RSS/CPU and hardware before setting production CPU/RAM limits or capacity promises. These are feasibility targets to validate, not measurements or a mandated production timeout. If missed, record the cause and revise topology/capacity or the explicit performance proposal; retain fairness, isolation and correct ownership. No universal speedup claim: queue distribution helps concurrency but does not guarantee faster compilation of one document.
 
-**R0 deliverable: tested compatibility matrix.** Record CE+ repository/source commit, image digest, server-reported base version, architecture, configuration, auth method, document format and per-feature results; pin the Workshop reference commit too. Keep planned, upstream-reported and actually tested entries distinct. Workshop's current README reports CE **3.5, 4.1, 4.2.4 and 5.0.4** (the earlier three-version list omitted 4.2.4). Those reports do not certify our CE+ target or client. Our tested list is initially empty. Unknown distribution/version/digest combinations refuse connection with a clear explanation until an explicit compatibility-probe run qualifies them; a probe is not ordinary connected use. A moving image tag is not a pin, and version discovery must not leak credentials to another origin.
+## 6. Incremental delivery and execution policy
 
-| Workflow | Default reuse decision | Add our own code only for |
+R0–R7 remain eight ordered increments with stable gate IDs and schema-3 status. Early phases can release their truthful partial scope without waiting for all later work. R4–R7 are required parts of the destination; scheduling is not parked pending demand. Versions describe scope, not promised dates. Discovery of later architectural risks happens early without falsely marking later implementation started/passed.
+
+| Phase | Useful increment | Required boundary |
 |---|---|---|
-| Account/project access and wire protocol | Workshop's compatible existing interface; browser for SSO/captcha | Session choice, validated cookie storage/origin and a narrow adapter proven in R0 |
-| Open Locally / local mirror | Use read APIs or an isolated provider only after R1's regression; never delegate an unsafe overwrite path | Own local-candidate protection, staging and explicit divergence hold |
-| Compile, diagnostics and PDF preview | LaTeX Workshop locally; existing CE+ browser/server compile remotely | Routing/status needed to preserve the correct source/PDF identity |
-| SyncTeX/reverse SyncTeX | LaTeX Workshop's existing commands; probe remote support in R0 | Proven project-path/source-generation mapping, not a new SyncTeX engine |
-| Cursor/presence indicators | Existing Workshop/browser capability | Safe session/coordinate plumbing if it is useful and available |
-| Comments/tracked changes | Existing CE+ browser or proven Workshop interface | Preservation and an explicit read-only/handoff state; custom actions only on demonstrated need |
-| Chat | Existing Workshop/browser; optional | Nothing scheduled |
-| Assets, bibliography, file tree, history/settings | Existing tools and browser; preserve mirrored source bytes | A specific missing workflow, separately justified in R5 |
+| R0 / 0.1 | Browser/local workspace, reused web editor foundation, capability and scheduling feasibility report | Real web runtime/package and supported-browser checks; no extension dependency |
+| R1 / 0.2 | Authenticated protected project reads and visible connection state | No-write regression, session/origin/permission and candidate recovery |
+| R2 / 0.3 | Safe browser live editing on the reused engine | Concurrency/review preservation, edit-intent durability and browser crash/reconnect checks |
+| R3 / 0.4 | Offline browser workspace and explicit reconciliation | Browser storage/eviction/restart limits exposed; recover/export candidates before unsafe continuation |
+| R4 / 0.5 | Review, tracked changes/actions, presence and chat | Complete intended web workflows with correct identities/permissions |
+| R5 / 0.6 | Editing aids, project/file/assets/bibliography/history/settings and upstream integrations | CAP-01 inventory coverage; web equivalents for useful extension features |
+| R6 / 0.7 | Shared server compilation, configuration/admin and backup/restore | Isolated workers, correct source/PDF routing and deployment rollback |
+| R7 / 0.8 | Shared multi-user job distribution/capacity and recovery | JOB-01–03, fair progress, multi-worker evidence and measured budgets |
 
-### Upstream references for probes
+Shared runtime-step contract: use section 3 prerequisites, record exact working directory/environment/commands and inputs before execution, expected output and criterion from the step/gate, then status/evidence/remaining limits immediately afterward. Preserve recoverable source and previous configuration; stop dependent work on failure and restore only task-owned changes. Never reset unrelated work. Per-risk discovery checkpoints are 30 minutes; compare elapsed time and accepted outcomes before continuing. No fixed test quotas or speculative exhaustive platform claims.
 
-- [CE+ README](https://github.com/yu-i-i/overleaf-cep/tree/ext-ce#readme) and [CE+ configuration/release wiki](https://github.com/yu-i-i/overleaf-cep/wiki): intended distribution, claimed capabilities and image configuration. Resolve and record an immutable server commit/image before testing.
-- [Workshop README](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/README.md): cookie guidance, features and upstream compatibility list, inspected at this reference commit. Revalidate before changing the compatibility matrix.
-- Workshop source at that same revision: `src/api/base.ts`, `src/api/extendedBase.ts`, `src/api/socketio.ts`, `src/api/socketioAlt.ts`, `src/core/remoteFileSystemProvider.ts`, `src/scm/localReplicaSCM.ts`. Use their actual server interactions to shorten probes; no new dependency/source incorporation is claimed.
-- [Workshop issue #353](https://github.com/overleaf-workshop/Overleaf-Workshop/issues/353) reports intermittent local overwrite after local and remote edits. It motivates R1's reconnect regression; it is not proof that every Workshop deployment loses data or that we reproduced the bug.
-- [Official edition permissions](https://docs.overleaf.com/on-premises/user-and-project-management/roles-and-permissions) distinguish plain CE from Server Pro; inspect CE+ directly rather than applying that restriction to its extensions.
-- [LaTeX Workshop](https://github.com/James-Yu/LaTeX-Workshop): reuse its supported compiler, viewer and SyncTeX integration. Record the installed version and commands actually tested.
+## 7. Verification and deliverables
 
-## 4. Implementation choices
+Test inherited behavior with integration active; reuse upstream tests and synthetic fixtures where applicable. Scope checks to changed functionality, trust boundaries and known regressions. Real browser/server/worker evidence is required where specified; mocks, skips and README claims cannot pass those gates. Browser refresh/termination, permission/quota/storage failure and multiple sessions replace installed-extension checks. Preserve archived native-host findings as historical evidence only.
+
+Application deliverables are versioned web source/assets and the actual required service/container/configuration artifacts, dependency notices, pinned runtime/toolchain identities, checksum/provenance and rollback instructions. R0 must implement this actual packaging/smoke pipeline; current scripts still produce planning assets only. No VSIX or Marketplace deliverable. Do not deploy, publish releases or activate external integrations under this documentation task. A source commit/push is distinct from deployment or release.
+
+Repository documentation/tooling verification, from an outside-Kod temporary checkout containing committed tests and intended inputs: `npm ci`, `npm run typecheck`, `npm test`, `npm run validate`, `npm run build`, `npm run test:package`. The builder requires a clean committed snapshot. All must exit zero and reopen six planning assets; they prove documentation/validator/package consistency only, not a web app, supported browser or server capability. Check mirror identity and `git diff --check`. Preserve failed-case evidence only while needed and remove completed generated outputs/checkouts after safe remote verification.
+
+## 8. Current evidence and limitations
+
+Verified for this revision: the existing repository is planning/tooling only; all application phases are unstarted. The three pinned READMEs establish the initial feature inventory, not a full feature audit. Existing plan consolidation and its private PoC references are preserved. There is no qualified web integration, browser/storage matrix, safe local compile route, licensed code-incorporation decision or multi-user worker-distribution acceptance yet. Do not infer that an authorized test server or current runtime setup exists from historical records.
+
+The 7 November experiment demonstrated bounded Rust + VS Code + unchanged CE+ engine behavior. Its archived exact identities, measurements and failures are retained in section 11. The web-interface decision supersedes its extension-based delivery design: do not ship its client as the product or count extension assertions as browser acceptance. In particular the whole-document replacement/range-mapping failure, supplementary Unicode, review races, storage loss and cross-platform gaps must be investigated in the chosen browser path.
+
+## 9. Release gates and phase execution
+
+This is the sole machine-parsed gate registry. Gate IDs and ordered phase identities remain stable for existing tooling; criteria now describe a web application. `RELEASE-CHECK` applies through each shipped target. No passing state is introduced by changing prose.
+
+<!-- gate-index:start -->
+| Rank | Category | Gate | Phase | Acceptance |
+|---|---|---|---|---|
+| 1 | feasibility | `R0-FEASIBILITY` | R0 | Execute WEB-01, CAP-01, required auth/read/version discovery and initial JOB-01 topology/failure probe; record pinned source/image/browser identities, complete capability accounting and explicit blocked edit/storage/worker premises. Required R0 evidence cannot be missing. |
+| 2 | local | `R0-LOCAL` | R0 | Real browser web workspace opens/edits/preserves local source with the qualified local file/compile route, no remote-server contact and no extension dependency; missing tools/failure preserves source. |
+| 3 | mirror | `R1-MIRROR` | R1 | Authenticated browser reads, strict session/origin/CSRF/permission checks and no-write hydration/reconnect preserve dirty buffer, persisted/local and remote candidates, including expiry, rename/delete and path failures. |
+| 4 | fidelity | `R2-LIVE` | R2 | Reused engine and real browsers preserve concurrent text/review, Unicode/UTF-16, undo/redo/IME/replacement races and identity; unknown formats remain safely held and explicit incomplete capabilities. |
+| 5 | durability | `R2-RECOVERY` | R2 | Persist exact scoped intent before send and atomically confirm; browser/backend crash, quota/storage failure, revoke and reconnect preserve candidates and resolve or hold ambiguity without blind replay. |
+| 6 | offline | `R3-OFFLINE` | R3 | Offline browser startup/work, restart/sleep and concurrent remote change retain exact candidates with explicit web diff/export/reconciliation; eviction/quota/permission limits cannot silently lose accepted work. |
+| 7 | review | `R4-REVIEW` | R4 | Web comments, tracked actions, review identities/anchors, presence and chat retain upstream workflows and pass concurrent/permission tests; hidden-state preservation alone cannot pass. |
+| 8 | project | `R5-PROJECT` | R5 | Assigned CAP-01 editing/project/integration inventory is delivered as web workflows, preserving source/assets, configured transfer permissions and originals; no unapproved omitted features or extension-only substitute. |
+| 9 | server | `R6-SERVER` | R6 | Shared CE+ web/compiler deployment, sandboxed workers, source/PDF identity, admin/configuration, private access, backup/restore and upgrade rollback pass; queue/worker interfaces are recorded for R7. |
+| 10 | scale | `R7-POOL` | R7 | JOB-01–03 prove required multi-user/project fairness, capacity and multi-worker dispatch, immutable job/result ownership, cancellation/revocation, worker loss/retry/restart recovery and measured budgets without unauthorized result access. |
+| 11 | release | `RELEASE-CHECK` | R0, R1, R2, R3, R4, R5, R6, R7 | Build and exercise exact web/service artifacts on declared browsers/hosts, run affected regressions, verify source/checksum provenance and rollback, and state partial scope and unresolved capability gaps without claiming extension or complete-product delivery. |
+<!-- gate-index:end -->
+
+### Phase R0 — Web foundation and feasibility / 0.1
+
+Dependencies: section 3 shared setup and source access. Inputs: pinned upstream code, synthetic local project and supported-browser candidates. Execute WEB-01, CAP-01 and early JOB-01; establish web integration/licensing path, local workflow, auth/read/version prerequisites and actual web packaging/smoke commands. Pass: R0 gates and release check. Failure: stop the affected integration premise, preserve source/candidates and revise approach before broad construction. No application implementation is started by this revision.
+
+### Phase R1 — Protected server project access / 0.2
+
+Dependencies: passed R0, qualified same-origin session and project read path. Execute AUTH-01 and R1 data-loss regression, stage imports and expose connection/permission state. Pass: R1 gate plus release check with zero remote mutation. Failure: hold connected access, retain all candidates and repair the auth/staging boundary; independent local operation remains available.
+
+### Phase R2 — Safe web live editing / 0.3
+
+Dependencies: R0/R1 and selected editor/storage path. Execute EDIT-01/STORE-01 before broad integration, then add only missing durability and browser revision guards around reused engine operations. Pass: R2 gates and release check on declared browsers. Failure: preserve pending work and hold unsafe writes; do not mark safe refusal as Unicode/review support.
+
+### Phase R3 — Offline web recovery / 0.4
+
+Dependencies: passed R2, exact candidates and confirmed bases. Test offline loading/editing, refresh/termination, quota/eviction, expired history and account/project switching. Implement explicit web diff/export/reconciliation before speculative automatic replay. Pass: R3 gate and release check. Failure: retain recovery/export and block unsupported persistence or replay claims.
+
+### Phase R4 — Review, presence and chat / 0.5
+
+Dependencies: passed R3 and exact CE+ capability mapping. Reuse the web UI and missing component integrations for review actions, anchors/identities, presence and chat. Exercise concurrent text/review, revocation and reconnect. Pass: complete R4 web workflows and release check. Failure: track and repair each missing capability; no silent substitution with metadata-only/read-only behavior.
+
+### Phase R5 — Web editing and project workflows / 0.6
+
+Dependencies: passed R4 and CAP-01 audit. Close assigned web-editor equivalents and project/integration gaps; preserve originals and permission/transfer boundaries. Use synthetic readback and relevant unauthorized/malformed/interrupted-write cases. Pass: R5 inventory coverage gate and release check. Failure: keep missing rows blocked, restore originals/configuration and obtain user decision before any exclusion.
+
+### Phase R6 — Shared server compilation and operations / 0.7
+
+Dependencies: passed R5, deployment authorization and pinned upstream services. Configure/qualify existing Toolkit/compiler and admin tools; test local/remote navigation, sandbox boundaries, backup/restore and rollback. Discover and record exact runtime commands/config paths before writes. Pass: R6 gate and release check. Failure: restore disposable backup/config, retain source and stop dependent worker-distribution acceptance.
+
+### Phase R7 — Multi-user server job distribution / 0.8
+
+Dependencies: passed R6 and viable JOB-01 routing/identity path. Implement only missing coordination, capacity/fairness and web job status, then run JOB-02–03. Pass: R7 distribution gate and release check with recorded workload/hardware/budgets. Failure: preserve queue/project inputs, restore configuration, block full shared-job acceptance and repair scheduler/worker recovery. Earlier partial releases remain usable; the full project is incomplete without this phase.
+
+## 10. Status and current checkpoint
+
+Schema 3, ordered phase IDs and gate IDs remain unchanged. Phase display names and gate criteria reflect this web-UI decision. All phases remain `not_started`, `releaseStage` is `planning` and `releasePhase` is null. Passing phases must cite real concise `docs/validation/phase-RN/report.json` evidence: exact source/time/environment, zero blocking defects, unskipped required gates and hash-verified sanitized logs. Reopen invalidated prerequisites and reset dependents. Current CI/build/publisher are planning-only; no application release follows from phase-name changes.
+
+### Current checkpoint — 9 November 2026, 01:58 CET (Europe/Madrid)
+
+- Objective/usefulness: restore upstream capability coverage, make multi-user job distribution required and replace extension delivery with a web UI. Active scope: this plan/mirror, README, repository instructions, release/evidence docs and phase display names. No runtime implementation, deployment, release, license change, external integration activation or source incorporation.
+- Project `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, branch `main`, starting HEAD `c0fabb733852ecad6f2f1f98db3df0b35b0b7f93`. Pre-existing uncommitted consolidation/PoC findings are retained as historical evidence below; unrelated workspace changes are untouched. Existing destination is public `cenkeryildiz/overleaf-sync`; do not copy private PoC source/data into it or change visibility.
+- DOC-01 verified: inspected current plan/status/instructions, pinned upstream READMEs and planning scripts/tests. DOC-02 verified: active web architecture, feature inventory, required shared-job safeguards and gates updated; dependent prose/phase names/mirror synchronized. Historical extension material is explicitly superseded, not discarded. Scope/progress/mirror checks passed; a trailing blank line found by whitespace validation was removed.
+- DOC-03 verified: outside Kod, snapshot `145efc7ccbbf29174e51b35425cfb44bcd4cad86` passed all six section 7 npm commands on macOS/Node 26.4.0, including 17 tests (zero skips) and six reopened planning assets. Active-scope consistency, retained PoC text, unchanged phase progress, mirror equality and whitespace checks passed. Initial validation against remote main failed because that older validator required 50 gates; fetching current local HEAD supplied the existing 11-gate tooling/tests and resolved it without code changes. These results are documentation/tooling evidence only. Generated dist was removed immediately after the run; no dependency/build directory is retained.
+- DOC-04 in progress, depends on verified DOC-03: push scoped documentation on a work branch in the existing repository, verify remote commit/tree and test/README/license retention. Do not push main: its workflow publishes a planning release. Keep local authoritative plan/mirror because application work remains unfinished; remove only task-owned disposable outputs after remote verification.
+- Recovery/ownership: task-owned recovery copies and historical extracts are at `/tmp/overleaf-web-plan.5x2YvV`, owned by this documentation task. No server, worker, extension host or lock was started. Preserve unfinished copies on failure; no reset/clean or unrelated deletion. `.codex-work`, `.claude` and corresponding home directories were inspected at top level; no task outputs were created there and existing contents belong to other work.
+- Pace: original 30-minute documentation timebox includes two user scope corrections; revised next action is to complete web-architecture consistency before validation. Feature audit/browser/local-file/licensing/worker runtime evidence remains unresolved. The original clone completed; no live process remains. Next action: commit only the six scoped files, verify the final snapshot with section 7 commands, push `HEAD:refs/heads/work/web-ui-capabilities-20261109`, independently verify remote commit and all intended files/tests/license, then remove the disposable checkout/recovery copies. If push/verification fails retain them and report the blocker. Do not release or merge main.
+
+## 11. Historical evidence — extension design superseded
+
+The following source inspection, native-host experiment and checkpoints are retained for provenance and reusable engine/failure findings. References to VS Code, SecretStorage, extensions, installed-host checks, VSIX, browser handoff and prior scope exclusions describe the former design. They do not override sections 1–10, establish web qualification or authorize extension implementation. The current product is a web application; requalify applicable findings in browsers. Private experiment links remain pointers only; no private source, credentials or runtime data is imported here.
 
 ### Verified reuse limits — 3 November 2026
 
@@ -80,117 +215,66 @@ Read-only source inspection at Workshop commit `835a488a7eac760fa2d74685cf1072f9
 
 Pinned source references: [activation](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/extension.ts), [manifest](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/package.json), [filesystem](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/core/remoteFileSystemProvider.ts), [credential persistence](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/utils/globalStateManager.ts), [identity](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/api/base.ts), [login input](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/core/projectManagerProvider.ts), [replica](https://github.com/overleaf-workshop/Overleaf-Workshop/blob/835a488a7eac760fa2d74685cf1072f95393b30d/src/scm/localReplicaSCM.ts).
 
-**Result:** reuse the unchanged CE+ browser and LaTeX Workshop workflows first. Workshop remains a source/protocol reference and a candidate read provider, not an accepted secure/read-only adapter. Do not respond to these limits by building another synchronization engine. No upstream source is copied and no existing safety gate is weakened.
+**Result:** retain the unchanged CE+ browser and full LaTeX Workshop workflows as baseline capabilities. Workshop remains a source/protocol reference and a candidate read provider, not an accepted secure/read-only adapter. Resolve missing interfaces through a proven adapter or an explicitly licensed reuse path; do not invent another OT algorithm or treat a fallback as final parity. These 3 November findings describe source inspection only; the separate 7 November PoC reused pinned engine/transport code as recorded below. No production safety gate is weakened.
 
-### Minimum implementation
+### Historical minimum implementation — superseded
 
-Keep the first implementation TypeScript-only and as small as possible. Prefer the existing VS Code extension, editor, diff UI, filesystems and platform storage before dependencies or vendoring. Reuse only APIs/operations proven on the pinned server; a missing upstream interface triggers a scope decision rather than automatic construction of a second client.
+Use Rust for the custom backend, as requested by the user. Keep VS Code editor integration and any reused JS/TypeScript collaboration state machine in their required host language; do not rewrite the OT algorithm. Keep the implementation as small as possible. Prefer the existing VS Code extension, editor, diff UI, filesystems and platform storage before dependencies or vendoring. Reuse only APIs/operations proven on the pinned server; a missing upstream interface triggers integration discovery and a tracked gap, not automatic feature removal or a second OT engine.
 
-R1 needs safe staging and a recoverable confirmed mirror, not a live-write journal. Before R2 sends, verify one maintained durable store on supported hosts; SQLite is a candidate only if an existing upstream mechanism is insufficient. No native/Rust engine, shared daemon, custom installer, dual-engine benchmark or broad package inventory is a prerequisite. One local editing owner per project is enough; another window observes or explicitly takes over after reconciliation. Client-owned children terminate on shutdown; closing a client never stops the independent server.
+R1 needs safe staging and a recoverable confirmed mirror, not a live-write journal. Before R2 sends, verify one maintained durable store on supported hosts; SQLite is a candidate only if an existing upstream mechanism is insufficient. The Rust custom-backend requirement does not imply a new OT engine, shared daemon, custom installer, dual-engine benchmark or broad package inventory. One local editing owner per project is enough; another window observes or explicitly takes over after reconciliation. Client-owned children terminate on shutdown; closing a client never stops the independent server.
 
 Intended locations only: `src/extension.ts` / `src/config.ts` (session choice), `src/server/*` (narrow auth/capability adapter), `src/mirror/*` (R1 safety), `src/sync/*` and `src/store/*` only if proven necessary for R2/R3. Add feature-specific tests with implementation. No application files or dependencies are introduced by this revision.
 
-## 5. Session, authentication and mirror safety
+### Independent R2 feasibility — 7 November 2026
 
-Each window explicitly chooses Local only or Connect to server. Local only makes no server calls or presence/job submissions through this companion; test upstream integration for unintended activation/contact. Connected use pins one normalized origin/account and reconciles divergence before any send. R1 is read-only remotely, including reconnect, and defaults to browser handoff for collaboration.
+**Conditional go for Rust + VS Code using the existing CE+ collaboration engine.** This is an isolated experimental result, not a production release or acceptance of any R0–R7 gate. The production-qualified compatibility list remains empty. The separate PoC is complete and archived privately; no application implementation is authorized by this document consolidation.
 
-**Cookie login is primary; password login is secondary.** Use an already authenticated browser for SSO/captcha deployments, then import only the required cookie through a secret input. Warn before storage that **the cookie gives full access as that account**, not just to this project. Store it only in VS Code SecretStorage, scoped by validated origin/account; never settings, workspace files, telemetry, trace logs, source archives or test evidence. Expired/revoked cookies visibly disconnect and preserve local work; logout removes the stored secret. No browser-profile scraping or automatic R0 credential collection.
+The [complete technical assessment, executable PoC and synthetic evidence](https://github.com/cenkeryildiz/kod_phases/blob/c6b7e2e6b81483ea0d47ca2deebcc4d979a716f3/experiments/r2-poc/FEASIBILITY.md) are retained at private commit `c6b7e2e6b81483ea0d47ca2deebcc4d979a716f3`, branch `work/r2-poc-20261107`. The archive's README gives reproducible setup and validation commands. Runtime secrets, generated builds, synthetic server data and completed disposable checkouts were removed after remote verification; reproducing the experiment requires a fresh isolated environment.
 
-Parse URLs and validate scheme, hostname and effective port as an exact origin before saving or sending credentials. Reject userinfo (including `https://host@evil.com`), misleading/lookalike hosts, origin mismatches and redirects to another origin; do not use string-prefix checks. Normal deployed connections use HTTPS. Scope cookies to the validated origin and do not forward them across redirects. Read back the account/project identity after login and permission after reconnect; failures retain local candidates. Record negative origin/secret-redaction cases in R1, not just the happy login.
+| Tested component | Immutable identity |
+|---|---|
+| CE+ source | `ae07e781ab20dac2378420e5cf7a47f7d8bccbb5` |
+| CE+ arm64 image | `sha256:c8844bd6ca900d78a5187793a99a30553d77ec2f399d49f8b00edb29d46487a9` |
+| Overleaf Workshop reference | `835a488a7eac760fa2d74685cf1072f95393b30d` |
+| LaTeX Workshop reference | `2f5a60a11a99f33013c1235f0499546cc831cfcb` |
+| Toolkit | `26f13760e04e5b66e6bcd344295d6525e390e88f` |
+| Reused Socket.IO client | `805a73d2a2e2408982597d5986a401088b7aa588` |
 
-Mirror into an extension-owned dedicated folder. Hydrate through staging; never replace an existing user folder silently. Remote changes are candidates until local dirty buffers, disk state and the last confirmed base have been compared. Preserve all three states on divergence, offer VS Code diff/copy/browser choices, and never infer a remote delete/rename from a local file's absence. Reject path escapes, symlink/reparse escapes and case collisions. External editors can change even a nominally read-only mirror; uncertainty causes a hold, not an overwrite. No claim of universal filesystem compare-and-swap.
+Actual host: macOS arm64, VS Code 1.145.2, isolated profiles and synthetic accounts/projects. CE+ and its collaboration protocol were unmodified. The exact upstream ShareJS engine and RangesTracker were reused with Workshop's existing transport patch. The current handshake uses `projectId` and `joinProjectResponse`; do not assume the old explicit joinProject/connectionAccepted path exists.
 
-**R1 mirror data-loss regression:** hydrate a synthetic project; dirty a VS Code buffer and independently change its on-disk mirror; change the same file remotely in the browser; disconnect/reconnect and trigger refresh (also restart with retained local state). Prove local-buffer, local-disk and remote candidates remain recoverable, conflicts are visible, no local candidate is silently replaced, and no remote mutation was submitted. Include dirty-at-initial-hydration and remote delete/rename. Use the upstream issue as a reproduction pattern, not an unsupported allegation. This is an R1 release gate, not deferred to R2/R3.
+| Requirement | Experiment result and boundary |
+|---|---|
+| Native VS Code editing and two-client concurrency | Verified for basic insert/delete, remote editor updates and BMP text such as café, Greek and Chinese. No new OT algorithm. |
+| Rust durability before transmission | Verified: an independent journal process read the exact committed submission before network emission; a failed journal prevented sends. Confirmation records follow definitive applied events, not the earlier queue callback. |
+| Lost confirmation / termination / expired history | Verified safe-hold outcomes. Applied-event suppression, whole Node-client SIGKILL and actual missing history after 110 operations preserved exact pending intent without duplicate replay. Actual VS Code main-process termination is not yet qualified. |
+| Reconnect | Clean reconnect and subsequent confirmed edit verified. Ambiguous pending work is held; seamless automatic uncertain recovery is not implemented. |
+| Review metadata | Verified custom tracked insertions, hidden deletions, author identity and shifted browser comment anchors on the exercised ShareJS configuration. No native review UI or continuously refreshed native range model. |
+| Permission revocation | Actual collaborator downgrade stopped writes; local candidate retained and server readback excluded it. Broader revocation races remain pending. |
+| Unsupported format / characters | Actual `history-ot` document join was refused without content/version changes. Supplementary Unicode was retained and refused without submission. This proves safe refusal, not full support. |
 
-## 6. Minimum safety before live writes
+The chosen boundary is **VS Code/TypeScript for editor APIs and the reused JS/TS state machine; Rust for custom backend persistence and recovery safeguards; unchanged CE+ for transforms, versions and review processing**. Persist stable document/account/origin identity, exact engine state, tracking seed, submitted connection identity and exact outgoing message before emitting. On unknown status, retain and hold. Workshop filesystem writes cannot supply this boundary. Do not port a complete OT engine to Rust.
 
-R2 uses a proven upstream operation path; do not implement a new OT/review algorithm. Before any remote send, persist identity, exact intent, confirmed base/version, tracking decision and stable operation ID. Atomically record confirmation/base advancement. Distinguish durable, submitted, confirmed, ambiguous and held states. Storage failure stops sends and retains the editor candidate. Resolve one outstanding submitted operation before dependent work; loss of confirmation is not permission to replay. Use authoritative server evidence; text equality is insufficient. If proof is unavailable or expired, preserve the candidate and hold for explicit resolution.
+Final small loopback run: 28 ms concurrent convergence; maximum observed Alice journal commit 273 microseconds. Local journal assertions sampled median 73/max 178 microseconds over 20 commits. The browser baseline took about 1.9–2 seconds and missed the initial one-second investigation target; upstream scheduling differs from the prototype's immediate durable queue. These measurements are not large-project, throughput or resource certification.
 
-Review gates follow the R0 capability record. If CE+ exposes review, prove concurrent text/review preservation, hidden deletions, IDs/authorship/anchors and legitimate metadata transformations on disposable projects. If review is conclusively absent, R2's review gate narrows to **preserve existing state**, do not synthesize/strip review metadata, and refuse writes to any document whose state/format cannot be safely understood. Unknown or partially readable review state stays read-only. This reduction never waives text, identity, concurrency or recovery tests. Do not advertise review actions in R2; R4 defaults to existing read-only/browser capability.
+**Outstanding threats:** stock-browser whole-document replacement followed by concurrency produced an unresolved range-mapping error. Full supplementary Unicode/history-OT support, native undo/redo/IME/multi-cursor races, disk-full/power-loss behavior, remote authentication/TLS and Windows remain unqualified. R1 remains the dependable product boundary until production gates pass. Full findings A–F and historical failure evidence remain in the linked assessment.
 
-Exercise Unicode/UTF-16, line endings, IME, undo/redo, multi-cursor/format-on-save and remote edits against editor revisions in the real host. Suppress only the exact observed echo. Preserve dirty buffer/disk/remote candidates, permission-revoked work and original assets. R2 needs baseline crash/disconnect safety; R3 may reuse built-in diff and explicit manual choices rather than automatic offline merge. Never claim Workshop's existing behavior is safe without the regression.
+### Historical pending risks — requalify for the web design
 
-## 7. Compilation and later conveniences
+These checks refine the existing R2 safety work; they add no release acceptance and do not delay R0/R1 behind a complete R2 implementation. Run the first two before committing to the broad live-editing integration because failure could require changing the reused engine/format path. Prerequisite: fresh isolated pinned CE+ deployment, synthetic identities/projects, clean installed VS Code profile, retained original fixtures and recoverable candidates. Retrieve the archived PoC into a temporary checkout outside Kod; follow its README and run its existing `npm run validate` baseline before extending relevant experiments. The commands for new fault cases must be discovered/recorded with their actual implementation, not invented here.
 
-Use LaTeX Workshop and installed TeX/latexmk for local build, preview, diagnostics, bibliography recipes and SyncTeX. Missing tools or compile failure leave usable source and an actionable status. No automatic tool/package installation. For connected compilation, prefer the existing CE+ compile/browser path; preserve source/PDF identity and show stale output rather than inventing a new service.
+| ID / dependencies | Test and measurable pass condition | Action on failure |
+|---|---|---|
+| R2-PRE-01 / PoC baseline | Race native undo/redo, large paste/replacement, IME and local typing against incoming remote edits. Reproduce the recorded browser range error. Exact text/review state converges or every divergent candidate remains recoverable with a visible hold; no stale overwrite or wrong-document update. | Stop acceptance of affected editor paths; diagnose the shared adapter/upstream behavior before broad UI construction. |
+| R2-PRE-02 / PoC baseline; before broad text support | Test supplementary mathematical symbols, emoji, combining marks and multilingual input on an existing compatible engine/format path. Preserve exact text and UTF-16 positions under concurrent edits; unsupported input must remain recoverable and unsent. | Retain explicit support limits; qualify another existing path instead of inventing transforms. Do not market safe refusal as support. |
+| R2-PRE-03 / selected path from 01–02 | Kill actual VS Code and Rust around intent commit, submission and confirmation; simulate disk-full/write failure. Every edit is either authoritatively applied once or retained exactly for recovery; storage failure emits no write. | Hold sends and repair persistence/editor ownership; preserve failure evidence and original data. |
+| R2-PRE-04 / 03 | Repeatedly disconnect during concurrent edits, restart and exhaust recent history. No duplicated/lost edits or silent overwrite; ambiguous work remains accessible through an explicit recovery path. Automatic recovery is optional until proven. | Keep safe holds/manual reconciliation; stop automatic replay on uncertainty. |
+| R2-PRE-05 / selected authentication/identity adapter | Switch accounts/projects with pending work, expire authentication and revoke access during edits. No candidate crosses an origin/account/document boundary; unauthorized sends stop and pending work remains recoverable. | Hold connected writes and repair identity/permission checks before product use. |
 
-Keep `.bib` text/keys/comments/order, original figures (including PDF inputs), styles and data unchanged. Do not run figure generators. Browser tree/history/settings/review operations remain the default until a real need justifies a small native command. R6 may later document a pinned existing Toolkit/compiler deployment, private endpoints and tested backup/restore; it is not a custom CLSI rewrite. R7 has no scheduled architecture or implementation. Reconsider only if measured queue/compile contention and actual users justify it.
+Start with a 30-minute investigation checkpoint per risk group, comparing elapsed work with accepted outcomes; this is a diagnostic timebox, not a promised delivery time. Record actual commands, source/image identities, latency/resource samples and failures in this section. If a premise fails, preserve candidates, record the cause and revise the approach before dependent work. These tests have not been run by this consolidation.
 
-## 8. Proportionate testing policy
 
-Reuse disposable upstream/browser scenarios and fixtures; test only the feature or failure boundary introduced. No fixed test quotas, mandatory multi-day pilots, blanket performance/security certifications or dual engines.
 
-- R0: cookie-first auth/version/integration probes, review/OT capability discovery and installed local-only behavior; preserve inconclusive live findings as R2 holds.
-- R1: real cookie/project reads, strict origins/secret storage, expiry/revocation, safe hydration and the local-edit + remote-change + reconnect data-loss regression, proving zero remote writes.
-- R2: real-server text fidelity, capability-scoped existing review preservation, ambiguous/dropped confirmations, durable recovery and installed editor races.
-- R3: actual offline recovery/manual reconciliation, restart/sleep and expired-history conflicts.
-- R4–R7: only justified shipped conveniences or their truthful browser/read-only fallback; do not build speculative tests for parked systems.
-
-Install real VSIXs on declared Windows/macOS targets and exercise changed behavior before claiming an application release. Record exact source/artifacts and supported rollback. Missing server/host evidence remains missing; mocks/skips cannot satisfy a gate requiring reality. A shorter plan never waives no-data-loss checks. All application phases currently remain `not_started`.
-
-## 9. Delivery order and release gates
-
-This is the sole machine-parsed gate registry. Keep gate IDs and eight ordered phase records stable. An earlier usable release requires its own actual gates/prerequisites, not all later features. `RELEASE-CHECK` covers each shipped increment. A later read-only/browser fallback must itself be exercised; a parked feature is not falsely marked passed.
-
-<!-- gate-index:start -->
-| Rank | Category | Gate | Phase | Acceptance |
-|---|---|---|---|---|
-| 1 | feasibility | `R0-FEASIBILITY` | R0 | Execute required local/read/auth/version probes; record pinned CE+ image/source, tested compatibility list, Workshop reference and explicit review/OT/write outcomes. Unresolved live-only proofs remain R2 holds, not passing write checks; required read evidence cannot be missing. |
-| 2 | local | `R0-LOCAL` | R0 | Actual installed companion uses local LaTeX Workshop compile/PDF commands on declared targets without server contact; missing tools/build failure preserve source. |
-| 3 | mirror | `R1-MIRROR` | R1 | Cookie-first login/project hydration and reconnect work with exact-origin SecretStorage/redaction/expiry checks. Local-buffer + disk edits + browser change + reconnect retain all candidates without overwrite or remote writes; path/permission failures preserve work. |
-| 4 | fidelity | `R2-LIVE` | R2 | Proven upstream text path passes pinned-server concurrent text and real-host Unicode/edit races; preserve existing review state according to R0 capability, fully test exposed CE+ review semantics and refuse unknown states/formats before writes. |
-| 5 | durability | `R2-RECOVERY` | R2 | Persist before send and atomically confirm; crash/storage/revoke/reconnect preserve intent and hold lost/duplicate-confirmation ambiguity without replay or dropped edits. |
-| 6 | offline | `R3-OFFLINE` | R3 | Local candidates survive restart/sleep and concurrent remote change; built-in diff/manual recovery or proven upstream reconciliation preserves all candidates when history expires. |
-| 7 | review | `R4-REVIEW` | R4 | Only useful proven upstream review/presence integration is exposed; otherwise exercise read-only/browser handoff with retained state. No bespoke panel or unsupported actions; chat is optional. |
-| 8 | project | `R5-PROJECT` | R5 | Only explicitly useful conveniences are added; existing tools/browser preserve bibliography/assets and tree/history/settings behavior; conditional binary/tree writes are not invented where safety is unproven. |
-| 9 | server | `R6-SERVER` | R6 | If a shared deployment is needed, reuse pinned CE+ Toolkit/compiler with source/PDF identity, private endpoints and isolated backup/restore/rollback checks; no custom service required. |
-| 10 | scale | `R7-POOL` | R7 | Park until measured contention and actual demand justify a separate scoped proposal; no pool readiness claim without real worker/isolation/failure evidence. |
-| 11 | release | `RELEASE-CHECK` | R0, R1, R2, R3, R4, R5, R6, R7 | Run affected regressions, install exact artifacts on declared targets and exercise changed workflow; verify source/hash/download provenance and supported rollback. |
-<!-- gate-index:end -->
-
-### Phase R0 — Feasibility and local companion / 0.1
-
-Run the short probes, populate the compatibility/reuse/capability report and ship local-only integration with real VSIX packaging. Required local/read findings must be recorded; unresolved live findings hold R2. No new server or synchronization engine. Exit: actual R0 gates, with connected features unavailable in this local release.
-
-### Phase R1 — Read-only server mirror / 0.2
-
-Cookie-first login, project selection, protected mirror and browser handoff only. Prove the mirror data-loss regression and secret/origin checks. Exit: R0/R1 gates pass with zero remote writes. Ship now for real feedback while expanded R2 experiments continue; no outbox/full OT/review implementation dependency.
-
-### Phase R2 — Safe live text editing / 0.3
-
-Use the proven upstream path, add only missing durable-intent/confirmation and editor-revision protection. Text/review qualification follows the actual CE+ capabilities, preserving existing state when review is absent. Exit: R2 gates pass on disposable projects and installed hosts. An ambiguous write or unknown review format blocks that write path; R1 remains usable.
-
-### Phase R3 — Offline work and recovery / 0.4
-
-Protect offline candidates and provide explicit built-in diff/manual reconciliation first. Add automatic replay/merge only if proven upstream semantics and a concrete need justify it. Exit: real recovery checks pass without silent overwrite.
-
-### Phase R4 — Optional review/presence handoff / 0.5
-
-Default to existing CE+/Workshop review/presence or a read-only/browser handoff. R0 decides availability on the selected build; absence on plain CE is not evidence against CE+. Add native actions only for a demonstrated use. No new panel or chat requirement. Exit: truthful chosen fallback/integration passes its gate; defer the phase if unused.
-
-### Phase R5 — Optional project conveniences / 0.6
-
-Keep browser/LaTeX Workshop/mirror workflows unless a specific missing command is valuable. Preserve source inputs; unsafe binary/tree mutation stays browser-only. No broad project manager, history viewer or SyncTeX rewrite. Defer if unused.
-
-### Phase R6 — Optional existing-server operations / 0.7
-
-Only when a real shared deployment is needed: document the pinned upstream Toolkit/compiler, TLS/private endpoints and a tested backup restore/upgrade rollback. Do not build a coordinator or duplicate compiler service. No speculative deployment platform.
-
-### Phase R7 — Parked scaling / 0.8
-
-No current implementation work. Reopen only after measured demand warrants a separately scoped proposal; all earlier supported releases remain valid without it.
-
-## 10. Status, publication and evidence
-
-Current status: plan/repository tooling only. All R0–R7 remain `not_started`; no live probe, compatibility certification, VSIX or deployment was executed by this plan revision. Today’s source inspection is not a server experiment. Changes authorize planning/tooling only.
-
-Retain schema 3, ordered phases and `releasePhase`: null in planning/development, target R0–R7 in candidate/production. Actual evidence is required through the target; later phases cannot block an earlier release. Keep unresolved write probes in the capability report without marking R2 implementation started/passed prematurely. Reopen invalidated prerequisites and reset dependents; preserve historical evidence and known-good artifacts.
-
-Each passed phase references one concise `docs/validation/phase-RN/report.json`: exact tested commit/time, zero blocking defects and its actual command/environment/hash-verified sanitized gate logs. Never put credentials/cookies in evidence. Record capability reductions and actual tested versions explicitly; absent/inconclusive is not supported. Planning package checks do not prove an application works.
-
-The current CI/builder/publisher remain planning-only. R0 adds actual VSIX packaging, native installed-host checks and immutable candidate/versioned artifacts with source/checksum verification. Publication stays CI-gated; Marketplace needs explicit authorization. No publication or deployment is requested here.
-
-### Current checkpoint — 2026-11-03 23:01 CET
+### Historical checkpoint — 2026-11-03 23:01 CET
 
 - Objective/scope: finish the reuse feasibility assessment before application construction; preserve the browser/local-tool shortcuts and data/secret boundaries. Application implementation, extension/tool installation and server deployment remain excluded from this planning continuation.
 - Project: `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, branch `main`, starting HEAD `05b0c4e99e173d0bff6794aeabe66bfb084bfb78`. Initial project tree clean; unrelated parent-repository edits are outside scope. This continuation changes this plan and its existing parent mirror only.
@@ -200,3 +284,10 @@ The current CI/builder/publisher remain planning-only. R0 adds actual VSIX packa
 - Next action (`R0-DISCOVERY`, pending; no phase gate passed): obtain an explicitly designated disposable CE+ origin/source/image and safe test account, then identify the exact installed extension versions in an isolated profile. From this project run `code --list-extensions --show-versions` and `command -v docker latexmk tectonic pdflatex`; missing prerequisites are discovery failures, not passing/skipped application checks. Do not collect cookies in commands/logs. Test masked secret input/origin validation before credentials, then filesystem read activation and the local-only/restart boundary on synthetic data. Expected result: sanitized capability/compatibility findings with no source-data changes or remote mutations. If prerequisites or a safe reusable interface remain unavailable, retain browser handoff and hold connected implementation; do not silently replace the backend.
 - Recovery/ownership: no test server, extension-host process, worktree or lock was started. No user credentials were accessed. Tooling verification runs in a disposable checkout outside Kod; retain unfinished files on failure, and remove completed generated assets/checkouts only after the private remote snapshot is independently verified. Planning test results are recorded below when available.
 - Verification: in the disposable checkout, `npm ci`, `npm run typecheck`, `npm test` (17 passed, zero skipped), `npm run validate`, `npm run build` and `npm run test:package` passed on 3 November 2026. Packaging reopened the source archive and verified six planning assets. These checks prove repository/planning consistency only; no live capability, safe adapter, VSIX or supported host is accepted.
+
+### Historical documentation checkpoint — 7 November 2026, 22:12 CET (Europe/Madrid)
+
+- User requested two consolidated project documents: this LaTeX plan and `Projects/PDF_VIEWER_RESEARCH.md`. This repository plan and `Projects/Collaborative-LaTeX-Plan.md` are synchronized copies of the same LaTeX document. The newer Workshop source findings, independent PoC conclusions and pending critical tests are integrated above; historical checkpoints remain historical.
+- Production repository `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, branch `main`, HEAD `c0fabb733852ecad6f2f1f98db3df0b35b0b7f93`; intended change is this plan only. The parent mirror’s prior prose removal and all unrelated changes are preserved. No application code, phase status or release-gate row changed.
+- No test server, runtime or heavy gate is started by this documentation work. The completed private PoC archive is the source for prior experimental results; no new live qualification is claimed. Existing PDF work has a separate owner/checkpoint and is not interrupted.
+- Consolidation validation: complete imported PDF ledger/review retention checked, navigation/redirect targets checked, LaTeX copies identical and release-gate index unchanged. In a disposable Git snapshot outside Kod, `npm ci`, `npm run typecheck`, `npm test` (17 passed, zero skipped), `npm run validate`, `npm run build` and `npm run test:package` passed; six planning assets and source archive verified. These are documentation/repository checks, not new live acceptance. The archived PoC README remains the next-action source for future authorized live investigations; no new implementation starts here.
