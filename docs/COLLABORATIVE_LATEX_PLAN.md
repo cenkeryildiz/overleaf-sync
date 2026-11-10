@@ -1,6 +1,6 @@
 # Collaborative LaTeX — Web Application and Incremental Release Plan
 
-Design revision: 9 November 2026. The product is a web UI, retains nearly all selected upstream capabilities, and requires shared server job distribution for multi-person projects. Production application phases remain unstarted.
+Design revision: 10 November 2026. The product is a web UI, retains nearly all selected upstream capabilities, and requires shared server job distribution for multi-person projects. Production application phases remain unstarted.
 
 ## 1. Product, scope and completion
 
@@ -27,6 +27,33 @@ Keep browser editor/collaboration code in its existing JS/TypeScript host langua
 **Connect to server** uses the designated deployment's browser login/session and project permissions. Prefer ordinary same-origin session authentication and upstream SSO rather than importing full browser cookies into a client. Do not transplant VS Code SecretStorage, extension activation, `workspace.fs` or VSIX packaging requirements into the web design. Browser-facing remote-service adapters must keep server secrets out of frontend code and storage.
 
 Licensing is an unresolved integration prerequisite. Existing original documentation remains under the repository's current license. Record exact revision, notices, modifications, source delivery and distribution boundaries before incorporating upstream code; the proprietary notice does not relicense upstream material. Do not assume process separation, plugin invocation or a private deployment resolves source obligations. If the reuse strategy conflicts with the current license, present the concrete decision before source incorporation. No license change or source copying is authorized by this documentation revision.
+
+### 2.1 Reuse existing PDF components and planning
+
+**Objective and boundary:** reduce duplicate PDF work by retaining CE+'s preview first and adapting existing Data File Viewer (DFV) components only for demonstrated gaps. This addition authorizes planning only: no source incorporation, runtime dependency, license change or application acceptance. TeX source remains authoritative; editing a compiled PDF does not update collaborative source or replace SyncTeX.
+
+**Evidence inspected on 10 November 2026:** local DFV source at `f5d5b73d2077d58665b4603cc9d37b71bc9daa7d` and Python PDF UI source at `4e7eb4e7ca295430a717841f2c2039ef5491b882`. Source presence proves implementation exists, not browser qualification. The workspace's `Projects/PDF_VIEWER_RESEARCH.md` records DFV 0.1.2/source `520dba9` as delivered on macOS arm64 and subsequent LTX-4/LTX-G/LTX-5 work as accepted. Those are the PDF plan's recorded results, not checks rerun here. The inspected local checkout predates the recorded release; retrieve and compare the exact source/worker/assets before reuse. Neither macOS nor installed-extension evidence proves Windows/browser support.
+
+| Candidate / existing source owner | Existing work to reuse | LaTeX disposition / remaining work |
+|---|---|---|
+| Reading/selection/page controls: `Projects/Python/pdf_creator/web/static/viewer.js`, `viewerReading.js`, `viewerSelectionActions.js` | Browser JS interactions and text reading view | R0 discovery; R5 only for missing capabilities. Keep sufficient CE+ controls; inspect DOM/global-state dependencies, keyboard/focus/accessibility and layout before extracting behavior. Avoid replacing the entire preview for one control. |
+| Search/outline: sibling `viewerSearch.js`, `outline.js`; `pdf_parts/pdf_navigation.py`, `pdf_outline_analysis.py` | Generation-aware search/cancellation/paged results; bookmarks and detected-heading navigation | R5 via PDF-REUSE-01/02. Prefer CE+ equivalents; UI reuse requires compatible text/navigation operations. Python analysis remains a reference unless its runtime is deliberately selected. Detected headings do not replace TeX structure or SyncTeX. |
+| Transport/host: sibling `editorTransport.js`; DFV `src/pdfHost.ts`, `src/pdfEditorProvider.ts` | Named operations, versioned resources, refusal/cancellation and lost-answer handling, bounded worker frames | R0 design; R5/R6 integration only for a verified gap. HTTP routes belong to the PDF app and need an adapter. Node child-process/filesystem and VS Code URI/storage/message APIs cannot run directly in the browser. Preview integration exposes only required read operations. |
+| Native PDF worker/verified-copy operations | PDF plan records a shipped PDF MVP, compact-copy verification and bounded pdfTeX editing | Conditional R5/R6 discovery: retrieve pinned source/assets/notices and independently verify capabilities. Add no second renderer, Python service or native worker if CE+ suffices. PDF editing is not automatically added to the LaTeX product. |
+| Recovery: sibling `viewerDraftRecovery.js`; DFV `src/sourceDrafts.ts` | Generation-tagged checkpoints, explicit recovery and uncertain-write safeguards | R2/R3 design and regression reuse. Adapt to browser/account/project/document identity. PDF draft checkpoints do not establish durable collaborative edit intent: STORE-01 must still prove commit/send/confirm, quota/eviction and crash behavior. |
+| Fidelity/failure/performance: PDF plan PDF-PERF-00–02 and archived synthetic fixtures/harnesses | Independent render/text/export readback, unchanged-source checks, stale replies, cancellation/reopen and bounded cache measurements | R0 representative feasibility, then affected R5/R6 gates. Retrieve tests outside Kod at pinned revisions, record provenance/licenses and port applicable cases to the actual browser path. Installed-host results remain historical. |
+| Pending PDF roadmap: MATH, PAR, BR-P1, BR-P2 | Reuse requirements, design investigation and failure cases | These are pending features, not implemented assets. Track a dependency only when CAP-01 identifies a required capability; no silent addition of native formula editing, redaction or anonymisation, and no waiting for unrelated PDF completion. |
+
+**SyncTeX boundary:** no SyncTeX implementation was found in the inspected PDF web/extension/native source paths. Retain the CE+/compiler route and qualify forward/reverse navigation separately against exact project/source-generation/build/PDF identity. Search or coordinate selection does not establish source mapping. Recompilation must reject old render/search/navigation replies and visibly identify stale output without modifying TeX source.
+
+The PDF plan owns its feature progress; this plan owns LaTeX applicability and integration evidence. Do not duplicate its weighted ledger or transfer acceptance. Record exact component commits, host assumptions, notices, distribution/source obligations and dependencies actually introduced before incorporation. Existing browser JS stays in its host language; Rust is for missing backend work under section 2. A licensing conflict blocks the affected source reuse until resolved. Private PDF inputs/evidence must not enter this public repository.
+
+| Step / dependencies | Inputs, actions and expected output | Pass/fail, pace and recovery |
+|---|---|---|
+| PDF-REUSE-01 / WEB-01, CAP-01; before preview implementation | Read this inventory/current PDF plan; retrieve exact shipped/candidate sources outside Kod. Compare CE+ preview with each proposed component's DOM/imports/transport/backend and licenses. Record each required capability here as inherited CE+, adapt existing PDF component, design/test reference, or blocked, with commit/path/phase and runnable probe commands discovered from source. | First checkpoint after 30 minutes: record elapsed time and decisions. Pass when the initial preview route/license path is viable and every proposed port has a demonstrated gap and known host cost. If CE+ suffices, that is successful reuse with no extra PDF service. Failed premise stops that port; retain upstream preview and resolve the gap before dependent work. |
+| PDF-REUSE-02 / PDF-REUSE-01, selected route and authorized disposable runtime | Before broad porting, use a synthetic TeX/PDF project in actual target browsers: render/read/search/navigate, recompile with delayed replies, cancel, close/reopen, deny foreign-project PDF/result access. Qualify forward/reverse SyncTeX through the chosen compiler. Measure first visible page, repeat navigation/search, peak/retained RSS and cache/payload bytes on a declared representative many-page or image/font-heavy fixture. Record exact commands/source/worker/browser identities and measurements here. | Initially unmeasured. Pass with correct source/output identity, unchanged originals, stale-response rejection, project isolation and applicable independent fidelity checks. Compare to CE+ baseline; repair unexplained material regressions or retain the simpler route. Preserve synthetic inputs/failure evidence and revert only task-owned adapter/config changes before rerunning affected cases. Reassess after each 30-minute investigation checkpoint. |
+
+**Work reduction:** after PDF-REUSE-01, replace duplicate implementation tasks with inheritance/integration/regression tasks. Record work avoided, remaining adapter/tests and added service/licensing cost. This can reduce construction effort; browser qualification, authentication, source/PDF mapping, collaborative recovery and job distribution remain required. No percentage or schedule saving is established yet. These probes support the existing R0/R5/R6 gates; no gate IDs or phase states change.
 
 ## 3. Capability baseline and discovery
 
@@ -154,7 +181,7 @@ This is the sole machine-parsed gate registry. Gate IDs and ordered phase identi
 
 ### Phase R0 — Web foundation and feasibility / 0.1
 
-Dependencies: section 3 shared setup and source access. Inputs: pinned upstream code, synthetic local project and supported-browser candidates. Execute WEB-01, CAP-01 and early JOB-01; establish web integration/licensing path, local workflow, auth/read/version prerequisites and actual web packaging/smoke commands. Pass: R0 gates and release check. Failure: stop the affected integration premise, preserve source/candidates and revise approach before broad construction. No application implementation is started by this revision.
+Dependencies: section 3 shared setup and source access. Inputs: pinned upstream code, synthetic local project and supported-browser candidates. Execute WEB-01, CAP-01, PDF-REUSE-01 and early JOB-01; establish web integration/licensing path, local workflow, auth/read/version prerequisites and actual web packaging/smoke commands. Pass: R0 gates and release check. Failure: stop the affected integration premise, preserve source/candidates and revise approach before broad construction. No application implementation is started by this revision.
 
 ### Phase R1 — Protected server project access / 0.2
 
@@ -174,7 +201,7 @@ Dependencies: passed R3 and exact CE+ capability mapping. Reuse the web UI and m
 
 ### Phase R5 — Web editing and project workflows / 0.6
 
-Dependencies: passed R4 and CAP-01 audit. Close assigned web-editor equivalents and project/integration gaps; preserve originals and permission/transfer boundaries. Use synthetic readback and relevant unauthorized/malformed/interrupted-write cases. Pass: R5 inventory coverage gate and release check. Failure: keep missing rows blocked, restore originals/configuration and obtain user decision before any exclusion.
+Dependencies: passed R4 and CAP-01 audit. Close assigned web-editor equivalents and project/integration gaps; apply section 2.1 decisions and PDF-REUSE-02 to selected PDF integrations, then preserve originals and permission/transfer boundaries. Use synthetic readback and relevant unauthorized/malformed/interrupted-write cases. Pass: R5 inventory coverage gate and release check. Failure: keep missing rows blocked, restore originals/configuration and obtain user decision before any exclusion.
 
 ### Phase R6 — Shared server compilation and operations / 0.7
 
@@ -188,7 +215,15 @@ Dependencies: passed R6 and viable JOB-01 routing/identity path. Implement only 
 
 Schema 3, ordered phase IDs and gate IDs remain unchanged. Phase display names and gate criteria reflect this web-UI decision. All phases remain `not_started`, `releaseStage` is `planning` and `releasePhase` is null. Passing phases must cite real concise `docs/validation/phase-RN/report.json` evidence: exact source/time/environment, zero blocking defects, unskipped required gates and hash-verified sanitized logs. Reopen invalidated prerequisites and reset dependents. Current CI/build/publisher are planning-only; no application release follows from phase-name changes.
 
-### Current checkpoint — 9 November 2026, 02:00 CET (Europe/Madrid)
+### Current checkpoint — 10 November 2026, 15:54 CET (Europe/Madrid)
+
+- Objective/usefulness: reduce duplicate LaTeX PDF implementation using existing components and the PDF plan. Scope: this plan and existing parent mirror only; no adjacent-project changes or runtime implementation. Parent mirror/PDF plan already contain unrelated edits; preserve their current contents.
+- Project: `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, starting branch `main`, HEAD `d96641c1ca661a298d8250a8c516cb26d23a7e46`, initially clean. Publication must use a work branch: pushing main triggers a planning release. Existing public destination/visibility verified through repository API.
+- PDF-DOC-01 verified: inspected current sources/plan, recorded reusable owners, revision drift, pending capabilities and SyncTeX boundary. PDF-DOC-02 implemented: section 2.1 reuse inventory, dependencies, performance/integrity probes and failure paths. Runtime PDF-REUSE-01/02 remain pending; all application phases remain unstarted.
+- PDF-DOC-03 pending: mirror synchronization, whitespace/stable gate/status checks and six section 7 npm commands in a committed outside-Kod snapshot containing existing tests. Expected: all pass as documentation/tooling checks only; repair failures without weakening gates.
+- PDF-DOC-04 pending: commit/push only intended plan changes on a work branch, verify remote commit/blob and retained tests/license, then remove completed scratch outputs. Retain the shared unfinished-project plan/mirror. No live server, worker, extension host or lock started. Next command: `git diff --check` in this project, then prepare section 7's isolated snapshot. Source incorporation/licensing and browser integration remain unresolved.
+
+### Historical documentation checkpoint — 9 November 2026, 02:00 CET (Europe/Madrid)
 
 - Objective/usefulness: restore upstream capability coverage, make multi-user job distribution required and replace extension delivery with a web UI. Active scope: this plan/mirror, README, repository instructions, release/evidence docs and phase display names. No runtime implementation, deployment, release, license change, external integration activation or source incorporation.
 - Project `/Users/macc/Desktop/Kod/Projects/overleaf-sync`, branch `main`, starting HEAD `c0fabb733852ecad6f2f1f98db3df0b35b0b7f93`. Pre-existing uncommitted consolidation/PoC findings are retained as historical evidence below; unrelated workspace changes are untouched. Existing destination is public `cenkeryildiz/overleaf-sync`; do not copy private PoC source/data into it or change visibility.
