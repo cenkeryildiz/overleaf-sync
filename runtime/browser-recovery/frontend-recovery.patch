@@ -1,0 +1,60 @@
+--- a/services/web/frontend/js/features/source-editor/extensions/realtime.ts
++++ b/services/web/frontend/js/features/source-editor/extensions/realtime.ts
+@@ -1,5 +1,6 @@
+ import {
+   Prec,
++  EditorState,
+   Transaction,
+   Annotation,
+   ChangeSet,
+@@ -66,13 +67,14 @@
+  * A custom extension that connects the CodeMirror 6 editor to the currently open ShareJS document.
+  */
+ export const realtime = (
+-  { currentDoc }: { currentDoc: DocumentContainer },
++  { currentDoc, recoveryDocName }: { currentDoc: DocumentContainer; recoveryDocName: string },
+   handleError: (error: Error) => void
+ ) => {
+   const realtimePlugin = ViewPlugin.define(view => {
+     const editor = new EditorFacade(view)
+ 
+     currentDoc.attachToCM6(editor)
++    globalThis.overleafRecovery.attach(editor, currentDoc, recoveryDocName)
+ 
+     return {
+       update(update) {
+@@ -104,7 +106,9 @@
+     }
+   })
+ 
+-  return Prec.highest([realtimePlugin, ensureRealtimePlugin])
++  return Prec.highest([realtimePlugin, ensureRealtimePlugin,
++    globalThis.overleafRecovery.extension(EditorState, Transaction, currentDoc, recoveryDocName),
++  ])
+ }
+ 
+ type OTAdapter = {
+--- a/services/web/frontend/js/features/source-editor/extensions/index.ts
++++ b/services/web/frontend/js/features/source-editor/extensions/index.ts
+@@ -143,7 +143,7 @@
+   language(options.docName, options.metadata, options.settings),
+   indentUnit.of('    '), // 4 spaces
+   theme(options.theme),
+-  realtime(options.currentDoc, options.handleError),
++  realtime({ ...options.currentDoc, recoveryDocName: options.docName }, options.handleError),
+   cursorPosition(options.currentDoc),
+   scrollPosition(options.currentDoc, options.showVisual),
+   cursorHighlights(),
+--- /dev/null
++++ b/services/web/frontend/js/features/source-editor/extensions/recovery-global.d.ts
+@@ -0,0 +1,10 @@
++import type { EditorState, Transaction, Extension } from "@codemirror/state"
++import type { EditorFacade } from "./realtime"
++import type { DocumentContainer } from "@/features/ide-react/editor/document-container"
++
++declare global {
++  var overleafRecovery: {
++    attach(facade: EditorFacade, container: DocumentContainer, name: string): void
++    extension(state: typeof EditorState, transaction: typeof Transaction, container: DocumentContainer, name: string): Extension
++  }
++}

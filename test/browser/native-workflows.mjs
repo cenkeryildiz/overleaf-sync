@@ -27,13 +27,15 @@ for (const [path, text] of Object.entries(files)) writeFileSync(join(work, path)
 execFileSync('/usr/bin/zip', ['-q', join(work, name + '.zip'), ...Object.keys(files)], { cwd: work });
 const browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
 let projectUrl;
-const metrics = { overlappingPairs: 0, peerMs: [], steps: [], sentEditFrames: 0 };
+const metrics = { overlappingPairs: 0, peerMs: [], steps: [], sentEditFrames: 0, compileEvents: [] };
 const editor = page => page.getByRole('textbox', { name: /^Source Editor/ });
 const buffer = page => editor(page).evaluate(el => el.cmView.view.state.doc.toString());
 async function account(email, password) {
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, serviceWorkers: 'block' });
   await context.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
   const page = await context.newPage(); page.setDefaultTimeout(15000);
+  page.on('request', r => { if (new URL(r.url()).pathname.endsWith('/compile') && r.method() === 'POST') metrics.compileEvents.push({ event: 'start', at: Math.round(performance.now()) }); });
+  page.on('response', r => { if (new URL(r.url()).pathname.endsWith('/compile') && r.request().method() === 'POST') metrics.compileEvents.push({ event: 'end', at: Math.round(performance.now()) }); });
   await page.goto(base + '/login'); await page.locator('input[name=email]').fill(email); await page.locator('input[name=password]').fill(password);
   await page.getByRole('button', { name: /^Login/ }).click(); await page.waitForURL(base + '/project'); return page;
 }
@@ -71,6 +73,19 @@ try {
   await invite.getByRole('button', { name: 'Join Project', exact: true }).click(); await invite.getByText('Open Project', { exact: true }).click();
   await b.waitForURL(projectUrl); await editor(b).waitFor(); await autoOff(b); await converged(a, b); passed('native import/share/two identities');
 
+  for (const page of [a,b]) await page.evaluate(() => {
+    globalThis.storageTimes = []; globalThis.editStages = [];
+    const clock = () => performance.timeOrigin + performance.now();
+    const nativeSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(data) { if (typeof data === 'string' && data.includes('applyOtUpdate')) editStages.push({stage:'send',at:clock(),data}); return nativeSend.call(this,data); };
+    const input = e => editStages.push({stage:'input',at:clock(),data:e.data});
+    document.querySelector('[aria-label^="Source Editor"]').addEventListener('beforeinput', input, true);
+    const view = document.querySelector('[aria-label^="Source Editor"]').cmView.view;
+    const dispatch = view.dispatch;
+    view.dispatch = (...args) => { const before=view.state.doc; const result=dispatch(...args); if(view.state.doc!==before)editStages.push({stage:'applied',at:clock(),data:view.state.doc.toString()}); return result; };
+    for (const method of ['getItem','setItem']) { const original = Storage.prototype[method]; Storage.prototype[method] = function(...args) { const t=performance.now();try{return original.apply(this,args)}finally{if(String(args[0]).startsWith('overleaf.recovery.'))storageTimes.push({method,ms:performance.now()-t})} }; }
+  });
+  metrics.sourceStart = Math.round(performance.now());
   const channels = await Promise.all([a.context().newCDPSession(a), b.context().newCDPSession(b)]);
   for (const channel of channels) {
     await channel.send('Network.enable');
@@ -93,6 +108,18 @@ try {
     const exact = await converged(a, b);
     assert.equal(exact.split(aa).length - 1, 1); assert.equal(exact.split(bb).length - 1, 1); metrics.overlappingPairs++;
   }
+  metrics.browserStages = await Promise.all([a,b].map(page => page.evaluate(() => editStages)));
+  const stages = metrics.browserStages;
+  metrics.stagePairs = [];
+  for (let i=0;i<32;i++) for (const [from,to,label] of [[0,1,'A'],[1,0,'B']]) {
+    const token=label+i.toString().padStart(3,'0');
+    const input=stages[from].find(e=>e.stage==='input'&&e.data===token);
+    const sent=stages[from].find(e=>e.stage==='send'&&e.data.includes(token));
+    const applied=stages[to].find(e=>e.stage==='applied'&&e.data.includes(token));
+    if(input&&sent&&applied)metrics.stagePairs.push({token,inputToSendMs:sent.at-input.at,sendToPeerApplyMs:applied.at-sent.at,inputToPeerApplyMs:applied.at-input.at});
+  }
+  delete metrics.browserStages;
+  assert.equal(metrics.stagePairs.length,64,'Every atomic token needs an actual input/send/peer-application timestamp');
   passed('32 overlapping insertion pairs, no dropped/duplicate tokens');
 
   // Two sustained independent typing streams, not sequential insert-and-wait operations.
@@ -108,7 +135,7 @@ try {
   await Promise.all([end(a), end(b)]); await Promise.all([a.keyboard.insertText('\n% AliceUndoMarker'), b.keyboard.insertText('\n% BobKeepMarker')]);
   await Promise.all([waitText(a, 'BobKeepMarker'), waitText(b, 'AliceUndoMarker')]);
   const beforeUndo = await converged(a, b);
-  await a.keyboard.press('Meta+z'); await waitText(b, 'AliceUndoMarker', false); assert((await buffer(a)).includes('BobKeepMarker'));
+  await editor(a).focus(); await a.keyboard.press('Meta+z'); await waitText(b, 'AliceUndoMarker', false); assert((await buffer(a)).includes('BobKeepMarker'));
   await a.keyboard.press('Meta+Shift+z'); await waitText(b, 'AliceUndoMarker'); assert.equal(await converged(a, b), beforeUndo); passed('per-user undo/redo preserves peer edit');
 
   // Review actions are performed by the other account, not only rendered locally.
@@ -126,6 +153,7 @@ try {
   await a.getByPlaceholder('Send a message to your collaborators…').fill('WS2 Alice chat hello'); await a.getByPlaceholder('Send a message to your collaborators…').press('Enter'); await b.getByText('WS2 Alice chat hello', { exact: true }).waitFor();
   await b.getByPlaceholder('Send a message to your collaborators…').fill('WS2 Bob chat received'); await b.getByPlaceholder('Send a message to your collaborators…').press('Enter'); await a.getByText('WS2 Bob chat received', { exact: true }).waitFor(); passed('two-way collaborator chat');
 
+  metrics.storageProfiles = await Promise.all([a,b].map(page=>page.evaluate(()=>{const times=storageTimes.map(x=>x.ms).sort((a,b)=>a-b);return {calls:times.length,p95:times[Math.ceil(times.length*.95)-1],max:times.at(-1)}})));
   const exact = await converged(a, b); const results = await Promise.all([compile(a), compile(b)]);
   assert(results.every(r => r.status === 'success' && r.outputFiles.some(f => f.type === 'pdf'))); passed('simultaneous two-user compiles with actual PDFs');
   await a.getByRole('button', { name: 'History', exact: true }).click(); await a.getByText('All history', { exact: true }).waitFor();
