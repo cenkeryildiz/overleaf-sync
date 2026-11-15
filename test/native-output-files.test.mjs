@@ -11,7 +11,8 @@ test('owned preamble state stays private and retained while source-owned paths r
     const source = fs.readFileSync(new URL('../runtime/native-tex/OutputFileFinder.js', import.meta.url), 'utf8');
     const mod = new vm.SourceTextModule(source, { context });
     await mod.link(name => {
-      const values = name === 'node:path' ? { default: path } : name === 'node:fs' ? { default: fs } : { callbackifyMultiResult: fn => fn };
+      // The compiler runs in Linux; preserve its POSIX resource paths on Windows CI.
+      const values = name === 'node:path' ? { default: path.posix } : name === 'node:fs' ? { default: fs } : { callbackifyMultiResult: fn => fn };
       return new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context });
     });
     await mod.evaluate();
