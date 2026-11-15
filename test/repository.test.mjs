@@ -122,6 +122,6 @@ test('release gate table controls assignment without fixed quotas', () => {
   assert.throws(() => parseGateIndex(plan.replace('`R1-MIRROR` | R1 |', '`R1-MIRROR` | R0 |')), /assignment/);
   assert.throws(() => parseGateIndex(plan.replace('| 11 | release |', '| 10 | release |')), /row/);
   assert.throws(() => parseGateIndex(plan.replace('<!-- gate-index:end -->', '')), /index/);
-  assert.throws(() => parseGateIndex(plan.replace('`R0-LOCAL`', '`R0-FEASIBILITY`')), /duplicate/);
+  assert.throws(() => parseGateIndex(plan.replace('| 2 | local | `R0-LOCAL` | R0 |', '| 2 | local | `R0-FEASIBILITY` | R0 |')), /duplicate/);
   assert.throws(() => parseGateIndex('<!-- gate-index:start -->\n<!-- gate-index:end -->'), /empty/);
 });
