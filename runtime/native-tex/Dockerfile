@@ -15,7 +15,8 @@ COPY --from=native-libc /usr/lib/aarch64-linux-gnu/perl /usr/lib/aarch64-linux-g
 COPY --from=native-libc /usr/share/doc/perl/copyright /usr/share/doc/overleaf-native-perl/copyright
 COPY --from=native-libc /usr/share/doc/libcrypt1/copyright /usr/share/doc/overleaf-native-libcrypt/copyright
 RUN echo 'fb6349e1d854c8b832f46f456aeeb9060c6cbc27e4cfea8885766cef87e3db63  /opt/overleaf-native-perl/bin/perl' | sha256sum -c -
-RUN tlmgr install --no-depends pdftex.aarch64-linux && echo 'cee621bf5fc41d15d44c0d00a837af5267a8a0f5170f5406da44fcee44d01459  /usr/local/texlive/2026/bin/aarch64-linux/pdftex' | sha256sum -c -
+RUN tlmgr install --no-depends pdftex.aarch64-linux mylatexformat && echo 'cee621bf5fc41d15d44c0d00a837af5267a8a0f5170f5406da44fcee44d01459  /usr/local/texlive/2026/bin/aarch64-linux/pdftex' | sha256sum -c -
 COPY pdflatex latexmk /opt/overleaf-native-tex/bin/
+COPY OutputFileFinder.js /overleaf/services/clsi/app/js/OutputFileFinder.js
 RUN chmod 755 /opt/overleaf-native-tex/bin/* && /opt/overleaf-native-tex/bin/pdflatex --version && /opt/overleaf-native-tex/bin/latexmk -v
 ENV PATH="/opt/overleaf-native-tex/bin:${PATH}"

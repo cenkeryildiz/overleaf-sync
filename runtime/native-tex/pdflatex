@@ -1,3 +1,93 @@
-#!/bin/sh
-# Keep the native TeX tree and format name while preserving every caller argument.
-exec /usr/local/texlive/2026/bin/aarch64-linux/pdftex -progname=pdflatex "$@"
+#!/opt/overleaf-native-perl/bin/perl
+use strict;
+use warnings;
+use Digest::SHA qw(sha256_hex);
+use File::Temp qw(tempdir);
+use File::Path qw(remove_tree);
+use Fcntl qw(:DEFAULT :flock);
+my @args = @ARGV;
+my $engine = '/usr/local/texlive/2026/bin/aarch64-linux/pdftex';
+sub plain { exec $engine, '-progname=pdflatex', @args; die "Cannot start pdfTeX: $!\n"; }
+my $file = $args[-1] // '';
+plain() unless $file =~ /\.tex\z/ && -f $file && !-l $file && -s $file <= 2_000_000;
+for my $arg (@args[0 .. $#args-1]) {
+  plain() unless $arg =~ /\A(?:-synctex=\d+|-interaction=(?:batchmode|nonstopmode)|-recorder|--?jobname=output|-halt-on-error|-file-line-error)\z/;
+}
+plain() unless grep { /^--?jobname=output$/ } @args;
+plain() if -e 'latexmkrc' || -e '.latexmkrc' || -e "$ENV{HOME}/.latexmkrc";
+open my $source, '<:raw', $file or plain();
+my $text = do { local $/; <$source> }; close $source;
+my ($preamble) = $text =~ /\A(.*?)^\\begin\{document\}[ \t]*(?:%[^\r\n]*)?\r?$/ms;
+plain() unless defined $preamble && length($preamble) < 65_536;
+# Unknown dynamic preambles keep the original engine path and semantics.
+plain() if $preamble =~ /\\(?:input|include|InputIfFileExists|openin|openout|read|write|jobname|today|time|year|month|day|everyjob|directlua|endofdump)\b|%&|\\begin\{(?:filecontents|Verbatim|verbatim)\}/;
+my @pending = ('.');
+while (my $dir = pop @pending) {
+  opendir my $dh, $dir or plain();
+  my @names = readdir $dh; closedir $dh;
+  for my $name (@names) {
+    next if $name eq '.' || $name eq '..' || $name eq '.overleaf-preamble';
+    my $path = "$dir/$name";
+    plain() if -l $path;
+    plain() if $name =~ /\.(?:sty|cls|cfg|def|fd|ltx)\z/i;
+    push @pending, $path if -d $path;
+  }
+}
+my $base = '/usr/local/texlive/2026';
+my $helper = "$base/texmf-dist/tex/latex/mylatexformat/mylatexformat.ltx";
+plain() unless -f $helper;
+my @identity;
+for my $path ($0, $engine, "$base/texmf-var/web2c/pdftex/pdflatex.fmt", "$base/tlpkg/texlive.tlpdb", $helper) {
+  my @stat = stat $path; plain() unless @stat;
+  push @identity, $path, @stat[7,9,10];
+}
+my $key = sha256_hex(join "\0", $file, $preamble, @identity);
+my $cache = '.overleaf-preamble';
+plain() if -l $cache;
+if (!-e $cache) {
+  mkdir $cache, 0700 or plain();
+  sysopen my $owner, "$cache/owner", O_WRONLY|O_CREAT|O_EXCL, 0600 or plain();
+  print $owner "overleaf-native-preamble-v1"; close $owner;
+}
+open my $owner, '<', "$cache/owner" or plain();
+my $owned = do { local $/; <$owner> }; close $owner;
+plain() unless $owned eq 'overleaf-native-preamble-v1';
+plain() unless -d $cache && (stat $cache)[4] == $> && !((stat $cache)[2] & 0077);
+my $fmt = "$cache/preamble.fmt", my $keyfile = "$cache/key";
+plain() if -l $fmt || -l $keyfile;
+my $manifest = '';
+sub format_hash { open my $in, '<:raw', $fmt or return ''; my $sha = Digest::SHA->new(256); $sha->addfile($in); close $in; return $sha->hexdigest; }
+if (open my $in, '<', $keyfile) { local $/; $manifest = <$in>; close $in; }
+plain() if $manifest eq "unsupported:$key";
+my ($stored, $digest) = split /\n/, $manifest, 2;
+if (!defined($stored) || $stored ne $key || !defined($digest) || !-s $fmt || format_hash() ne $digest) {
+  sysopen my $lock, "$cache/lock", O_WRONLY|O_CREAT, 0600 or plain();
+  flock $lock, LOCK_EX|LOCK_NB or plain();
+  my $temporary = eval { tempdir('build-XXXXXX', DIR => $cache) };
+  unless ($temporary) { close $lock; plain(); }
+  my $driver = "$temporary/preamble.tex";
+  open my $driver_out, '>', $driver or do { close $lock; remove_tree($temporary); plain(); };
+  # Font preloading changes a math accent in this document; let the body load fonts normally.
+  print $driver_out "\\makeatletter\\let\\MYLATEX\@fontpreloading\\relax\\makeatother\n", $preamble, "\n\\begin{document}\n";
+  close $driver_out;
+  my $pid = fork();
+  if (!defined $pid) { close $lock; remove_tree($temporary); plain(); }
+  if (!$pid) {
+    open STDOUT, '>', '/dev/null'; open STDERR, '>', '/dev/null';
+    exec $engine, '-ini', '-progname=pdflatex', '-jobname=output', "-output-directory=$temporary", '-interaction=batchmode', '-halt-on-error', '&pdflatex', 'mylatexformat.ltx', $driver;
+    exit 1;
+  }
+  waitpid $pid, 0;
+  my $ok = $? == 0 && -s "$temporary/output.fmt";
+  if ($ok) {
+    $ok = rename "$temporary/output.fmt", $fmt;
+    if ($ok && open my $out, '>', "$temporary/key") { print $out $key, "\n", format_hash(); close $out; $ok = rename "$temporary/key", $keyfile; } else { $ok = 0; }
+  }
+  if (!$ok && open my $off, '>', "$temporary/off") { print $off "unsupported:$key"; close $off; rename "$temporary/off", $keyfile; }
+  close $lock; remove_tree($temporary);
+  plain() unless $ok;
+}
+my $result = system $engine, '-progname=pdflatex', "-fmt=$fmt", @args;
+exit 0 if $result == 0;
+# A rejected dump or source error must still get a normal, fully reported compile.
+plain();

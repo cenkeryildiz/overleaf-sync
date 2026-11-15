@@ -1,0 +1,142 @@
+diff --git a/src/frontend/main.c b/src/frontend/main.c
+index c202294..163dd57 100644
+--- a/src/frontend/main.c
++++ b/src/frontend/main.c
+@@ -917,9 +917,51 @@ static uint32_t convert_color(fz_context *ctx, vstack *stack, float frgb[3])
+   return (rgb[0] << 16) | (rgb[1] << 8) | (rgb[2]);
+ }
+ 
++/* Optional browser transport reuses the authoritative MuPDF display list. */
++static void export_frame(struct persistent_state *ps, ui_state *ui, fz_display_list *dl)
++{
++  const char *dir = getenv("TEXPRESSO_FRAME_DIR");
++  static unsigned long serial = 0;
++  if (!dir || !*dir) return;
++  char png[4096], json[4096];
++  unsigned long id = ++serial;
++  if (snprintf(png, sizeof(png), "%s/%lu.png", dir, id) >= sizeof(png) ||
++      snprintf(json, sizeof(json), "%s/%lu.json", dir, id) >= sizeof(json)) return;
++  fz_pixmap *pix = NULL;
++  fz_stext_page *text = NULL;
++  fz_output *out = NULL;
++  fz_var(pix); fz_var(text); fz_var(out);
++  fz_try(ps->ctx)
++  {
++    pix = fz_new_pixmap_from_display_list(ps->ctx, dl, fz_identity,
++                                        fz_device_rgb(ps->ctx), 0);
++    fz_save_pixmap_as_png(ps->ctx, pix, png);
++    text = fz_new_stext_page_from_display_list(ps->ctx, dl, NULL);
++    out = fz_new_output_with_path(ps->ctx, json, 0);
++    fz_print_stext_page_as_json(ps->ctx, out, text, 1);
++    fz_close_output(ps->ctx, out);
++    printf("[\"frame\",%lu,%d,%d,%d,%d]\n", id, ui->page,
++           fz_pixmap_width(ps->ctx, pix), fz_pixmap_height(ps->ctx, pix),
++           send(page_count, ui->eng));
++    fflush(stdout);
++  }
++  fz_always(ps->ctx)
++  {
++    fz_drop_output(ps->ctx, out);
++    fz_drop_stext_page(ps->ctx, text);
++    fz_drop_pixmap(ps->ctx, pix);
++  }
++  fz_catch(ps->ctx)
++  {
++    unlink(png); unlink(json);
++    fprintf(stderr, "[frame] export failed: %s\n", fz_caught_message(ps->ctx));
++  }
++}
++
+ static void display_page(struct persistent_state *ps, ui_state *ui)
+ {
+   fz_display_list *dl = send(render_page, ui->eng, ps->ctx, ui->page);
++  export_frame(ps, ui, dl);
+   txp_renderer_set_contents(ps->ctx, ui->doc_renderer, dl);
+   fz_drop_display_list(ps->ctx, dl);
+   schedule_event(RENDER_EVENT);
+@@ -1309,7 +1351,8 @@ bool texpresso_main(struct persistent_state *ps)
+         break;
+       }
+ 
+-      fprintf(stderr, "stdin: %.*s\n", n, buffer);
++      if (!getenv("TEXPRESSO_FRAME_DIR"))
++        fprintf(stderr, "stdin: %.*s\n", n, buffer);
+ 
+       const char *ptr = buffer, *lim = buffer + n;
+       fz_try(ps->ctx)
+@@ -1368,36 +1411,6 @@ bool texpresso_main(struct persistent_state *ps)
+         continue;
+       }
+ 
+-      if (!has_event)
+-      {
+-        if (advance)
+-          continue;
+-        if (!stdin_eof)
+-          wakeup_poll_thread(poll_stdin_pipe, 'c');
+-
+-        bool rerun_eligible = ps->rerun_enabled
+-                              && rerun_count < MAX_RERUNS
+-                              && aux_ready;
+-        if (rerun_eligible)
+-          has_event = SDL_WaitEventTimeout(&e, T_IDLE_MS);
+-        else
+-          has_event = SDL_WaitEvent(&e);
+-        if (!has_event)
+-        {
+-          if (rerun_eligible)
+-          {
+-            rerun_count++;
+-            fprintf(stderr, "[rerun] idle %dms: finishing pass %d/%d\n",
+-                    T_IDLE_MS, rerun_count, MAX_RERUNS);
+-            send(start_finishing, ui->eng);
+-            schedule_event(RELOAD_EVENT);
+-            continue;
+-          }
+-          fprintf(stderr, "SDL_WaitEvent error: %s\n", SDL_GetError());
+-          break;
+-        }
+-      }
+-
+       fz_buffer *buf;
+       synctex_t *stx = send(synctex, ui->eng, &buf);
+       int page = -1, x = -1, y = -1;
+@@ -1438,6 +1451,38 @@ bool texpresso_main(struct persistent_state *ps)
+         if (delta != 0.0)
+           schedule_event(RENDER_EVENT);
+       }
++
++      if (!has_event)
++      {
++        if (advance)
++          continue;
++        if (!stdin_eof)
++          wakeup_poll_thread(poll_stdin_pipe, 'c');
++
++        bool rerun_eligible = ps->rerun_enabled
++                              && rerun_count < MAX_RERUNS
++                              && aux_ready;
++        if (rerun_eligible)
++          has_event = SDL_WaitEventTimeout(&e, T_IDLE_MS);
++        else
++          has_event = SDL_WaitEvent(&e);
++        if (!has_event)
++        {
++          if (rerun_eligible)
++          {
++            rerun_count++;
++            fprintf(stderr, "[rerun] idle %dms: finishing pass %d/%d\n",
++                    T_IDLE_MS, rerun_count, MAX_RERUNS);
++            send(start_finishing, ui->eng);
++            schedule_event(RELOAD_EVENT);
++            continue;
++          }
++          fprintf(stderr, "SDL_WaitEvent error: %s\n", SDL_GetError());
++          break;
++        }
++      }
++
++
+     }
+ 
+     txp_renderer_set_scale_factor(ps->ctx, ui->doc_renderer,
