@@ -6,8 +6,8 @@
  // All times below are in milliseconds
 -const SINGLE_USER_FLUSH_DELAY = 2000
 -const MULTI_USER_FLUSH_DELAY = 500
-+const SINGLE_USER_FLUSH_DELAY = 16
-+const MULTI_USER_FLUSH_DELAY = 16
++const SINGLE_USER_FLUSH_DELAY = 0
++const MULTI_USER_FLUSH_DELAY = 0
  const INFLIGHT_OP_TIMEOUT = 5000 // Retry sending ops after 5 seconds without an ack
  const WAIT_FOR_CONNECTION_TIMEOUT = 500
  const FATAL_OP_TIMEOUT = intermittentConnectionImprovementsEnabled

@@ -1,10 +1,10 @@
 # Faster local editing and PDF refresh
 
-The modified CE+ backend source, frontend source patch and timing overlay here retain **AGPL-3.0-only** licensing; see `LICENSE`. Original authors are Overleaf and the CE+ contributors. Modifications: Cenker YILDIZ, 15 November 2026. This directory is an explicit exception to the root proprietary notice. Upstream source is `yu-i-i/overleaf-cep@ae07e781ab20dac2378420e5cf7a47f7d8bccbb5`, matching the pinned 6.3.0-ext-v5.1 image. No editor, OT algorithm, compiler, renderer or service is replaced.
+The modified CE+ backend source, frontend source patch and timing overlay here retain **AGPL-3.0-only** licensing; see `LICENSE`. Original authors are Overleaf and the CE+ contributors. Modifications: Cenker YILDIZ, 15 November 2026. This directory is an explicit exception to the root proprietary notice. Upstream source is `yu-i-i/overleaf-cep@ae07e781ab20dac2378420e5cf7a47f7d8bccbb5`, matching the pinned 6.3.0-ext-v5.1 image. FAST-02 removes only the extra send timer; native setTimeout(flush, 0) still coalesces operations in the same event-loop turn and does not flush reentrantly. The 16 ms intermediate profile is retained in the historical measurements below. No editor, OT algorithm, compiler, renderer or service is replaced.
 
 | Setting | Previous local profile | Candidate |
 |---|---:|---:|
-| Single/collaborating operation flush | 100 ms | 16 ms |
+| Single/collaborating operation flush | 100 ms | 0 ms (next event-loop task) |
 | Preview debounce / maximum wait | 300 / 1,200 ms | 50 / 500 ms |
 | Per-user/project compile admission | 1 second | 100 ms, atomic Redis PX/NX |
 | Global / standard auto-compiles per 20 seconds | 100 / 25 | 150 / 100 |
@@ -33,3 +33,5 @@ Focused tests are `test/fast-preview.test.mjs`. The opt-in `test/live-preview.br
 Measured on the same Apple M4 Mac (16 GiB host RAM; local Colima/Rosetta setup) with two independent Chrome 157 sessions and identical supported-text workloads: source p95 143 → 50 ms (18 samples/profile); plain PDF median 999.5 → 818.5 ms and p95 1,086 → 1,069 ms (6 samples/profile); math PDF p95 1,111 → 958 ms (2 samples/profile). Source convergence/reload passed and the candidate preserved an explicit Off choice across reload. The candidate narrowly missed the initial ≤1,000 ms plain-PDF p95 goal; tail improvement was only about 2%, so this is not instantaneous PDF delivery. Compilation request p95 remained 901/923 ms across the before/candidate runs, indicating remaining server work rather than only frontend timers. Small loopback samples, warmed compiles and sampled container memory are not a production or remote-network guarantee. End-of-run app-memory samples were about 2 GiB, not measured peaks.
 
 For an existing browser project, hard-reload and choose the arrow beside Recompile → Auto compile → On if its saved choice is Off. New unset preferences default On.
+
+FAST-02 same-machine comparison: overlapping-pair arrival p95 44 → 27 ms (32 pairs/profile), sustained 204-character streams 1,329/1,314 ms, and native outgoing edit frames 168 → 215 (+28%) for the complete identical workload. This is a latency/traffic tradeoff, not proven throughput/memory improvement. Input→send/peer receipt samples were 21.0/36.7 ms before and 10.5/27.1 ms after. Both profiles passed convergence, per-user undo/redo, cross-user review/chat, simultaneous PDFs, history/reload and exact synthetic job-group loss/failure/retry. Peak memory, large-project throughput and internet latency remain unmeasured.

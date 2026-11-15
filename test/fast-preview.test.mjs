@@ -10,7 +10,7 @@ import { patchBundle } from '../runtime/fast-preview/apply.mjs';
 const fixture = 'a.setFlushDelay(2e3);b.setFlushDelay(500);debounce(()=>{x()},2500,{maxWait:5e3});const watchdog=4e3,retry=5e3;prefs(`autocompile_enabled:${b}`,!1,{listen:!0});';
 test('frontend patch changes only send/preview timings', () => {
   const actual = patchBundle(fixture);
-  assert.equal(actual, 'a.setFlushDelay(16);b.setFlushDelay(16);debounce(()=>{x()},50,{maxWait:500});const watchdog=4e3,retry=5e3;prefs(`autocompile_enabled:${b}`,!0,{listen:!0});');
+  assert.equal(actual, 'a.setFlushDelay(0);b.setFlushDelay(0);debounce(()=>{x()},50,{maxWait:500});const watchdog=4e3,retry=5e3;prefs(`autocompile_enabled:${b}`,!0,{listen:!0});');
   assert.equal(fixture.includes('setFlushDelay(2e3)'), true);
 });
 test('unknown, duplicate or already-patched frontend is refused', () => {

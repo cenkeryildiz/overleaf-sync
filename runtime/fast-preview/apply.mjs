@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 export function patchBundle(source) {
   for (const [from, to] of [
-    ['.setFlushDelay(2e3)', '.setFlushDelay(16)'],
-    ['.setFlushDelay(500)', '.setFlushDelay(16)'],
+    ['.setFlushDelay(2e3)', '.setFlushDelay(0)'],
+    ['.setFlushDelay(500)', '.setFlushDelay(0)'],
     ['},2500,{maxWait:5e3})', '},50,{maxWait:500})'],
     ['`autocompile_enabled:${b}`,!1,{listen:!0}', '`autocompile_enabled:${b}`,!0,{listen:!0}'],
   ]) {
