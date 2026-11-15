@@ -179,7 +179,7 @@ for (let attempt = 0; attempt < 160; attempt++) {
     try {
       const cwd = fs.readlinkSync('/proc/' + n + '/cwd');
       const args = fs.readFileSync('/proc/' + n + '/cmdline', 'utf8').split('\\0');
-      if (cwd.startsWith(prefix) && args.some(a => Path.basename(a) === 'latexmk')) {
+      if (cwd.startsWith(prefix) && args.some(a => (Path.basename(a) === 'latexmk' || a === '/usr/local/texlive/2026/texmf-dist/scripts/latexmk/latexmk.pl'))) {
         const stat = fs.readFileSync('/proc/' + n + '/stat', 'utf8');
         jobs.push({ pid: Number(n), pgrp: Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2]), cwd });
       }

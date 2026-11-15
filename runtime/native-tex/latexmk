@@ -1,0 +1,11 @@
+#!/bin/sh
+# Custom Perl configuration keeps the original interpreter and module environment.
+if [ -f latexmkrc ] || [ -f .latexmkrc ] || [ -f "$HOME/.latexmkrc" ]; then
+  exec /usr/local/texlive/2026/bin/x86_64-linux/latexmk "$@"
+fi
+for argument in "$@"; do
+  case "$argument" in
+    -r*) exec /usr/local/texlive/2026/bin/x86_64-linux/latexmk "$@" ;;
+  esac
+done
+exec /opt/overleaf-native-perl/bin/perl /usr/local/texlive/2026/texmf-dist/scripts/latexmk/latexmk.pl "$@"

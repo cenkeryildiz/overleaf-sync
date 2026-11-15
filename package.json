@@ -14,7 +14,7 @@
   },
   "scripts": {
     "typecheck": "node scripts/check-syntax.mjs",
-    "test": "node --experimental-vm-modules --test test/repository.test.mjs test/oidc.test.mjs test/fast-preview.test.mjs test/recovery.test.mjs",
+    "test": "node --experimental-vm-modules --test test/repository.test.mjs test/oidc.test.mjs test/fast-preview.test.mjs test/recovery.test.mjs test/synctex-selection.test.mjs",
     "validate": "node scripts/validate.mjs",
     "build": "node scripts/build-plan.mjs",
     "test:package": "node scripts/check-package.mjs"

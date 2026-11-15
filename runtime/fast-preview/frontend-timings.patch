@@ -33,11 +33,19 @@
 -// and then again on ack.
 -const AUTO_COMPILE_DEBOUNCE = 2500
 +const AUTO_COMPILE_MAX_WAIT = 500
-+// awaitBufferedOps still waits for confirmed outgoing operations before compiling.
++// Retain the acknowledged-operation barrier; start the first update immediately.
 +const AUTO_COMPILE_DEBOUNCE = 50
  
  // If there is a pending op, wait for it to be saved before compiling
  const PENDING_OP_MAX_WAIT = 10000
+@@ -97,6 +94,7 @@
+       },
+       AUTO_COMPILE_DEBOUNCE,
+       {
++        leading: true,
+         maxWait: AUTO_COMPILE_MAX_WAIT,
+       }
+     )
 --- a/services/web/frontend/js/shared/context/local-compile-context.tsx
 +++ b/services/web/frontend/js/shared/context/local-compile-context.tsx
 @@ -266,7 +266,7 @@
@@ -49,3 +57,23 @@
      { listen: true }
    )
  
+--- a/services/web/frontend/js/features/ide-react/editor/document-container.ts
++++ b/services/web/frontend/js/features/ide-react/editor/document-container.ts
+@@ -855,7 +855,7 @@
+               doc_id: this.doc_id,
+             })
+           }
+-        }, 50)
++        }, 0)
+       }
+     )
+ 
+@@ -879,7 +879,7 @@
+           new CustomEvent('doc:saved', { detail: { id: this.doc_id } })
+         )
+         this.ideEventEmitter.emit('doc:saved', { doc_id: this.doc_id })
+-      }, 50)
++      }, 0)
+     })
+ 
+     this.rotateTrackChangesIdSeeds()

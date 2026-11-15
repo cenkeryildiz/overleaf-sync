@@ -7,10 +7,10 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { patchBundle } from '../runtime/fast-preview/apply.mjs';
-const fixture = 'a.setFlushDelay(2e3);b.setFlushDelay(500);debounce(()=>{x()},2500,{maxWait:5e3});const watchdog=4e3,retry=5e3;prefs(`autocompile_enabled:${b}`,!1,{listen:!0});';
+const fixture = 'a.setFlushDelay(2e3);b.setFlushDelay(500);debounce(()=>{x()},2500,{maxWait:5e3});const watchdog=4e3,retry=5e3;this.ideEventEmitter.emit("doc:changed",{doc_id:this.doc_id}))},50);this.ideEventEmitter.emit("doc:saved",{doc_id:this.doc_id})},50);prefs(`autocompile_enabled:${b}`,!1,{listen:!0});';
 test('frontend patch changes only send/preview timings', () => {
   const actual = patchBundle(fixture);
-  assert.equal(actual, 'a.setFlushDelay(0);b.setFlushDelay(0);debounce(()=>{x()},50,{maxWait:500});const watchdog=4e3,retry=5e3;prefs(`autocompile_enabled:${b}`,!0,{listen:!0});');
+  assert.equal(actual, 'a.setFlushDelay(0);b.setFlushDelay(0);debounce(()=>{x()},50,{leading:!0,maxWait:500});const watchdog=4e3,retry=5e3;this.ideEventEmitter.emit("doc:changed",{doc_id:this.doc_id}))},0);this.ideEventEmitter.emit("doc:saved",{doc_id:this.doc_id})},0);prefs(`autocompile_enabled:${b}`,!0,{listen:!0});');
   assert.equal(fixture.includes('setFlushDelay(2e3)'), true);
 });
 test('unknown, duplicate or already-patched frontend is refused', () => {

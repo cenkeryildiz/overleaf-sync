@@ -10,7 +10,9 @@ export function patchBundle(source) {
   for (const [from, to] of [
     ['.setFlushDelay(2e3)', '.setFlushDelay(0)'],
     ['.setFlushDelay(500)', '.setFlushDelay(0)'],
-    ['},2500,{maxWait:5e3})', '},50,{maxWait:500})'],
+    ['this.ideEventEmitter.emit("doc:changed",{doc_id:this.doc_id}))},50)', 'this.ideEventEmitter.emit("doc:changed",{doc_id:this.doc_id}))},0)'],
+    ['this.ideEventEmitter.emit("doc:saved",{doc_id:this.doc_id})},50)', 'this.ideEventEmitter.emit("doc:saved",{doc_id:this.doc_id})},0)'],
+    ['},2500,{maxWait:5e3})', '},50,{leading:!0,maxWait:500})'],
     ['`autocompile_enabled:${b}`,!1,{listen:!0}', '`autocompile_enabled:${b}`,!0,{listen:!0}'],
   ]) {
     assert.equal(source.split(from).length - 1, 1, 'Unexpected or already-patched frontend');

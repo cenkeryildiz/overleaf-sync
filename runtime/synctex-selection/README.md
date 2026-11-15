@@ -1,0 +1,13 @@
+# More precise PDF-to-source selection in mathematical blocks
+
+The native SyncTeX mapping can return the final `align` source line for every displayed row. This overlay reuses CE+'s existing math syntax tree to locate a unique literal selected in the PDF inside the mapped mathematical content. It supports literal text, numbers and simple mathematical characters, including contiguous native tokens. Macro names and comments are excluded. Repeated terms, unsupported expansions, missing/incomplete parse trees and excessive input retain the original coarse result. This does not guarantee exact navigation for arbitrary mathematics or a PDF that is stale relative to edited source.
+
+PDF.js may leave the browser selection empty when a mathematical glyph is double-clicked. The viewer overlay then uses the clicked text span. Explicit editor columns retain their original handling. No source is modified, no renderer/parser/dependency is added and original PDF build/editor IDs remain in the request.
+
+Source, patches and modifications retain AGPL-3.0-only; see LICENSE. Original source is `yu-i-i/overleaf-cep@ae07e781ab20dac2378420e5cf7a47f7d8bccbb5`, CE+ 6.3.0-ext-v5.1. Modifications: Cenker YILDIZ, 15 November 2026. `frontend.patch` is the preferred typed integration; it applies to the pinned source. A complete upstream frontend rebuild is not yet qualified.
+
+`apply.mjs INPUT OUTPUT` generates either the native editor asset or PDF.js-viewer asset based on the output basename, refusing unknown/modified input hashes. Editor input is the recovery-enabled bundle (SHA-256 `17c9773745b094e321c81ef58db8aa1f5786d467de662b65cf619bc317ae00f5`); viewer input is pinned original SHA-256 `c6ae790224495d1244e34f260239199fa7b4f92f532c442a15610989ce5e5690`. Use distinct input/output paths. Preserve the previous recovery editor as rollback input.
+
+Replace the existing recovery-editor overlay with the generated editor and add one read-only file mount for `pdf-js-viewer-108321e8423f4015bf44.js` at `/overleaf/services/web/public/js/pdf-js-viewer-108321e8423f4015bf44.js`. Recreate the existing service once and hard-reload editor tabs. Rollback restores the prior recovery editor and removes only the PDF-viewer mount, retaining all data/auth/timing/recovery mounts.
+
+Focused tests cover unique/ambiguous tokens, excluded commands/comments, bounded input and guarded hooks. The actual-browser `test/browser/synctex-align.browser.mjs` reproduces three native row failures and checks correct word/fraction-glyph selection plus the repeated-symbol fallback. The project plan records installed qualification separately; routed browser checks alone do not prove installation.

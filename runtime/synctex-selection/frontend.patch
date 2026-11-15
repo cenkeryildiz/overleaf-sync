@@ -1,0 +1,46 @@
+--- a/services/web/frontend/js/features/source-editor/extensions/cursor-position.ts
++++ b/services/web/frontend/js/features/source-editor/extensions/cursor-position.ts
+@@ -8,6 +8,7 @@
+ import { findValidPosition } from '../utils/position'
+ import customLocalStorage from '../../../infrastructure/local-storage'
+ import { debugConsole } from '@/utils/debugging'
++import { mathAncestorNode } from '../utils/tree-operations/math'
+ 
+ const buildStorageKey = (docId: string) => `doc.position.${docId}`
+ 
+@@ -157,6 +158,11 @@
+ 
+   const from = findValidPosition(doc, lineNumber, columnNumber)
+ 
++  if (selectText && columnNumber === undefined) {
++    const refined = globalThis.overleafSynctexSelection.refine(view, from, selectText, mathAncestorNode)
++    if (refined) { dispatchSelectionAndScroll(view, refined.from, refined.to); return }
++  }
++
+   if (selectText) {
+     if (columnNumber === undefined) {
+       // somewhere on this line
+--- a/services/web/frontend/js/features/pdf-preview/components/pdf-js-viewer.tsx
++++ b/services/web/frontend/js/features/pdf-preview/components/pdf-js-viewer.tsx
+@@ -269,7 +269,9 @@
+                 new CustomEvent('synctex:sync-to-position', {
+                   detail: {
+                     position: clickPosition,
+-                    selectText: window.getSelection()?.toString(),
++                    selectText: window.getSelection()?.toString() || (event.target instanceof Element
++                      ? event.target.closest('.textLayer span')?.textContent?.trim()
++                      : undefined),
+                   },
+                 })
+               )
+--- /dev/null
++++ b/services/web/frontend/js/features/source-editor/extensions/synctex-selection.d.ts
+@@ -0,0 +1,8 @@
++import type { EditorView } from '@codemirror/view'
++import type { mathAncestorNode } from '../utils/tree-operations/math'
++
++declare global {
++  var overleafSynctexSelection: {
++    refine(view: EditorView, position: number, selected: string, ancestor: typeof mathAncestorNode): { from: number; to: number } | null
++  }
++}

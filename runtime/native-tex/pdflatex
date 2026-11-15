@@ -1,0 +1,3 @@
+#!/bin/sh
+# Keep the native TeX tree and format name while preserving every caller argument.
+exec /usr/local/texlive/2026/bin/aarch64-linux/pdftex -progname=pdflatex "$@"
