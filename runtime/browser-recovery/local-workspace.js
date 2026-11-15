@@ -6,6 +6,8 @@
   const buttons = [...document.querySelectorAll('button')];
   let selected, draft, view, State, View, commands, keymap;
   const choice = document.querySelector('#copies');
+  const comparison = document.querySelector('#comparison'), changes = document.querySelector('#changes'), summary = document.querySelector('#comparison-summary');
+  function clearComparison() { comparison.hidden = true; changes.replaceChildren(); }
   function refresh() {
     const old = selected;
     const records = api.list(draft.account, draft.project);
@@ -19,6 +21,7 @@
     const record = api.read(name);
     if (draft && (record.account !== draft.account || record.project !== draft.project)) throw Error('Copy belongs to a different account or project');
     selected = name; draft = api.fork(record);
+    clearComparison();
     document.querySelector('#filename').textContent = record.name;
     view?.destroy();
     view = new View({ parent: document.querySelector('#editor'), state: State.create({ doc: record.candidate, extensions: [
@@ -34,7 +37,7 @@
           const next = { ...draft, candidate: tr.newDoc.toString(), revision: draft.revision + 1, updatedAt: Date.now() };
           const saved = api.save(next); draft = next; selected = saved;
           // Preserve the pre-edit copy; other tabs have distinct writer identities.
-          queueMicrotask(() => { location.replace('#' + encodeURIComponent(saved)); refresh(); }); report('Saved in this browser. Not sent to the server.'); return tr;
+          queueMicrotask(() => { location.replace('#' + encodeURIComponent(saved)); refresh(); clearComparison(); }); report('Saved in this browser. Not sent to the server.'); return tr;
         } catch { report('Edit paused: browser storage failed. Export your work or free browser storage.', true); return []; }
       }),
     ] }) });
@@ -58,10 +61,33 @@
     document.querySelector('#redo').onclick = () => { commands.ZS(view); view.focus(); };
     document.querySelector('#export').onclick = () => download(view.state.doc.toString(), 'text/plain;charset=utf-8', '');
     document.querySelector('#export-record').onclick = () => download(JSON.stringify(draft, null, 2), 'application/json', '.recovery.json');
+    document.querySelector('#compare').onclick = () => {
+      clearComparison(); comparison.hidden = false;
+      const original = draft.base.text, current = view.state.doc.toString();
+      summary.textContent = 'Comparison unavailable. Your copies are kept; export text to compare externally.';
+      // Bound optional review work; editing, storage and export remain available.
+      if (original.length + current.length > 500000) return;
+      try {
+        const parts = globalThis.Diff?.diffLines(original, current, { timeout: 75, maxEditLength: 2000 });
+        if (!parts) return;
+        let added = 0, removed = 0;
+        const output = document.createDocumentFragment();
+        for (const part of parts) {
+          const span = document.createElement('span');
+          span.dataset.change = part.added ? 'added' : part.removed ? 'removed' : 'unchanged';
+          span.textContent = part.value.replace(/^(?=[\s\S])/gm, part.added ? '+ ' : part.removed ? '- ' : '  ');
+          if (part.added) added += part.count;
+          if (part.removed) removed += part.count;
+          output.append(span);
+        }
+        summary.textContent = added || removed ? `${added} added, ${removed} removed line(s). + added; - removed. This compares with the saved version when this copy began, not the current server.` : 'No changes from the saved version when this copy began.';
+        changes.replaceChildren(output);
+      } catch { /* A failed comparison must not affect retained source. */ }
+    };
     document.querySelector('#delete').onclick = () => {
       if (!confirm('Delete this selected recovery copy from this browser? Export it first if you need to keep it.')) return;
       localStorage.removeItem(selected); const next = api.list(draft.account, draft.project)[0];
-      if (next) open(next.key); else { view.destroy(); choice.replaceChildren(); buttons.forEach(b => b.disabled = b.id !== 'connect'); report('No local copies remain for this project.'); }
+      if (next) open(next.key); else { view.destroy(); clearComparison(); choice.replaceChildren(); buttons.forEach(b => b.disabled = b.id !== 'connect'); report('No local copies remain for this project.'); }
     };
     document.querySelector('#connect').onclick = () => { location.assign('/project/' + draft.project); };
   } catch (error) { buttons.forEach(button => button.disabled = true); report(error.message + '. Existing browser copies were kept.', true); }

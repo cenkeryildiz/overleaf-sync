@@ -29,7 +29,7 @@ if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))
   const source=readFileSync(input,'utf8');
   assert.equal(createHash('sha256').update(source).digest('hex'),pdf
     ? 'c6ae790224495d1244e34f260239199fa7b4f92f532c442a15610989ce5e5690'
-    : '17c9773745b094e321c81ef58db8aa1f5786d467de662b65cf619bc317ae00f5','Pinned source hash mismatch');
+    : '635ba25a54cbe7f2f2a62d945ac62b09672221a184bf3b638971d77cb7bfe80e','Pinned source hash mismatch');
   const result=pdf?patchPdfViewer(source):patchSynctex(source,readFileSync(new URL('./refine.js',import.meta.url),'utf8'));
   const temp=output+'.tmp-'+process.pid;
   writeFileSync(temp,result,{flag:'wx'});renameSync(temp,output);

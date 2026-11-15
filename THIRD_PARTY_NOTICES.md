@@ -15,3 +15,5 @@ Before adding dependencies or vendored code, record the exact revision, license,
 - Include required notices for compiler binaries, fonts and packages in the artifacts containing them.
 
 The TeX package image recipe in `runtime/texlive-course/` derives from the pinned CE+ image and uses individually licensed TeX Live packages; revisions/licenses are recorded there. No private document, source ZIP or PDF is included in the recipe, source archive or tests. The image itself is not published.
+
+The local recovery comparison includes the unchanged jsdiff 5.2.2 browser bundle (BSD-3-Clause); see runtime/browser-recovery/DIFF-LICENSE.txt and docs/dependencies.md for attribution and exact provenance.
