@@ -1,0 +1,51 @@
+--- a/services/web/frontend/js/features/ide-react/editor/share-js-doc.ts
++++ b/services/web/frontend/js/features/ide-react/editor/share-js-doc.ts
+@@ -51,8 +51,8 @@
+ }
+ 
+ // All times below are in milliseconds
+-const SINGLE_USER_FLUSH_DELAY = 2000
+-const MULTI_USER_FLUSH_DELAY = 500
++const SINGLE_USER_FLUSH_DELAY = 16
++const MULTI_USER_FLUSH_DELAY = 16
+ const INFLIGHT_OP_TIMEOUT = 5000 // Retry sending ops after 5 seconds without an ack
+ const WAIT_FOR_CONNECTION_TIMEOUT = 500
+ const FATAL_OP_TIMEOUT = intermittentConnectionImprovementsEnabled
+@@ -60,7 +60,7 @@
+     600_000
+   : // 45 seconds
+     45_000
+-const RECENT_ACK_LIMIT = 2 * SINGLE_USER_FLUSH_DELAY
++const RECENT_ACK_LIMIT = 4000
+ 
+ type Update = Record<string, any>
+ export type OTType = 'sharejs-text-ot' | 'history-ot'
+--- a/services/web/frontend/js/features/pdf-preview/util/compiler.ts
++++ b/services/web/frontend/js/features/pdf-preview/util/compiler.ts
+@@ -11,12 +11,9 @@
+ import { DeliveryLatencies } from './types'
+ import { RootDocInfo } from '@/shared/hooks/use-root-doc'
+ 
+-const AUTO_COMPILE_MAX_WAIT = 5000
+-// We add a 2 second debounce to sending user changes to server if they aren't
+-// collaborating with anyone. This needs to be higher than SINGLE_USER_FLUSH_DELAY, and allow for
+-// client to server latency, otherwise we compile before the op reaches the server
+-// and then again on ack.
+-const AUTO_COMPILE_DEBOUNCE = 2500
++const AUTO_COMPILE_MAX_WAIT = 500
++// awaitBufferedOps still waits for confirmed outgoing operations before compiling.
++const AUTO_COMPILE_DEBOUNCE = 50
+ 
+ // If there is a pending op, wait for it to be saved before compiling
+ const PENDING_OP_MAX_WAIT = 10000
+--- a/services/web/frontend/js/shared/context/local-compile-context.tsx
++++ b/services/web/frontend/js/shared/context/local-compile-context.tsx
+@@ -266,7 +266,7 @@
+   // whether autocompile is switched on
+   const [autoCompile, setAutoCompile] = usePersistedState(
+     `autocompile_enabled:${projectId}`,
+-    false,
++    true,
+     { listen: true }
+   )
+ 
