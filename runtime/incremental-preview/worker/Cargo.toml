@@ -1,0 +1,15 @@
+[package]
+name = "overleaf-live-preview"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+serde_json = "1"
+base64 = "0.22"
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,323 @@
+diff --git a/src/dvi/dvi_resmanager.c b/src/dvi/dvi_resmanager.c
+index f702dfa..ddcea00 100644
+--- a/src/dvi/dvi_resmanager.c
++++ b/src/dvi/dvi_resmanager.c
+@@ -33,6 +33,8 @@
+ #include <sys/file.h>
+ #include <unistd.h>
+ 
++int dvi_missing_font = 0;
++
+ typedef struct cell_dvi_font cell_dvi_font;
+ typedef struct cell_tex_enc cell_tex_enc;
+ typedef struct cell_pdf_doc cell_pdf_doc;
+@@ -461,6 +463,7 @@ void dvi_resmanager_free(fz_context *ctx, dvi_resmanager *rm)
+       tex_tfm_free(ctx, cell->font.tfm);
+     if (cell->font.fz)
+       fz_drop_font(ctx, cell->font.fz);
++    fz_free(ctx, cell->font.glyph_map);
+     fz_free(ctx, cell);
+     cell = next;
+   }
+@@ -604,6 +607,38 @@ static fz_font *dvi_resmanager_get_fz_font(fz_context *ctx, dvi_resmanager *rm,
+   return cell->font;
+ }
+ 
++/* Load the actual pdfTeX-embedded bitmap font through MuPDF's PDF machinery. */
++static void load_bitmap_font(fz_context *ctx, dvi_resmanager *rm, dvi_font *font)
++{
++  const char *dir = getenv("TEXPRESSO_BITMAP_FONTS");
++  if (!dir || !*font->name || strlen(font->name) > 64 ||
++      strspn(font->name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != strlen(font->name)) return;
++  char filename[4096];
++  if (snprintf(filename, sizeof(filename), "%s/%s.pdf", dir, font->name) >= sizeof(filename) || access(filename, R_OK)) return;
++  pdf_font_desc *desc = NULL;
++  fz_var(desc);
++  fz_try(ctx)
++  {
++    pdf_document *doc = dvi_resmanager_get_pdf(ctx, rm, filename);
++    if (!doc) fz_throw(ctx, FZ_ERROR_GENERIC, "bitmap font PDF unavailable");
++    pdf_obj *page = pdf_lookup_page_obj(ctx, doc, 0);
++    pdf_obj *resources = pdf_dict_get_inheritable(ctx, page, PDF_NAME(Resources));
++    pdf_obj *fonts = pdf_dict_get(ctx, resources, PDF_NAME(Font));
++    if (pdf_dict_len(ctx, fonts) != 1) fz_throw(ctx, FZ_ERROR_GENERIC, "bitmap font PDF must contain one font");
++    pdf_obj *object = pdf_dict_get_val(ctx, fonts, 0);
++    if (!pdf_name_eq(ctx, pdf_dict_get(ctx, object, PDF_NAME(Subtype)), PDF_NAME(Type3)))
++      fz_throw(ctx, FZ_ERROR_GENERIC, "bitmap resource is not Type3");
++    desc = pdf_load_font(ctx, doc, resources, object);
++    int *map = fz_malloc_array(ctx, 256, int);
++    for (int c = 0; c < 256; ++c)
++      map[c] = pdf_font_cid_to_gid(ctx, desc, pdf_lookup_cmap(desc->encoding, c));
++    font->fz = fz_keep_font(ctx, desc->font);
++    font->glyph_map = map;
++  }
++  fz_always(ctx) { pdf_drop_font(ctx, desc); }
++  fz_catch(ctx) { fz_warn(ctx, "bitmap font resource rejected: %s", fz_caught_message(ctx)); }
++}
++
+ dvi_font *dvi_resmanager_get_tex_font(fz_context *ctx, dvi_resmanager *rm, const char *name, int len)
+ {
+   for (cell_dvi_font *cell = rm->first_dvi_font; cell; cell = cell->next)
+@@ -677,8 +712,12 @@ dvi_font *dvi_resmanager_get_tex_font(fz_context *ctx, dvi_resmanager *rm, const
+     );
+   }
+ 
++  if (!cell->font.vf && !cell->font.fz)
++    load_bitmap_font(ctx, rm, &cell->font);
++
+   if (!cell->font.vf && !cell->font.fz)
+   {
++    dvi_missing_font = 1;
+     fz_warn(
+       ctx,
+       "dvi_resmanager_get_tex_font(%s): "
+diff --git a/src/dvi/mydvi.h b/src/dvi/mydvi.h
+index e2f2105..aaf6d94 100644
+--- a/src/dvi/mydvi.h
++++ b/src/dvi/mydvi.h
+@@ -368,3 +368,5 @@ inlined void dvi_set_ctm(dvi_state *st, fz_matrix ctm)
+ #undef inlined
+ 
+ #endif /*!MYDVI_H*/
++
++extern int dvi_missing_font;
+diff --git a/src/frontend/editor.c b/src/frontend/editor.c
+index 6face98..8be999f 100644
+--- a/src/frontend/editor.c
++++ b/src/frontend/editor.c
+@@ -194,6 +194,30 @@ bool editor_parse(fz_context *ctx,
+     parse_color(ctx, stack, out->theme.bg, bg);
+     parse_color(ctx, stack, out->theme.fg, fg);
+   }
++  else if (strcmp(verb, "browser-jump") == 0)
++  {
++    if (len != 4) goto arity;
++    *out = (struct editor_command){ .tag = EDIT_BROWSER_JUMP, .browser_jump = {
++      .page = val_number(ctx, val_array_get(ctx, stack, command, 1)),
++      .x = val_number(ctx, val_array_get(ctx, stack, command, 2)),
++      .y = val_number(ctx, val_array_get(ctx, stack, command, 3))
++    }};
++  }
++  else if (strcmp(verb, "browser") == 0)
++  {
++    if (len != 7) goto arity;
++    const char *path = val_string(ctx, stack, val_array_get(ctx, stack, command, 2));
++    const char *text = val_string(ctx, stack, val_array_get(ctx, stack, command, 5));
++    *out = (struct editor_command){ .tag = EDIT_BROWSER, .browser = {
++      .revision = val_number(ctx, val_array_get(ctx, stack, command, 1)),
++      .line = val_number(ctx, val_array_get(ctx, stack, command, 6)),
++      .change = { .path = path, .data = text, .base = BASE_BYTE,
++        .length = strlen(text), .span = {
++          .offset = val_number(ctx, val_array_get(ctx, stack, command, 3)),
++          .remove = val_number(ctx, val_array_get(ctx, stack, command, 4))
++        } }
++    }};
++  }
+   else if (strcmp(verb, "previous-page") == 0)
+   {
+     if (len != 1)
+diff --git a/src/frontend/editor.h b/src/frontend/editor.h
+index 05fdd1c..ad7f194 100644
+--- a/src/frontend/editor.h
++++ b/src/frontend/editor.h
+@@ -18,6 +18,8 @@ enum EDITOR_CHANGE_UNIT
+ 
+ enum EDITOR_COMMAND
+ {
++  EDIT_BROWSER_JUMP,
++  EDIT_BROWSER,
+   EDIT_OPEN,
+   EDIT_CLOSE,
+   EDIT_CHANGE,
+@@ -68,6 +70,8 @@ struct editor_command
+ {
+   enum EDITOR_COMMAND tag;
+   union {
++    struct { int page; float x, y; } browser_jump;
++    struct { int revision, line; struct editor_change change; } browser;
+     struct {
+       const char *path;
+       const char *data;
+diff --git a/src/frontend/main.c b/src/frontend/main.c
+index c202294..d8a60a0 100644
+--- a/src/frontend/main.c
++++ b/src/frontend/main.c
+@@ -41,6 +41,7 @@
+ #include "base64.h"
+ 
+ struct persistent_state *pstate;
++static int browser_revision = 0;
+ 
+ static void schedule_event(enum custom_events ev)
+ {
+@@ -917,9 +918,52 @@ static uint32_t convert_color(fz_context *ctx, vstack *stack, float frgb[3])
+   return (rgb[0] << 16) | (rgb[1] << 8) | (rgb[2]);
+ }
+ 
++/* Optional browser transport reuses the authoritative MuPDF display list. */
++static void export_frame(struct persistent_state *ps, ui_state *ui, fz_display_list *dl)
++{
++  const char *dir = getenv("TEXPRESSO_FRAME_DIR");
++  static unsigned long serial = 0;
++  if (!dir || !*dir) return;
++  if (dvi_missing_font) { printf("[\"frame-error\",%d]\n", browser_revision); fflush(stdout); return; }
++  char png[4096], json[4096];
++  unsigned long id = ++serial;
++  if (snprintf(png, sizeof(png), "%s/%lu.png", dir, id) >= sizeof(png) ||
++      snprintf(json, sizeof(json), "%s/%lu.json", dir, id) >= sizeof(json)) return;
++  fz_pixmap *pix = NULL;
++  fz_stext_page *text = NULL;
++  fz_output *out = NULL;
++  fz_var(pix); fz_var(text); fz_var(out);
++  fz_try(ps->ctx)
++  {
++    pix = fz_new_pixmap_from_display_list(ps->ctx, dl, fz_identity,
++                                        fz_device_rgb(ps->ctx), 0);
++    fz_save_pixmap_as_png(ps->ctx, pix, png);
++    text = fz_new_stext_page_from_display_list(ps->ctx, dl, NULL);
++    out = fz_new_output_with_path(ps->ctx, json, 0);
++    fz_print_stext_page_as_json(ps->ctx, out, text, 1);
++    fz_close_output(ps->ctx, out);
++    printf("[\"frame\",%lu,%d,%d,%d,%d,%d]\n", id, ui->page,
++           fz_pixmap_width(ps->ctx, pix), fz_pixmap_height(ps->ctx, pix),
++           send(page_count, ui->eng), browser_revision);
++    fflush(stdout);
++  }
++  fz_always(ps->ctx)
++  {
++    fz_drop_output(ps->ctx, out);
++    fz_drop_stext_page(ps->ctx, text);
++    fz_drop_pixmap(ps->ctx, pix);
++  }
++  fz_catch(ps->ctx)
++  {
++    unlink(png); unlink(json);
++    fprintf(stderr, "[frame] export failed: %s\n", fz_caught_message(ps->ctx));
++  }
++}
++
+ static void display_page(struct persistent_state *ps, ui_state *ui)
+ {
+   fz_display_list *dl = send(render_page, ui->eng, ps->ctx, ui->page);
++  export_frame(ps, ui, dl);
+   txp_renderer_set_contents(ps->ctx, ui->doc_renderer, dl);
+   fz_drop_display_list(ps->ctx, dl);
+   schedule_event(RENDER_EVENT);
+@@ -974,6 +1018,31 @@ static void interpret_command(struct persistent_state *ps,
+ 
+   switch (cmd.tag)
+   {
++    case EDIT_BROWSER_JUMP:
++    {
++      fz_buffer *buf;
++      synctex_t *stx = send(synctex, ui->eng, &buf);
++      if (stx && buf && cmd.browser_jump.page >= 0 && cmd.browser_jump.page < send(page_count, ui->eng)) {
++        float f = 1 / send(scale_factor, ui->eng);
++        synctex_scan(ps->ctx, stx, buf, ps->doc_path, cmd.browser_jump.page, f * cmd.browser_jump.x, f * cmd.browser_jump.y);
++        fflush(stdout);
++      }
++      break;
++    }
++    case EDIT_BROWSER:
++    {
++      flush_changes(ps, ui);
++      if (cmd.browser.change.span.remove || cmd.browser.change.length)
++        realize_change(ps, ui, &cmd.browser.change);
++      browser_revision = cmd.browser.revision;
++      fz_buffer *buf;
++      synctex_t *stx = send(synctex, ui->eng, &buf);
++      int go_up = 0;
++      const char *path = relative_path(cmd.browser.change.path, ps->doc_path, &go_up);
++      if (!go_up) synctex_set_target(stx, ui->page, path, cmd.browser.line);
++      schedule_event(RELOAD_EVENT);
++      break;
++    }
+     case EDIT_OPEN:
+       if (cmd.open.base64)
+       {
+@@ -1309,7 +1378,8 @@ bool texpresso_main(struct persistent_state *ps)
+         break;
+       }
+ 
+-      fprintf(stderr, "stdin: %.*s\n", n, buffer);
++      if (!getenv("TEXPRESSO_FRAME_DIR"))
++        fprintf(stderr, "stdin: %.*s\n", n, buffer);
+ 
+       const char *ptr = buffer, *lim = buffer + n;
+       fz_try(ps->ctx)
+@@ -1368,36 +1438,6 @@ bool texpresso_main(struct persistent_state *ps)
+         continue;
+       }
+ 
+-      if (!has_event)
+-      {
+-        if (advance)
+-          continue;
+-        if (!stdin_eof)
+-          wakeup_poll_thread(poll_stdin_pipe, 'c');
+-
+-        bool rerun_eligible = ps->rerun_enabled
+-                              && rerun_count < MAX_RERUNS
+-                              && aux_ready;
+-        if (rerun_eligible)
+-          has_event = SDL_WaitEventTimeout(&e, T_IDLE_MS);
+-        else
+-          has_event = SDL_WaitEvent(&e);
+-        if (!has_event)
+-        {
+-          if (rerun_eligible)
+-          {
+-            rerun_count++;
+-            fprintf(stderr, "[rerun] idle %dms: finishing pass %d/%d\n",
+-                    T_IDLE_MS, rerun_count, MAX_RERUNS);
+-            send(start_finishing, ui->eng);
+-            schedule_event(RELOAD_EVENT);
+-            continue;
+-          }
+-          fprintf(stderr, "SDL_WaitEvent error: %s\n", SDL_GetError());
+-          break;
+-        }
+-      }
+-
+       fz_buffer *buf;
+       synctex_t *stx = send(synctex, ui->eng, &buf);
+       int page = -1, x = -1, y = -1;
+@@ -1438,6 +1478,38 @@ bool texpresso_main(struct persistent_state *ps)
+         if (delta != 0.0)
+           schedule_event(RENDER_EVENT);
+       }
++
++      if (!has_event)
++      {
++        if (advance)
++          continue;
++        if (!stdin_eof)
++          wakeup_poll_thread(poll_stdin_pipe, 'c');
++
++        bool rerun_eligible = ps->rerun_enabled
++                              && rerun_count < MAX_RERUNS
++                              && aux_ready;
++        if (rerun_eligible)
++          has_event = SDL_WaitEventTimeout(&e, T_IDLE_MS);
++        else
++          has_event = SDL_WaitEvent(&e);
++        if (!has_event)
++        {
++          if (rerun_eligible)
++          {
++            rerun_count++;
++            fprintf(stderr, "[rerun] idle %dms: finishing pass %d/%d\n",
++                    T_IDLE_MS, rerun_count, MAX_RERUNS);
++            send(start_finishing, ui->eng);
++            schedule_event(RELOAD_EVENT);
++            continue;
++          }
++          fprintf(stderr, "SDL_WaitEvent error: %s\n", SDL_GetError());
++          break;
++        }
++      }
++
++
+     }
+ 
+     txp_renderer_set_scale_factor(ps->ctx, ui->doc_renderer,
