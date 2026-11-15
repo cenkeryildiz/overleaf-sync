@@ -4,7 +4,7 @@
 
 Planned self-hosted collaborative LaTeX **web application** for browser use on Windows/macOS, retaining nearly all capabilities of the selected CE+, Overleaf Workshop and LaTeX Workshop repositories and adding safe local/offline recovery, explicit Local only / Connect to server sessions, and multi-user server job distribution. No VS Code extension or Premium account is required.
 
-**Current status: planning/tooling only. No working web application is delivered by this repository.**
+**Current status: R0 is in progress. A separately configured local CE+ instance has passed a synthetic browser import/edit/compile/share/export check. This repository does not yet deliver a distributable web application.**
 
 - [Authoritative plan and capability contract](docs/COLLABORATIVE_LATEX_PLAN.md)
 - [Upstream capability inventory and early discovery](docs/COLLABORATIVE_LATEX_PLAN.md#3-capability-baseline-and-discovery)
@@ -31,7 +31,7 @@ Reuse reduces implementation effort, not product scope. No feature is silently r
 
 Earlier accurately labelled partial releases need their own gates and prerequisites; later required phases remain part of complete-project acceptance. Local only must avoid remote-server contact. A possible loopback helper for local files/compilation is unresolved and must be justified by browser feasibility checks. Rust is intended for missing custom backend functions; reuse browser editor/engine code in its existing language.
 
-The existing builder produces **planning assets only**, not a web application or VSIX. All application phases remain unstarted. The archived extension-based experiment is historical evidence, not the delivery architecture or browser acceptance. R0 must implement actual web/service packaging, browser smoke checks and rollback. No deployment or release is authorized by this documentation revision.
+The existing builder produces **planning assets only**, not a web application or VSIX. No application phase has passed; R0 is in progress. The archived extension-based experiment is historical evidence, not the delivery architecture or browser acceptance. R0 must implement actual web/service packaging, browser smoke checks and rollback. No deployment or release is authorized by this documentation revision.
 
 Repository checks (Node 22; committed tests can be retrieved into a temporary checkout outside Kod):
 
@@ -45,3 +45,7 @@ npm run test:package
 ```
 
 Build from a clean committed snapshot. These commands verify planning/tooling consistency, not application behavior.
+
+Free-account projects can be transferred through source ZIP download/upload; Premium Git access is not required. ZIP imports are separate projects, and returning changes to the original shared online project needs deliberate file updates and conflict review. Central login will use an external identity provider; project identities/permissions remain local, but collaborators need not give this application their provider passwords. External login is not activated.
+
+The opt-in live browser check is `test/browser/free-account.mjs` (retrieve it into a temporary checkout). It requires the existing synthetic Alice/Bob accounts, their passwords supplied privately as `OVERLEAF_TEST_ALICE_PASSWORD` and `OVERLEAF_TEST_BOB_PASSWORD`, and an installed Playwright runtime. Run `PLAYWRIGHT_MODULE=/absolute/path/to/playwright CHROME_PATH=/absolute/path/to/chrome node test/browser/free-account.mjs` on macOS. It creates a uniquely named synthetic project and reports its URL for scoped cleanup; it never uses real Overleaf accounts, imports browser cookies, exposes a port or uploads to overleaf.com. Page traffic is restricted to loopback; server/container egress is unchanged.
