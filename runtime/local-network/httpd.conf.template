@@ -1,0 +1,31 @@
+# macOS built-in Apache, private LAN testing only. Native Overleaf retains authentication/CSRF.
+ServerRoot "@RUNTIME@"
+PidFile "@RUNTIME@/httpd.pid"
+DefaultRuntimeDir "@RUNTIME@"
+Mutex file:@RUNTIME@ default
+ErrorLog "@RUNTIME@/error.log"
+LogLevel warn
+Listen @LAN_IP@:8080
+ServerName @LAN_IP@
+LoadModule mpm_event_module /usr/libexec/apache2/mod_mpm_event.so
+LoadModule unixd_module /usr/libexec/apache2/mod_unixd.so
+LoadModule authz_core_module /usr/libexec/apache2/mod_authz_core.so
+LoadModule proxy_module /usr/libexec/apache2/mod_proxy.so
+LoadModule proxy_http_module /usr/libexec/apache2/mod_proxy_http.so
+User #@UID@
+Group #@GID@
+ServerLimit 2
+StartServers 1
+ThreadsPerChild 16
+MaxRequestWorkers 32
+MinSpareThreads 8
+MaxSpareThreads 24
+ProxyRequests Off
+ProxyPreserveHost On
+ProxyTimeout 120
+AllowEncodedSlashes NoDecode
+<Proxy "*">
+  Require all granted
+</Proxy>
+ProxyPass "/" "http://127.0.0.1:8080/" upgrade=websocket connectiontimeout=5 timeout=120
+ProxyPassReverse "/" "http://127.0.0.1:8080/"

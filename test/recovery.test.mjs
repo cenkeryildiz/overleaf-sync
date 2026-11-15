@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
-import { patchEditor } from '../runtime/browser-recovery/apply.mjs';
+import { patchEditor, patchLanUuid } from '../runtime/browser-recovery/apply.mjs';
 const source = readFileSync(new URL('../runtime/browser-recovery/recovery-core.js', import.meta.url), 'utf8');
 const account = 'a'.repeat(24), project = 'b'.repeat(24), docId = 'c'.repeat(24);
 class Storage {
@@ -14,8 +14,8 @@ class Storage {
   setItem(key, value) { if (this.full) throw Error('QuotaExceededError'); this.values.set(key, String(value)); }
   removeItem(key) { this.values.delete(key); }
 }
-function client(storage = new Storage(), user = account) {
-  const context = vm.createContext({ crypto: webcrypto, localStorage: storage, location: { pathname: '/project/' + project }, document: { querySelector: selector => ({ content: selector.includes('ol-user_id') ? user : project, dataset: {} }) } });
+function client(storage = new Storage(), user = account, crypto = webcrypto) {
+  const context = vm.createContext({ crypto, localStorage: storage, location: { pathname: '/project/' + project }, document: { querySelector: selector => ({ content: selector.includes('ol-user_id') ? user : project, dataset: {} }) } });
   vm.runInContext(source, context); return { api: context.overleafRecovery, storage, context };
 }
 function filter(api, raw = 'base') {
@@ -54,4 +54,19 @@ test('offline worker never falls through to network for unknown/private requests
   const context=vm.createContext({self:{addEventListener:(name,fn)=>handlers[name]=fn,location:{origin:'http://127.0.0.1:8080'}},URL,Response,caches:{open:async()=>({match:async()=>new Response('public static cached page')})},fetch:()=>{networks++;throw Error('Unexpected network')}});
   vm.runInContext(readFileSync(new URL('../runtime/browser-recovery/recovery-sw.template.js',import.meta.url),'utf8').replace('__RECOVERY_MANIFEST__',JSON.stringify(manifest)),context);
   for(const [url,method,status]of [['http://127.0.0.1:8080/recovery/local-workspace.html','GET',200],['http://127.0.0.1:8080/project/'+project,'GET',503],['https://example.org/','GET',503],['http://127.0.0.1:8080/recovery/local-workspace.html','POST',503]]){handlers.fetch({request:{url,method},respondWith:p=>responses.push(p)});assert.equal((await responses.pop()).status,status)}assert.equal(networks,0);
+});
+
+test('LAN HTTP editing retains independent cryptographic writer identities without randomUUID', () => {
+  const crypto = { getRandomValues: bytes => webcrypto.getRandomValues(bytes) };
+  const a = client(new Storage(), account, crypto), b = client(new Storage(), account, crypto);
+  filter(a.api)(change()); filter(b.api)(change());
+  const first = a.api.list(account,project)[0].record, second = b.api.list(account,project)[0].record;
+  assert.match(first.writer, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.notEqual(first.writer, second.writer); assert.notEqual(a.api.fork(first).writer, first.writer);
+});
+
+test('LAN UUID editor patch refuses ambiguous or already-patched recovery source', () => {
+  const fixture = '  const writer = globalThis.crypto.randomUUID();\nreturn { writer: globalThis.crypto.randomUUID(), revision: 0 };';
+  const output = patchLanUuid(fixture, source); assert(output.includes('function randomUUID()'));
+  assert.throws(() => patchLanUuid(output, source)); assert.throws(() => patchLanUuid(fixture + fixture, source)); assert.throws(() => patchLanUuid(fixture, 'unknown'));
 });

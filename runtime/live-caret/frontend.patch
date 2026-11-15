@@ -1,0 +1,20 @@
+--- a/services/web/frontend/js/features/ide-react/context/online-users-context.tsx
++++ b/services/web/frontend/js/features/ide-react/context/online-users-context.tsx
+@@ -83,7 +83,7 @@
+   const [currentPosition, setCurrentPosition] = useState<CursorPosition | null>(
+     null
+   )
+-  const [cursorUpdateInterval, setCursorUpdateInterval] = useState(500)
++  const [cursorUpdateInterval, setCursorUpdateInterval] = useState(0)
+ 
+   const calculateValues = useCallback(
+     (onlineUsers: OnlineUsersContextValue['onlineUsers']) => {
+@@ -130,7 +130,7 @@
+       }
+ 
+       const cursorUpdateInterval =
+-        onlineUsersArray.length > 0 ? 500 : 60 * 1000 * 5
++        onlineUsersArray.length > 0 ? 0 : 60 * 1000 * 5
+ 
+       return {
+         onlineUsers: decoratedOnlineUsers,

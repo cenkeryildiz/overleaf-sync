@@ -19,6 +19,18 @@ export function patchEditor(source, core, config) {
   }
   return config + '\n' + core + '\n' + source;
 }
+export function patchLanUuid(source, core) {
+  const start = core.indexOf('  function randomUUID()'), end = core.indexOf('  const entries =');
+  assert(start >= 0 && end > start, 'UUID fallback source missing');
+  const patches = [
+    ['  const writer = globalThis.crypto.randomUUID();', core.slice(start, end).trimEnd()],
+    ['writer: globalThis.crypto.randomUUID(),', 'writer: randomUUID(),'],
+  ];
+  for (const [from, to] of patches) {
+    assert.equal(source.split(from).length - 1, 1, 'Installed recovery UUID anchors differ'); source = source.replace(from, to);
+  }
+  return source;
+}
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [input, output] = process.argv.slice(2);
   assert(input && output && basename(resolve(output)) === 'browser-recovery', 'Use an original editor bundle and a dedicated browser-recovery output directory');

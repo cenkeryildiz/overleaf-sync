@@ -3,7 +3,14 @@
 (() => {
   'use strict';
   const prefix = 'overleaf.recovery.v1.';
-  const writer = globalThis.crypto.randomUUID();
+  function randomUUID() {
+    if (globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID();
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    return hex.slice(0,8) + '-' + hex.slice(8,12) + '-' + hex.slice(12,16) + '-' + hex.slice(16,20) + '-' + hex.slice(20);
+  }
+  const writer = randomUUID();
   const entries = new Map();
   let current, controls;
   const id = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
@@ -40,7 +47,7 @@
   }
   function fork(record) {
     if (!valid(record)) throw Error('Invalid recovery copy');
-    return { ...record, writer: globalThis.crypto.randomUUID(), revision: 0, updatedAt: Date.now() };
+    return { ...record, writer: randomUUID(), revision: 0, updatedAt: Date.now() };
   }
   function status(text, error = false) {
     if (controls) { controls.querySelector('[role=status]').textContent = text; controls.dataset.error = String(error); }
