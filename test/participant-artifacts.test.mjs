@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -35,9 +36,14 @@ test('setup writes private configuration once and never prints or overwrites sec
     const input = join(directory, 'client.json'), output = join(directory, 'private.env');
     writeFileSync(input, JSON.stringify({ web: { client_id: 'synthetic.apps.googleusercontent.com',
       client_secret: 'private-fixture-secret', redirect_uris: ['https://own.example.test/oidc/login/callback'] } }));
-    const args = [new URL('../runtime/participant-compile/hosting/configure.mjs', import.meta.url).pathname,
+    const args = [fileURLToPath(new URL('../runtime/participant-compile/hosting/configure.mjs', import.meta.url)),
       'https://own.example.test', input, output];
-    const first = spawnSync(process.execPath, args, { encoding: 'utf8' }); assert.equal(first.status, 0, first.stderr);
+    const first = spawnSync(process.execPath, args, { encoding: 'utf8' });
+    if (process.platform === 'win32') {
+      assert.equal(first.status, 1); assert.match(first.stderr, /Windows file ACL setup is not implemented/);
+      assert(!existsSync(output)); assert(!(first.stdout + first.stderr).includes('private-fixture-secret')); return;
+    }
+    assert.equal(first.status, 0, first.stderr);
     assert.equal(statSync(output).mode & 0o777, 0o600);
     const original = readFileSync(output, 'utf8'); assert(original.includes('private-fixture-secret'));
     const second = spawnSync(process.execPath, args, { encoding: 'utf8' }); assert.equal(second.status, 1);

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
-import { dirname, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, resolve, relative, isAbsolute, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function configuration(site, client, port = '8080') {
@@ -25,15 +25,16 @@ export function configuration(site, client, port = '8080') {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
+    assert(process.platform !== 'win32', 'Run this private-file helper on your Linux server or Mac; Windows file ACL setup is not implemented');
     const [site, json, output, port] = process.argv.slice(2);
     assert(site && json && output && process.argv.length <= 6,
       'Usage: node configure.mjs SITE_URL GOOGLE_CLIENT_JSON PRIVATE_ENV_FILE [LOCAL_PORT]');
     const content = configuration(site, JSON.parse(readFileSync(json, 'utf8')), port);
     const destination = resolve(output), repository = fileURLToPath(new URL('../../../', import.meta.url));
     mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
-    const target = resolve(realpathSync(dirname(destination)), destination.split('/').at(-1));
+    const target = resolve(realpathSync(dirname(destination)), basename(destination));
     const path = relative(repository, target);
-    assert(path.startsWith('..' + '/') || isAbsolute(path), 'Keep private configuration outside the source repository');
+    assert(path.startsWith('..' + sep) || isAbsolute(path), 'Keep private configuration outside the source repository');
     // Exclusive creation preserves existing persistent keys and deployments.
     writeFileSync(target, content, { flag: 'wx', mode: 0o600 });
     console.log('Private configuration created. Existing files are never overwritten. Use its path with --env-file and LATEX_ENV_FILE.');
