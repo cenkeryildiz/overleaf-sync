@@ -4,13 +4,19 @@ import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import SessionManager from '../Authentication/SessionManager.mjs';
+import { addOptionalCleanupHandlerBeforeStoppingTraffic } from '../../infrastructure/GracefulShutdown.mjs';
 import { snapshot } from './LivePreview.mjs';
 import { prepareSnapshot, prepareResult } from './ParticipantArtifacts.mjs';
 
 const jobs = new Map(), pending = new Map(), artifacts = new Map();
-let child, serial = 0, retainedBytes = 0;
+let child, serial = 0, retainedBytes = 0, stopping = false;
+addOptionalCleanupHandlerBeforeStoppingTraffic('participant coordinator', () => {
+  stopping = true;
+  child?.kill();
+});
 const token = () => randomBytes(24).toString('hex');
 function start() {
+  if (stopping) throw Error('Coordinator shutting down');
   if (child) return child;
   const process = spawn('/opt/participant/overleaf-participant-coordinator', [], { stdio: ['pipe', 'pipe', 'ignore'] });
   child = process;

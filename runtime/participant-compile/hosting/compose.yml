@@ -1,0 +1,66 @@
+name: latex-participant
+services:
+  app:
+    build:
+      context: ../../..
+      dockerfile: runtime/participant-compile/hosting/Dockerfile
+    image: latex-participant:local
+    platform: linux/amd64
+    restart: unless-stopped
+    env_file: ${LATEX_ENV_FILE:-.env}
+    environment:
+      OVERLEAF_MONGO_URL: mongodb://mongo/sharelatex?replicaSet=rs0
+      OVERLEAF_REDIS_HOST: redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      V1_HISTORY_URL: http://app:3100/api
+    ports:
+      - "127.0.0.1:${LATEX_PORT:-8080}:80"
+    volumes:
+      - app:/var/lib/overleaf
+    networks: [stores, ingress]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 512
+    stop_grace_period: 60s
+  mongo:
+    image: mongo@sha256:d97fea17ccb8d004cd137be8dab54d70d0df11be69c9f422aefe4484c8414ab7
+    restart: unless-stopped
+    command: [mongod, --replSet, rs0, --bind_ip_all, --wiredTigerCacheSizeGB, "0.25"]
+    volumes:
+      - mongo:/data/db
+    networks: [stores]
+    mem_limit: 1g
+    stop_grace_period: 60s
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "if(db.hello().isWritablePrimary)quit(0);try{rs.status()}catch(e){if(e.code===94)rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]})}quit(1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+  redis:
+    image: redis@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
+    restart: unless-stopped
+    command: [redis-server, --appendonly, "yes"]
+    volumes:
+      - redis:/data
+    networks: [stores]
+    mem_limit: 256m
+    stop_grace_period: 60s
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+volumes:
+  app:
+  mongo:
+  redis:
+networks:
+  stores:
+    internal: true
+  ingress:

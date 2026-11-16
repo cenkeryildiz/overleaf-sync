@@ -1,0 +1,27 @@
+# Independently buildable participant service
+
+This candidate builds directly from the pinned public CE+ image and verified BusyTeX1.4.1 resources. It does not require the Mac's local preamble/TeX images. The application and Rust metadata helper are AMD64; native TeX compilation is disabled at the shared compile entry point. All project pages use participant compilation automatically. Individual native logins, invitations, PDF/source navigation, live carets, recovery and the verified-identity OIDC fixes are included. No OIDC provider or mail service is activated.
+
+From the repository root, build with:
+
+```sh
+docker build --platform linux/amd64 -f runtime/participant-compile/hosting/Dockerfile -t latex-participant:local .
+```
+
+Builds download public compiler assets (about522MB compressed) and verify their digests before extraction. The browser's measured larger fixture transferred about661MiB of worker resources, with about152MiB allocated WASM linear memory; that is not total browser RAM or a WAN guarantee. Preserve all upstream notices and make the corresponding modified AGPL source available with any network deployment. The full TeX/font notices remain in the public data packages.
+
+The adjacent compose file is a loopback-only candidate, not an activated public service. Copy `.env.example` to a private `.env` beside it, permission0600, with independently generated persistent values for `OVERLEAF_INVITE_TOKEN_SECRET` and `OVERLEAF_SESSION_SECRET` (at least32characters each), and `OVERLEAF_SITE_URL` set to the intended origin. Generate each secret with `openssl rand -hex 32`; never commit the file or use demo credentials. Choose an unused `LATEX_PORT` if8080 is occupied. Fill the Google client values before startup; placeholders are refused. Then use `docker compose -f runtime/participant-compile/hosting/compose.yml up -d --build`. MongoDB and Redis have no host ports; no service mounts the Docker socket or a user's home directory. Named volumes persist across restarts. Do not run `down -v` on a real installation.
+
+Create the first individual administrator with the native CLI:
+
+```sh
+docker compose -f runtime/participant-compile/hosting/compose.yml exec -w /overleaf/services/web app node modules/server-ce-scripts/scripts/create-user.mjs --admin --email=YOUR_EMAIL
+```
+
+The command prints a private activation link. Open it directly and keep it out of shared logs. Create each additional user with the same command without `--admin`, then use the native Share invitation and accept it from that user's own login. Verify public registration restrictions before exposure. Do not share an administrator password. Public origins must use HTTPS; hosted settings enforce secure cookies automatically. SMTP/reset delivery, actual domain/HTTPS, reverse-proxy trust and provider account setup must be configured and checked for the selected host; they are not silently provided by this template. Keep secrets and all durable data in encrypted backups following [the cold restore procedure](../BACKUP.md).
+
+Google login is required before the first publication. Create a **Web application** client in [Google Auth Platform](https://console.cloud.google.com/auth/clients), register the exact `OVERLEAF_SITE_URL` plus `/oidc/login/callback`, and put its ID/secret only in private `.env`. An isolated local trial uses site URL `http://127.0.0.1:8081`, `LATEX_PORT=8081` and callback `http://127.0.0.1:8081/oidc/login/callback`; it does not qualify the eventual public callback. The template requests only OpenID identity, email and profile. Google owns authentication; project roles and invitations stay in this app. Preserve subject/verified-email checks, test first login, repeat login, explicit local-account linking and local logout, and confirm an uninvited Google user cannot open another user's private project. Real Google tests require the account-owned client and interactive consent; synthetic identity tests do not pass that gate. See the [existing identity integration](../../../integrations/ce-plus-oidc/README.md) and [Google's setup requirements](https://developers.google.com/identity/openid-connect/openid-connect).
+
+Local Google first login, protected-page refusal after logout and repeat login were user-confirmed on16November2026; the persisted provider mapping stayed unique. The public deployment remains pending. Use a separate production Google project/client with public HTTPS-only callbacks when preparing a broadly shared production service, following [Google's OAuth policies](https://developers.google.com/identity/protocols/oauth2/policies). Keep the local client for testing. Confirm Audience/Branding settings for that production project; the basic-identity scope exception to testing allowlists is documented in [Google's app-state overview](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
+
+The free-host candidate remains unaccepted: Oracle's larger Always Free machines are ARM, while this app is AMD64. Local Rosetta tests do not qualify Linux ARM/QEMU. Provider signup/card requirements, capacity, idle reclamation, network quotas, HTTPS and real off-host backup need an actual host check. There is no independently hosted URL or public release yet, and this template never authorizes a paid upgrade.

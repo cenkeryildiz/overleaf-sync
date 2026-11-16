@@ -1,0 +1,11 @@
+.git
+**/.serena
+**/.env
+**/.env.*
+**/node_modules
+**/target
+dist
+out-test
+server/data
+server/secrets
+_work
