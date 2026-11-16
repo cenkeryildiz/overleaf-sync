@@ -1,5 +1,34 @@
 # Independently buildable participant service
 
+Each installation is independent: its operator owns the server/domain, Google OAuth client, users, projects and backups. It does not contact a central account service or depend on this developer's Mac after setup. GitHub distributes source; it does not store your private projects or run compilation. Invited collaborators use their own Google accounts on your instance; only the operator creates an OAuth client. Google handles identity, and your server controls project access. Browser recovery belongs to that site's browser storage and does not automatically migrate to another domain.
+
+The runtime in this directory is covered by its [AGPL-3.0 license](../LICENSE), including the hosting configuration/helper; the other bundled runtime and identity components retain their adjacent licenses and notices. The repository's root proprietary notice explicitly preserves these component licenses. Independent operators may run and modify these components under their licenses and must provide their corresponding modified AGPL source to network users. No relicensing of unrelated repository material is included.
+
+## Configure your own instance
+
+1. Obtain the source and build the image below. Use your own domain and HTTPS reverse proxy to the loopback port. The public hostname/TLS setup is specific to your server; never expose MongoDB, Redis or a Docker socket.
+2. In your own [Google Auth Platform](https://console.cloud.google.com/auth/clients) project, create a **Web application** client with the exact redirect `https://YOUR_DOMAIN/oidc/login/callback`. Download its JSON privately. A desktop client is not suitable. Keep testing and public production clients separate.
+3. From this repository root, generate a private configuration outside Git. The helper reads your JSON locally, creates independent random session/invitation secrets, validates the exact callback and never overwrites an existing file or prints credentials:
+
+   ```sh
+   node runtime/participant-compile/hosting/configure.mjs \
+     https://YOUR_DOMAIN /private/path/google-client.json \
+     "$HOME/.config/collaborative-latex/own-server.env"
+   ```
+
+4. Use the same private file for Compose interpolation and container configuration. Keep the project name stable: it identifies your persistent volumes. Run all later `exec`, `stop`, `start` and `up` commands with these same settings:
+
+   ```sh
+   LATEX_ENV_FILE="$HOME/.config/collaborative-latex/own-server.env" \
+   docker compose --project-name own-latex \
+     --env-file "$HOME/.config/collaborative-latex/own-server.env" \
+     -f runtime/participant-compile/hosting/compose.yml up -d --build
+   ```
+
+5. Create the first administrator with the native CLI below using those same Compose arguments. Test your own Google login/logout/repeat login, owner/member invitations, outsider refusal, restart persistence and a restore into fresh isolated volumes before enabling public routing. Native local accounts remain available; nobody needs our demo passwords. Source export and the encrypted full backup procedure below support moving your installation.
+
+This helper uses the project's existing Node build/configuration runtime and standard library; it adds no dependency or separate installed tool. Keep the generated file and downloaded JSON private, retain persistent keys during upgrades and store them in your encrypted backup. Never put Google client secrets in a browser bundle or offline download. The independent service is prepared locally; an actual public host/TLS/production callback and off-host restore are still unqualified.
+
 This candidate builds directly from the pinned public CE+ image and verified BusyTeX1.4.1 resources. It does not require the Mac's local preamble/TeX images. The application and Rust metadata helper are AMD64; native TeX compilation is disabled at the shared compile entry point. All project pages use participant compilation automatically. Individual native logins, invitations, PDF/source navigation, live carets, recovery and the verified-identity OIDC fixes are included. No OIDC provider or mail service is activated.
 
 From the repository root, build with:
@@ -15,7 +44,12 @@ The adjacent compose file is a loopback-only candidate, not an activated public 
 Create the first individual administrator with the native CLI:
 
 ```sh
-docker compose -f runtime/participant-compile/hosting/compose.yml exec -w /overleaf/services/web app node modules/server-ce-scripts/scripts/create-user.mjs --admin --email=YOUR_EMAIL
+LATEX_ENV_FILE="$HOME/.config/collaborative-latex/own-server.env" \
+docker compose --project-name own-latex \
+  --env-file "$HOME/.config/collaborative-latex/own-server.env" \
+  -f runtime/participant-compile/hosting/compose.yml \
+  exec -w /overleaf/services/web app \
+  node modules/server-ce-scripts/scripts/create-user.mjs --admin --email=YOUR_EMAIL
 ```
 
 The command prints a private activation link. Open it directly and keep it out of shared logs. Create each additional user with the same command without `--admin`, then use the native Share invitation and accept it from that user's own login. Verify public registration restrictions before exposure. Do not share an administrator password. Public origins must use HTTPS; hosted settings enforce secure cookies automatically. SMTP/reset delivery, actual domain/HTTPS, reverse-proxy trust and provider account setup must be configured and checked for the selected host; they are not silently provided by this template. Keep secrets and all durable data in encrypted backups following [the cold restore procedure](../BACKUP.md).

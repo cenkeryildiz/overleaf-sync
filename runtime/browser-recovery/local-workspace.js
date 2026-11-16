@@ -89,6 +89,6 @@
       localStorage.removeItem(selected); const next = api.list(draft.account, draft.project)[0];
       if (next) open(next.key); else { view.destroy(); clearComparison(); choice.replaceChildren(); buttons.forEach(b => b.disabled = b.id !== 'connect'); report('No local copies remain for this project.'); }
     };
-    document.querySelector('#connect').onclick = () => { location.assign('/project/' + draft.project); };
+    document.querySelector('#connect').onclick = () => { location.assign('/project/' + draft.project + '#recovery=' + encodeURIComponent(selected)); };
   } catch (error) { buttons.forEach(button => button.disabled = true); report(error.message + '. Existing browser copies were kept.', true); }
 })();

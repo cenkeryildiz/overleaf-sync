@@ -8,6 +8,12 @@ This notice applies to the source code, tests, documentation, and other original
 materials in this repository to the extent that Cenker YILDIZ holds the relevant
 rights.
 
+Exception: files explicitly marked with an SPDX license identifier, and
+components with their own LICENSE file, are governed by those licenses.
+This includes the self-hostable runtime components and CE+ identity integration;
+their AGPL and third-party license rights are not restricted by this notice.
+The remaining original repository materials retain the terms below.
+
 Except as permitted by applicable law, applicable hosting-service terms, or
 separate written permission from Cenker YILDIZ, no permission is granted to use,
 copy, reproduce, modify, create derivative works from, publish, distribute,

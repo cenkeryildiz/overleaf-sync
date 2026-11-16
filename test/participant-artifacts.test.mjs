@@ -1,14 +1,63 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { patchOutputAuthorization } from '../runtime/participant-compile/hosting/output-auth.mjs';
+import { configuration } from '../runtime/participant-compile/hosting/configure.mjs';
 import { safePath, prepareSnapshot, prepareResult } from '../runtime/participant-compile/artifacts.mjs';
 const fixture = () => ({ main: 'main.tex', active: 'chapters/one.tex', text: 'exact candidate', resources: [
   { path: 'main.tex', content: 'root' }, { path: 'chapters/one.tex', content: 'old' }, { path: 'figure.png', data: 'AA==' },
 ] });
+test('independent instances use their own Google callback and fresh persistent secrets', () => {
+  const client = site => ({ web: { client_id: 'own-client.apps.googleusercontent.com', client_secret: 'synthetic-only',
+    redirect_uris: [site + '/oidc/login/callback'] } });
+  const a = configuration('https://one.example.test', client('https://one.example.test'));
+  const b = configuration('https://two.example.test', client('https://two.example.test'), '8082');
+  assert(a.includes('OVERLEAF_SITE_URL=https://one.example.test\n'));
+  assert(b.includes('OVERLEAF_SITE_URL=https://two.example.test\n') && b.includes('LATEX_PORT=8082\n'));
+  const secrets = text => [...text.matchAll(/^OVERLEAF_(?:INVITE_TOKEN|SESSION)_SECRET=([a-f0-9]{64})$/gm)].map(m => m[1]);
+  assert.equal(new Set([...secrets(a), ...secrets(b)]).size, 4);
+  for (const site of ['http://one.example.test', 'https://one.example.test/path', 'https://user:pass@one.example.test'])
+    assert.throws(() => configuration(site, client('https://one.example.test')));
+  assert.throws(() => configuration('https://two.example.test', client('https://one.example.test')), /exact site callback/);
+  assert.throws(() => configuration('https://one.example.test', { installed: client('https://one.example.test').web }), /web client/);
+  assert.throws(() => configuration('https://one.example.test', client('https://one.example.test'), '0'));
+});
+test('setup writes private configuration once and never prints or overwrites secrets', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'latex-config-'));
+  try {
+    const input = join(directory, 'client.json'), output = join(directory, 'private.env');
+    writeFileSync(input, JSON.stringify({ web: { client_id: 'synthetic.apps.googleusercontent.com',
+      client_secret: 'private-fixture-secret', redirect_uris: ['https://own.example.test/oidc/login/callback'] } }));
+    const args = [new URL('../runtime/participant-compile/hosting/configure.mjs', import.meta.url).pathname,
+      'https://own.example.test', input, output];
+    const first = spawnSync(process.execPath, args, { encoding: 'utf8' }); assert.equal(first.status, 0, first.stderr);
+    assert.equal(statSync(output).mode & 0o777, 0o600);
+    const original = readFileSync(output, 'utf8'); assert(original.includes('private-fixture-secret'));
+    const second = spawnSync(process.execPath, args, { encoding: 'utf8' }); assert.equal(second.status, 1);
+    assert.equal(readFileSync(output, 'utf8'), original);
+    assert(!(first.stdout + first.stderr + second.stdout + second.stderr).includes('private-fixture-secret'));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+test('all fast PDF and cached-content paths check native project authorization first', () => {
+  const backend = '\t\tproxy_pass http://127.0.0.1:8080; # clsi-nginx.conf';
+  const source = '  # handle output files for specific users\n' + Array.from({ length: 4 }, (_, n) => `location /fixture${n} {\n${backend}\n}`).join('\n');
+  const result = patchOutputAuthorization(source);
+  assert.equal(result.split('auth_request /_participant_output_auth;').length - 1, 4);
+  assert.equal(result.split(backend).length - 1, 4, 'Keep the fast file/range backend');
+  assert.equal(result.split('add_header Cache-Control "private, no-store" always;').length - 1, 4);
+  assert.equal(result.split('proxy_hide_header Expires;').length - 1, 4, 'Do not inherit the public one-day content cache');
+  assert(result.includes('internal;') && result.includes('proxy_pass_request_body off;'));
+  assert(result.includes('proxy_set_header Accept "application/json";'), 'Native global login must return 401 rather than redirect the auth subrequest');
+  assert(result.includes('/project/$participant_output_project/participant-output-auth'));
+  for (const invalid of ['', source + backend, result]) assert.throws(() => patchOutputAuthorization(invalid));
+});
 test('snapshots preserve exact source, binary inputs and selected compiler in the digest', () => {
   const a = prepareSnapshot(fixture()); assert.equal(a.resources[1].content, 'exact candidate');
   assert.equal(a.resources[2].data, 'AA=='); assert.equal(a.digest.length, 64);

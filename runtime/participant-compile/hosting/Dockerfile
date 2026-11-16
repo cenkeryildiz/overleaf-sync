@@ -9,7 +9,7 @@ COPY runtime/fast-preview/ /tmp/source/runtime/fast-preview/
 COPY runtime/live-caret/ /tmp/source/runtime/live-caret/
 COPY runtime/synctex-selection/ /tmp/source/runtime/synctex-selection/
 COPY runtime/participant-compile/apply.mjs runtime/participant-compile/client.mjs runtime/participant-compile/editor.js runtime/participant-compile/bootstrap.js runtime/participant-compile/worker.js runtime/participant-compile/sdk-patch.mjs /tmp/source/runtime/participant-compile/
-COPY runtime/participant-compile/hosting/provision.mjs /tmp/source/runtime/participant-compile/hosting/provision.mjs
+COPY runtime/participant-compile/hosting/provision.mjs runtime/participant-compile/hosting/output-auth.mjs /tmp/source/runtime/participant-compile/hosting/
 RUN node /tmp/source/runtime/participant-compile/hosting/provision.mjs && rm -rf /tmp/source
 COPY --from=coordinator /work/target/release/overleaf-participant-coordinator /opt/participant/overleaf-participant-coordinator
 COPY runtime/participant-compile/host.mjs /overleaf/services/web/app/src/Features/Compile/ParticipantCompile.mjs

@@ -15,7 +15,9 @@ class Storage {
   removeItem(key) { this.values.delete(key); }
 }
 function client(storage = new Storage(), user = account, crypto = webcrypto) {
-  const context = vm.createContext({ crypto, localStorage: storage, location: { pathname: '/project/' + project }, document: { querySelector: selector => ({ content: selector.includes('ol-user_id') ? user : project, dataset: {} }) } });
+  const node = () => ({ append() {}, setAttribute() {}, addEventListener() {}, style: {}, isConnected: true });
+  const context = vm.createContext({ crypto, localStorage: storage, location: { pathname: '/project/' + project }, document: {
+    createElement: node, body: node(), querySelector: selector => ({ content: selector.includes('ol-user_id') ? user : project, dataset: {} }) } });
   vm.runInContext(source, context); return { api: context.overleafRecovery, storage, context };
 }
 function filter(api, raw = 'base') {
@@ -43,6 +45,29 @@ test('tabs and offline forks retain separate candidates and immutable review bas
 });
 test('malformed stored records are retained but never offered as valid copies', () => {
   const {api,storage}=client();filter(api)(change());const [{key}]=api.list(account,project);storage.setItem(key,'{"schema":1}');assert.throws(()=>api.read(key),/malformed/);assert.equal(api.list(account,project).length,0);assert.equal(storage.length,1);assert.throws(()=>api.read('unrelated-key'),/Invalid/);
+});
+test('review applies minimal native changes only against the exact connected document and preserves both sides', () => {
+  const { api, context } = client(); filter(api)(change('base\n', 'local\n'));
+  const record = api.list(account, project)[0].record;
+  vm.runInContext(readFileSync(new URL('../runtime/browser-recovery/diff.min.js', import.meta.url), 'utf8'), context);
+  let text = 'shared\nkeep\n', version = 10, buffered = false, writes = 0;
+  const socket = { socket: { connected: true }, on() {} };
+  const facade = { getValue: () => text, view: { state: { readOnly: false } }, cmChange(changes) {
+    writes++; for (const change of [...changes].reverse()) text = text.slice(0, change.from) + change.insert + text.slice(change.to);
+  } };
+  const container = { doc_id: docId, socket, doc: { getVersion: () => version, hasBufferedOps: () => buffered } };
+  api.attach(facade, container, 'main.tex'); const reviewed = api.reviewSnapshot(record);
+  version++; assert.throws(() => api.applyReviewed(record, reviewed, 'local\nkeep\n'), /shared document changed/); assert.equal(writes, 0);
+  assert(api.list(account, project).some(v => v.record.candidate === 'local\nkeep\n'));
+  const current = api.reviewSnapshot(record); text = 'new remote\nkeep\n';
+  assert.throws(() => api.applyReviewed(record, current, 'local\nkeep\n'), /shared document changed/); assert.equal(writes, 0);
+  const fresh = api.reviewSnapshot(record); api.applyReviewed(record, fresh, 'new remote\nkeep\nlocal\n'); assert.equal(writes, 1);
+  assert.equal(text, 'new remote\nkeep\nlocal\n'); assert(api.list(account, project).some(v => v.record.candidate === fresh.text));
+  for (const mode of ['disconnected', 'buffered', 'readonly', 'identity']) {
+    socket.socket.connected = mode !== 'disconnected'; buffered = mode === 'buffered'; facade.view.state.readOnly = mode === 'readonly';
+    container.doc_id = mode === 'identity' ? 'd'.repeat(24) : docId;
+    assert.throws(() => api.applyReviewed(record, fresh, 'refused')); assert.equal(writes, 1);
+  }
 });
 test('editor hook refuses duplicate/unknown/already-patched input', () => {
   const fixture='let{currentDoc:o}=e;const s=r.Z9.define;(0,y.WU)(e.currentDoc,e.handleError);return o.attachToCM6(t),{update(e){x}};return n.Nb.highest([s,i])};class u extends s.EventEmitter';

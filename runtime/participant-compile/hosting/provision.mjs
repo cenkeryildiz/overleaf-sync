@@ -11,6 +11,7 @@ import { patchBundle } from '../../fast-preview/apply.mjs';
 import { patchCaret, patchImmediateCaret, patchTypingCaret } from '../../live-caret/apply.mjs';
 import { patchSynctex, patchPdfViewer } from '../../synctex-selection/apply.mjs';
 import { patchSdk } from '../sdk-patch.mjs';
+import { patchOutputAuthorization } from './output-auth.mjs';
 
 const root = '/overleaf/services/web', publicRoot = root + '/public';
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -73,6 +74,8 @@ function version(value) {
 }
 writeFileSync(join(publicRoot, 'manifest.json'), JSON.stringify(version(JSON.parse(originalManifest))));
 apply('router', join(root, 'app/src/router.mjs'));
+const nginxTemplate = '/etc/nginx/templates/overleaf.conf.template';
+writeFileSync(nginxTemplate, patchOutputAuthorization(pinned(nginxTemplate, '1e1f07a3800714df4cdcd6ff13e642807c24024c04023e1cb79689480a8d9c94')));
 apply('email', join(root, 'app/src/Features/Email/EmailSender.mjs'));
 apply('sync', '/overleaf/services/clsi/app/js/CompileManager.js');
 

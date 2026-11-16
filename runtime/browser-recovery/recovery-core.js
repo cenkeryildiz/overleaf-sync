@@ -12,7 +12,7 @@
   }
   const writer = randomUUID();
   const entries = new Map();
-  let current, controls;
+  let current, controls, offeredReview;
   const id = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
   const valid = value => value?.schema === 1 && id(value.account) && id(value.project) && id(value.doc)
     && typeof value.writer === 'string' && /^[a-f0-9-]{36}$/.test(value.writer)
@@ -125,8 +125,52 @@
       location.assign('/recovery/local-workspace.html#' + encodeURIComponent(name));
     } catch (error) { status(error.message, true); }
   }
+  function reviewSnapshot(record) {
+    if (!valid(record) || !current) throw Error('Recovery copy is unavailable');
+    const { facade, container } = current, identity = scope(container), doc = container.doc;
+    if (['account', 'project', 'doc'].some(name => identity[name] !== record[name])) throw Error('Open this copy with its own account, project and document');
+    if (!container.socket.socket.connected || !doc || doc.hasBufferedOps()) throw Error('Wait for the shared document to connect and finish saving');
+    const version = doc.getVersion(), text = facade.getValue();
+    if (!Number.isSafeInteger(version) || version < record.base.version || facade.view.state.readOnly) throw Error('This document is not ready for editing');
+    return { ...identity, version, text, facade, container };
+  }
+  function applyReviewed(record, reviewed, text) {
+    if (typeof text !== 'string' || text.length > 2000000 || /[\uD800-\uDFFF\0]/.test(text)) throw Error('Resolution exceeds the supported text limits');
+    // Preserve both sides even when a later stale-review check refuses the apply.
+    save(fork({ ...record, candidate: text }));
+    const now = reviewSnapshot(record);
+    if (now.container !== reviewed.container || now.facade !== reviewed.facade || now.version !== reviewed.version || now.text !== reviewed.text)
+      throw Error('The shared document changed. Refresh the shared version and review again. Your resolution is kept.');
+    const parts = globalThis.Diff?.diffLines(now.text, text, { timeout: 75, maxEditLength: 2000 });
+    if (!parts || parts.filter(p => !p.added).map(p => p.value).join('') !== now.text || parts.filter(p => !p.removed).map(p => p.value).join('') !== text)
+      throw Error('Comparison is too large; export your retained resolution for review');
+    save(fork({ ...record, candidate: now.text }));
+    let offset = 0, change;
+    const changes = [];
+    for (const part of parts) {
+      if (part.added || part.removed) {
+        if (!change) changes.push(change = { from: offset, to: offset, insert: '' });
+        if (part.removed) { offset += part.value.length; change.to = offset; }
+        else change.insert += part.value;
+      } else { offset += part.value.length; change = undefined; }
+    }
+    if (changes.length) now.facade.cmChange(changes);
+    if (now.facade.getValue() !== text) throw Error('The editor refused the change. Your resolution is kept.');
+  }
+  async function openReview(key) {
+    try {
+      if (!globalThis.overleafRecoveryReview) await new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = '/recovery/review.js?v=' + globalThis.overleafRecoveryBuild.version;
+        script.onload = resolve; script.onerror = () => { script.remove(); reject(Error('Review interface did not load; copies are kept')); }; document.head.append(script);
+      });
+      await globalThis.overleafRecoveryReview(key);
+    } catch (error) { status(error.message, true); }
+  }
   function attach(facade, container, name) {
     current = { facade, container, name };
+    if (location.hash?.startsWith('#recovery=') && location.hash !== offeredReview) {
+      offeredReview = location.hash; queueMicrotask(() => openReview(decodeURIComponent(location.hash.slice(10))));
+    }
     if (controls?.isConnected) return;
     controls = document.createElement('div'); controls.className = 'recovery-controls'; controls.setAttribute('aria-label', 'Workspace connection and recovery');
     const connection = document.createElement('span'); connection.textContent = container.socket.socket.connected ? 'Connected' : 'Disconnected'; controls.append(connection);
@@ -137,8 +181,11 @@
     const copies = document.createElement('button'); copies.type = 'button'; copies.className = 'btn btn-sm btn-secondary'; copies.textContent = 'Recovery copies'; copies.addEventListener('click', async () => {
       try { const scoped = scope(current.container), first = list(scoped.account, scoped.project)[0]; if (!first) { status('No recovery copies yet'); return; } await offlineReady(); location.assign('/recovery/local-workspace.html#' + encodeURIComponent(first.key)); } catch (error) { status(error.message, true); }
     }); controls.append(copies);
+    const review = document.createElement('button'); review.type = 'button'; review.className = 'btn btn-sm btn-secondary'; review.textContent = 'Review local changes';
+    review.onclick = () => openReview(); controls.append(review);
     controls.style.cssText = 'position:fixed;bottom:8px;right:16px;z-index:1000;display:flex;gap:8px;align-items:center;padding:6px;background:var(--bg-primary,#fff);color:var(--content-primary,#333);border:1px solid #bbb;border-radius:5px;font:12px system-ui;max-width:90vw';
     document.body.append(controls);
   }
-  globalThis.overleafRecovery = Object.freeze({ prefix, valid, key, read, save, list, fork, extension, attach, offlineReady });
+  globalThis.overleafRecovery = Object.freeze({ prefix, valid, key, read, save, list, fork, extension, attach, offlineReady, reviewSnapshot, applyReviewed,
+    currentScope: () => scope(current.container) });
 })();

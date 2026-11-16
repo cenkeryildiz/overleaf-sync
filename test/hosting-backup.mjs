@@ -9,7 +9,8 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const chromium = process.env.BACKUP_FAULTS_ONLY === '1' ? undefined :
+  createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright').chromium;
 // Colima shares the home directory, not macOS /var/folders temporary paths.
 const root = mkdtempSync(join(homedir(), '.latex-backup-'));
 const prefix = 'latex-backup-' + randomBytes(6).toString('hex');
@@ -155,8 +156,57 @@ async function transfer(repo, transported) {
   const inDone = new Promise((resolve, reject) => into.on('error', reject).on('close', code => code === 0 ? resolve() : reject(Error('Repository import failed'))));
   await Promise.all([inDone, pipeline(createReadStream(path), into.stdin)]); metrics.encryptedTransferBytes = statSync(path).size;
 }
+async function checkBackupFaults() {
+  const input = createVolume('fault-input'), repository = createVolume('fault-repository');
+  const helper = (args, ...volumes) => docker(['run', '--rm', '--label', label, '--network', 'none', '--entrypoint', '/bin/sh', ...volumes.flat(), redisImage, '-ec', args]);
+  helper('printf "Exact synthetic source.\\n" > /input/main.tex; dd if=/dev/urandom of=/input/figure.bin bs=1024 count=256 status=none', mount(input, '/input', false));
+  const expected = helper('cd /input; sha256sum main.tex figure.bin', mount(input, '/input'));
+  restic(repository, ['init']);
+  const initial = restic(repository, ['backup', '/source', '--json'], mount(input, '/source'));
+  const snapshot = initial.split('\n').map(JSON.parse).find(item => item.message_type === 'summary')?.snapshot_id; assert(snapshot);
+  restic(repository, ['check', '--read-data']);
+  const snapshots = () => JSON.parse(restic(repository, ['snapshots', '--json'])).map(item => item.id).sort();
+  const verified = snapshots(); assert.equal(verified.length, 1);
+  assert.throws(() => restic(repository, ['backup', '/nonexistent-fixture-input', '--json']), 'Missing input must fail');
+  assert.deepEqual(snapshots(), verified, 'Failed backup must not promote a new snapshot');
+
+  // Corrupt a separate copy before the interruption adds any unreferenced packs.
+  const damaged = createVolume('damaged-repository');
+  helper('cp -a /intact/. /damaged/', mount(repository, '/intact'), mount(damaged, '/damaged', false));
+  helper('pack=$(find /damaged/data -type f -print -quit); test -n "$pack"; dd if=/dev/zero of="$pack" bs=1 count=32 conv=notrunc status=none', mount(damaged, '/damaged', false));
+  assert.throws(() => restic(damaged, ['check', '--read-data']), 'Tampered ciphertext must fail integrity verification');
+  const damagedTarget = createVolume('damaged-target');
+  assert.throws(() => restic(damaged, ['restore', snapshot, '--target', '/restore', '--verify'], mount(damagedTarget, '/restore', false)), 'Corrupt restore must fail');
+  assert.equal(helper('cd /input; sha256sum main.tex figure.bin', mount(input, '/input')), expected, 'Failed restore must not touch source');
+
+  const pendingInput = createVolume('pending-input');
+  helper('cp -a /input/. /pending/; dd if=/dev/urandom of=/pending/new-large.bin bs=1M count=64 status=none', mount(input, '/input'), mount(pendingInput, '/pending', false));
+  const interrupted = prefix + '-interrupted';
+  run(interrupted, ['--network', 'none', '--cpus=0.1', '--memory=256m', '--read-only', '--tmpfs', '/tmp',
+    ...mount(repository, '/repo', false), ...mount(pendingInput, '/source'), ...bind(join(root, 'password'), '/key'),
+    '--env', 'RESTIC_REPOSITORY=/repo', '--env', 'RESTIC_PASSWORD_FILE=/key', '--env', 'RESTIC_CACHE_DIR=/tmp/cache', resticImage, 'backup', '/source', '--json']);
+  await waitFor(() => {
+    assert.equal(docker(['inspect', '--format', '{{.State.Running}}', interrupted]), 'true', 'Backup must still be in flight');
+    return helper('test -n "$(find /repo/locks -type f -print -quit)"', mount(repository, '/repo')) === '';
+  }, 'in-flight backup repository lock', 15000);
+  docker(['kill', '--signal', 'KILL', interrupted]);
+  const state = JSON.parse(docker(['inspect', '--format', '{{json .State}}', interrupted]));
+  assert.equal(state.ExitCode, 137); assert(!state.OOMKilled);
+  // Only this exclusively owned synthetic repository may have all locks removed.
+  assert.equal(docker(['volume', 'inspect', '--format', '{{index .Labels "latex.backup.fixture"}}', repository]), prefix);
+  assert.equal(docker(['inspect', '--format', '{{.State.Running}}', interrupted]), 'false');
+  restic(repository, ['unlock', '--remove-all']);
+  assert.deepEqual(snapshots(), verified, 'Killed backup must leave the verified restore point unchanged');
+  restic(repository, ['check', '--read-data']);
+  const restored = createVolume('fault-restored');
+  restic(repository, ['restore', snapshot, '--target', '/restore', '--verify'], mount(restored, '/restore', false));
+  const actual = helper('cd /restore/source; test ! -e new-large.bin; sha256sum main.tex figure.bin', mount(restored, '/restore'));
+  assert.equal(actual, expected, 'Intact explicit snapshot must restore byte-identical files after failures');
+  console.log(JSON.stringify({ backupFaultsPassed: true, failedBackupNotPromoted: true, interruptedBackupPreservedSnapshot: true,
+    tamperedRepositoryRefused: true, corruptRestoreRefused: true, intactRestoreExact: true }));
+}
 try {
-  console.log('Fixture ' + prefix + ': building isolated source instance');
+  console.log('Fixture ' + prefix + (process.env.BACKUP_FAULTS_ONLY === '1' ? ': isolated backup faults' : ': building isolated source instance'));
   const config = join(root, 'config'); mkdirSync(config, { mode: 0o700 });
   writeFileSync(join(config, 'base.cjs'), docker(['run', '--rm', '--network', 'none', '--entrypoint', 'cat', appImage, '/etc/overleaf/settings.js']), { mode: 0o644 });
   writeFileSync(join(config, 'settings.cjs'), `const s=require('/etc/overleaf/fixture-base.cjs');\ns.security={...s.security,sessionSecret:process.env.FIXTURE_SESSION_SECRET};\ns.participantCompilationOnly=true;\nmodule.exports=s;\n`, { mode: 0o644 });
@@ -166,6 +216,8 @@ try {
   privateFile(join(root, 'password'), randomBytes(48).toString('hex')); privateFile(join(root, 'wrong-password'), randomBytes(48).toString('hex'));
   for (const [name, bytes] of Object.entries(files)) privateFile(join(root, name), name === 'main.tex' ? source : bytes);
   execFileSync('/usr/bin/zip', ['-q', join(root, 'input.zip'), ...Object.keys(files)], { cwd: root });
+  if (process.env.BACKUP_FAULTS_ONLY === '1') { await checkBackupFaults(); success = true; }
+  else {
   const sourceStack = makeStack('source'); let started = performance.now();
   await startStores(sourceStack, true); await startApp(sourceStack, config); metrics.sourceBootMs = performance.now() - started;
   const register = `import R from './app/src/Features/User/UserRegistrationHandler.mjs';let raw='';for await(const c of process.stdin)raw+=c;for(const u of JSON.parse(raw)){const v=await R.promises.registerNewUser(u);console.log('TEST_USER:'+v._id)}process.exit(0);`;
@@ -223,6 +275,7 @@ try {
   assert([403, 404].includes(denied.status()), 'Non-member may not export restored files');
   await browser.close(); browser = null; stop(restored); success = true;
   console.log(JSON.stringify({ passed: true, ...metrics }));
+  }
 } catch (error) {
   // Do not print child command buffers or synthetic credentials. Keep recoverable data on failure.
   console.error(JSON.stringify({ passed: false, stageError: error.message?.slice(0, 200), fixture: prefix, privateScratch: root }));
