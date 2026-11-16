@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+const commands = [], expect = [];
+function ask(body, check = value => assert(value.ok)) { commands.push({ now: 0, ...body, id: commands.length }); expect.push(check); }
+const alice = { project: 'p', user: 'a' }, bob = { project: 'p', user: 'b' };
+ask({ op: 'join', ...alice, worker: 'wa' }); ask({ op: 'join', ...bob, worker: 'wb' });
+ask({ op: 'queue', ...alice, job: 'a1', digest: 'd1' }); ask({ op: 'queue', ...bob, job: 'b1', digest: 'd2' });
+ask({ op: 'claim', ...bob, worker: 'wb' }, r => assert.equal(r.value.job, 'a1'));
+ask({ op: 'claim', ...bob, worker: 'wb' }, r => assert.equal(r.value.job, null));
+ask({ op: 'claim', ...alice, worker: 'wa' }, r => assert.equal(r.value.job, 'b1'));
+ask({ op: 'finish', ...bob, worker: 'wb', job: 'a1', lease: 1, digest: 'wrong' }, r => assert(!r.ok));
+ask({ op: 'heartbeat', ...bob, project: 'unrelated', worker: 'wb', job: 'a1', lease: 1 }, r => assert(!r.ok));
+ask({ op: 'queue', ...alice, job: 'a2' }, r => assert(!r.ok));
+ask({ op: 'status', job: 'a1' }, r => assert.equal(r.value.state, 'leased'));
+ask({ op: 'queue', ...alice, job: 'a2', digest: 'd3' });
+ask({ op: 'finish', ...bob, worker: 'wb', job: 'a1', lease: 1, digest: 'd1' }, r => assert(!r.ok));
+ask({ op: 'leave', ...alice, worker: 'wa' });
+ask({ op: 'claim', ...bob, worker: 'wb' }, r => assert.equal(r.value.job, 'a2'));
+ask({ op: 'heartbeat', ...bob, worker: 'wb', job: 'a2', lease: 3, now: 29000 });
+ask({ op: 'finish', ...bob, worker: 'wb', job: 'a2', lease: 3, digest: 'd3', now: 30000 });
+ask({ op: 'queue', ...alice, job: 'a3', digest: 'd4', now: 30000 });
+ask({ op: 'commit', job: 'a2', now: 30000 }, r => assert(!r.ok));
+ask({ op: 'claim', ...bob, worker: 'wb', now: 30000 }, r => assert.equal(r.value.job, 'b1'));
+ask({ op: 'claim', ...bob, worker: 'wb', now: 61000 }, r => assert.equal(r.value.job, 'a3'));
+ask({ op: 'finish', ...bob, worker: 'wb', job: 'b1', lease: 4, digest: 'd2', now: 61000 }, r => assert(!r.ok));
+const run = spawnSync('docker', ['run', '--rm', '-i', '--network', 'none', '--entrypoint', '/opt/participant/overleaf-participant-coordinator',
+  'overleafcep-local/sharelatex-participant:20261116'], { input: commands.map(v => JSON.stringify(v)).join('\n') + '\n', encoding: 'utf8' });
+assert.equal(run.status, 0, run.stderr); const replies = run.stdout.trim().split('\n').map(JSON.parse); assert.equal(replies.length, commands.length);
+replies.forEach((reply, i) => { try { expect[i](reply); } catch (error) { error.message += ` at command ${i}: ${JSON.stringify(commands[i])}: ${JSON.stringify(reply)}`; throw error; } });
+console.log(`Participant coordinator: ${replies.length} identity, fairness, supersession and recovery assertions passed`);

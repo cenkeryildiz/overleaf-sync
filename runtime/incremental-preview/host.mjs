@@ -24,7 +24,7 @@ function ask(session, request) {
     session.child.stdin.write(JSON.stringify(request) + '\n', error => { if (error) session.pending?.reject(Error('Preview unavailable')); });
   });
 }
-async function snapshot(projectId, userId, body, loadAssets = true) {
+export async function snapshot(projectId, userId, body, loadAssets = true) {
   if (!/^[a-f0-9]{24}$/.test(body.docId) || typeof body.text !== 'string' || body.text.length > 2_000_000) throw Error('Invalid document');
   const request = await ClsiManager.promises.buildDocumentConversionRequest(projectId, userId, { compileGroup: 'standard' });
   const compile = request.compile;
@@ -48,7 +48,7 @@ async function snapshot(projectId, userId, body, loadAssets = true) {
     }
     if (size > 64 * 1024 * 1024) throw Error('Project exceeds preview limit');
   }
-  return { op: 'start', fingerprint, main: compile.rootResourcePath, active, resources, text: body.text, line: body.line };
+  return { op: 'start', fingerprint, main: compile.rootResourcePath, compiler: compile.compiler, active, resources, text: body.text, line: body.line };
 }
 export async function livePreview(req, res) {
   res.set('Cache-Control', 'no-store');

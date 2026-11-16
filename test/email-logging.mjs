@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+const code = `import assert from 'node:assert/strict';
+import Settings from '@overleaf/settings';import logger from '@overleaf/logger';
+assert(!Settings.email?.transport, 'This check requires disabled email; never send a real message');
+Settings.email ||= {}; Settings.email.qualificationSecret = 'synthetic-settings-secret';
+const captured=[]; const info=logger.info, warn=logger.warn, log=console.log;
+logger.info=(...args)=>captured.push(args); logger.warn=(...args)=>captured.push(args); console.log=(...args)=>captured.push(args);
+const Sender=(await import('./app/src/Features/Email/EmailSender.mjs')).default;
+await Sender.promises.sendEmail({to:'qualification@example.test',subject:'synthetic subject',html:'synthetic-invite-token',text:'synthetic-invite-token'},'qualification');
+logger.info=info;logger.warn=warn;console.log=log;
+const text=JSON.stringify(captured);assert(!text.includes('synthetic-settings-secret'),'Email settings leaked');assert(!text.includes('synthetic-invite-token'),'Message token leaked');
+console.log('Disabled email keeps message tokens and mail settings out of logs');process.exit(0);`;
+const output = execFileSync('docker', ['exec', '-i', '-w', '/overleaf/services/web', 'sharelatex', 'node', '--input-type=module', '-e', code], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+assert(output.includes('Disabled email keeps')); console.log('Disabled email keeps message tokens and mail settings out of logs');

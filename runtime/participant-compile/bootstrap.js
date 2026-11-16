@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+(() => {
+  if (new URLSearchParams(location.search).get('participant-compile') !== '1' || globalThis.overleafParticipantFetch) return;
+  const original = globalThis.fetch.bind(globalThis);
+  globalThis.overleafParticipantFetch = original;
+  const client = import('/participant/client.mjs');
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    if (url.origin === location.origin && /^\/project\/[a-f0-9]{24}\/compile$/.test(url.pathname) && init?.method === 'POST') {
+      try { return await (await client).compile(init.signal); }
+      catch { return Response.json({ error: 'Participant compilation unavailable.' }, { status: 503 }); }
+    }
+    return original(input, init);
+  };
+})();

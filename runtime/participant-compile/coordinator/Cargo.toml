@@ -1,0 +1,13 @@
+[package]
+name = "overleaf-participant-coordinator"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+serde_json = "=1.0.154"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
