@@ -34,6 +34,13 @@ export function patchTypingCaret(source) {
   assert.equal(source.split(before).length - 1, 1, 'Unexpected or already-patched typing caret scheduling');
   return source.replace(before, after);
 }
+export function patchCaretProjection(source) {
+  const before = 'class $ extends i.FB{mapMode=(()=>i.iR.Simple)();constructor(e){super(),this.highlight=e}eq(e){return e.highlight===this.highlight}}const U=i.sU.define({create:()=>i.om.empty,update(e,t){for(const e of t.effects)if(e.is(H)){const o=[];for(const n of e.value)if("cursor"in n)try{const{row:e,column:r}=n.cursor,s=C(t.state.doc,e+1,r);o.push(new $(n).range(s))}catch(e){j.$.debug("invalid highlight position",e)}return i.om.of(o,!0)}return t.docChanged&&!t.annotation(i.ZX.remote)&&(e=e.map(t.changes)),e}})';
+  // Keep the announced coordinates, including positions that were clamped before their text arrived.
+  const after = 'class $ extends i.FB{mapMode=(()=>i.iR.Simple)();constructor(e,t,o,n){super(),this.highlight=e,this.caret=t,this.basisRow=o,this.basisColumn=n}eq(e){return e.highlight===this.highlight&&e.caret.row===this.caret.row&&e.caret.column===this.caret.column&&e.basisRow===this.basisRow&&e.basisColumn===this.basisColumn}static at(e,t,o){const n=C(e,o.row+1,o.column),r=e.lineAt(n);return new $(t,o,r.number-1,n-r.from).range(n)}static reconcile(e,t){const o=!!t.annotation(i.ZX.remote),n=o?e:e.map(t.changes),r=[];return n.between(0,Math.max(t.startState.doc.length,t.state.doc.length),(e,n,s)=>{let a=s.caret;if(!o){const o=t.state.doc.lineAt(e);a={row:o.number-1+s.caret.row-s.basisRow,column:s.caret.row===s.basisRow?e-o.from+s.caret.column-s.basisColumn:s.caret.column}}r.push($.at(t.state.doc,s.highlight,a))}),i.om.of(r,!0)}}const U=i.sU.define({create:()=>i.om.empty,update(e,t){for(const e of t.effects)if(e.is(H)){const o=[];for(const n of e.value)if("cursor"in n)try{o.push($.at(t.state.doc,n,n.cursor))}catch(e){j.$.debug("invalid highlight position",e)}return i.om.of(o,!0)}return t.docChanged?$.reconcile(e,t):e}})';
+  assert.equal(source.split(before).length - 1, 1, 'Unexpected or already-patched caret projection');
+  return source.replace(before, after);
+}
 export function versionCaretManifest(manifest, version) {
   assert(/^[a-f0-9]{64}$/.test(version), 'Invalid asset digest');
   const result = structuredClone(manifest), asset = '/js/8607-0a5113f4c48f158e90d6.js';
