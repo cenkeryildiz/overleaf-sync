@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { patchCaret } from '../runtime/live-caret/apply.mjs';
+import { patchCaret, patchTypingCaret } from '../runtime/live-caret/apply.mjs';
+test('typing coalesces the latest caret after text flush and never publishes a destroyed document', () => {
+  const before = 'a.Z9.define(()=>{let e=null;return{update(t){(t.selectionSet||t.docChanged)&&(e&&window.cancelAnimationFrame(e),e=window.requestAnimationFrame(()=>{e=null,L(t.state)}))}}})';
+  const source = patchTypingCaret(before); assert.throws(() => patchTypingCaret(source)); assert.throws(() => patchTypingCaret(before + before));
+  const microtasks = [], tasks = new Map(), events = []; let serial = 0;
+  const factory = Function('a', 'queueMicrotask', 'window', 'L', 'return ' + source)(
+    { Z9: { define: f => f } }, f => microtasks.push(f),
+    { setTimeout: f => { tasks.set(++serial, f); return serial; }, clearTimeout: id => tasks.delete(id) }, state => events.push(state));
+  const plugin = factory();
+  plugin.update({ selectionSet: true, state: 'old' }); plugin.update({ docChanged: true, state: 'latest' });
+  assert.equal(microtasks.length, 1); assert.equal(tasks.size, 0);
+  tasks.set(++serial, () => events.push('text flushed'));
+  microtasks.shift()(); for (const task of tasks.values()) task(); tasks.clear();
+  assert.deepEqual(events, ['text flushed', 'latest']);
+  plugin.update({ selectionSet: true, state: 'closed' }); plugin.destroy(); microtasks.shift()(); assert.equal(tasks.size, 0);
+  const next = factory(); next.update({ docChanged: true, state: 'also closed' }); microtasks.shift()(); next.destroy(); assert.equal(tasks.size, 0);
+  assert.deepEqual(events, ['text flushed', 'latest']);
+});
 test('caret presence removes the resettable half-second wait while retaining solo idle behavior', () => {
   const input = 'let q=(0,r.useState)(500);return {cursorUpdateInterval:n.length>0?500:3e5};unrelated(500)';
   const output = patchCaret(input);

@@ -26,21 +26,26 @@ test('untrusted asset hash cannot overwrite an existing destination', () => {
     assert.equal(readFileSync(input, 'utf8'), fixture); assert.equal(readFileSync(output, 'utf8'), 'retained');
   } finally { rmSync(dir, { recursive: true }); }
 });
-async function manager(set) {
+async function manager(set, settings = {}) {
   const context = vm.createContext({});
   const source = readFileSync(new URL('../runtime/fast-preview/CompileManager.mjs', import.meta.url), 'utf8');
   const imports = {
-    'node:crypto': { default: {} }, '@overleaf/settings': { default: {} },
+    'node:crypto': { default: {} }, '@overleaf/settings': { default: settings },
     '../../infrastructure/RedisWrapper.mjs': { default: { client: () => ({ set }) } },
     '../Project/ProjectGetter.mjs': { default: {} }, '../Project/ProjectRootDocManager.mjs': { default: {} },
     '../User/UserGetter.mjs': { default: {} }, './ClsiManager.mjs': { default: {} },
-    '@overleaf/metrics': { default: {} }, '../../infrastructure/RateLimiter.mjs': { RateLimiter: class {} },
+    '@overleaf/metrics': { default: { Timer: class { done() {} } } }, '../../infrastructure/RateLimiter.mjs': { RateLimiter: class {} },
     '@overleaf/promise-utils': { callbackify: x => x, callbackifyMultiResult: x => x }, '../Errors/Errors.js': { default: {} },
   };
   const mod = new vm.SourceTextModule(source, { context });
   await mod.link(spec => { assert(Object.hasOwn(imports, spec)); const values = imports[spec]; return new vm.SyntheticModule(Object.keys(values), function () { for (const [k, v] of Object.entries(values)) this.setExport(k, v) }, { context }); });
   await mod.evaluate(); return mod.namespace.default;
 }
+test('participant-only hosting refuses central compilation before touching projects or the compiler', async () => {
+  const m = await manager(() => { throw Error('Central backend reached'); }, { participantCompilationOnly: true });
+  const result = await m.promises.compile('project', 'user');
+  assert.equal(result.status, 'error'); assert.equal(result.outputFiles.length, 0);
+});
 test('compile admission uses atomic NX with a bounded millisecond expiry', async () => {
   let args; const m = await manager(async (...x) => { args = x; return 'OK' });
   assert.equal(await m._checkIfRecentlyCompiled('project', 'user'), false);

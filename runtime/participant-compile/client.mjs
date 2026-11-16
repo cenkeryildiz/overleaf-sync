@@ -2,7 +2,7 @@
 import { BusyTexRunner, PdfLatex, XeLatex, LuaLatex } from './busytex-sdk.mjs?v=1.4.1-cancel1';
 const original = globalThis.overleafParticipantFetch;
 const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1];
-let runner, worker, stopped = false, timer, active, lastJob, ready;
+let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const status = document.createElement('span');
 status.setAttribute('role', 'status'); status.style.cssText = 'padding:4px 8px;font:12px system-ui';
@@ -66,12 +66,13 @@ async function contribute() {
       } catch {
         clearInterval(timer); clearTimeout(deadline);
         if (!lost && !stopped) await request({ op: 'fail', worker, job: job.job, lease: job.lease, digest: job.digest }).catch(() => {});
-        show(lost ? 'Compilation interrupted; work will be reassigned' : 'Compilation failed; source remains saved');
+        show(lost ? 'Compilation interrupted; reconnecting device' : 'Compilation failed; source remains saved');
         if (lost && !stopped) {
           runner.terminate();
           await request({ op: 'leave', worker }).catch(() => {});
           await runner.initialize(true);
           worker = (await request({ op: 'join' })).worker;
+          show('Sharing compilation with this project');
         }
       } finally { clearInterval(timer); clearTimeout(deadline); active = null; }
     }
@@ -82,7 +83,9 @@ ready = project ? initialize() : Promise.reject(Error('Project unavailable'));
 ready.catch(() => { stopped = true; show('Device compilation unavailable; reload to retry'); });
 
 export async function compile(signal) {
+  const sequence = generation;
   await ready;
+  if (sequence !== generation) throw Error('Compilation canceled');
   const deadline = Date.now() + 180000;
   while (!globalThis.overleafParticipantEditor && Date.now() < deadline && !signal?.aborted) await pause(100);
   const editor = globalThis.overleafParticipantEditor;
@@ -90,6 +93,9 @@ export async function compile(signal) {
   const text = editor.facade.getValue(), docId = String(editor.docId);
   if (lastJob) await request({ op: 'cancel', job: lastJob }).catch(() => {});
   const queued = await request({ op: 'queue', docId, text });
+  if (sequence !== generation) {
+    await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw Error('Compilation canceled');
+  }
   lastJob = queued.job;
   show('Waiting for a project device…');
   try {
@@ -105,6 +111,14 @@ export async function compile(signal) {
     }
     throw Error('Compilation canceled');
   } catch (error) { await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw error; }
+}
+export async function cancel() {
+  generation++;
+  const job = lastJob; lastJob = null;
+  if (job) await request({ op: 'cancel', job }).catch(() => {});
+  if (active?.job === job) runner.terminate();
+  show('Compilation stopped; source remains saved');
+  return Response.json({ stopped: true });
 }
 addEventListener('pagehide', () => {
   stopped = true; clearInterval(timer); runner?.terminate();

@@ -69,3 +69,55 @@
 
    const handleClientUpdated = useCallback(
      (client: OnlineUser) => {
+
+--- a/services/web/frontend/js/features/source-editor/extensions/cursor-position.ts
++++ b/services/web/frontend/js/features/source-editor/extensions/cursor-position.ts
+@@ -43,24 +43,34 @@
+       }
+     }),
+ 
+-    // Asynchronously dispatch cursor position when the selection changes and
+-    // provide a little debouncing. Using requestAnimationFrame postpones it
+-    // until the next CM6 DOM update.
++    // Publish after pending text-flush timers without waiting for the next display frame.
+     ViewPlugin.define(() => {
+-      let animationFrameRequest: number | null = null
+-
++      let pendingState: EditorState | null = null
++      let queued = false
++      let timer: number | null = null
++      let destroyed = false
+       return {
+         update(update) {
+-          if (update.selectionSet || update.docChanged) {
+-            if (animationFrameRequest) {
+-              window.cancelAnimationFrame(animationFrameRequest)
+-            }
+-            animationFrameRequest = window.requestAnimationFrame(() => {
+-              animationFrameRequest = null
+-              dispatchCursorPosition(update.state)
+-            })
+-          }
++          if (!update.selectionSet && !update.docChanged) return
++          pendingState = update.state
++          if (queued) return
++          queued = true
++          queueMicrotask(() => {
++            if (destroyed) return
++            timer = window.setTimeout(() => {
++              timer = null
++              queued = false
++              const state = pendingState!
++              pendingState = null
++              if (!destroyed) dispatchCursorPosition(state)
++            }, 0)
++          })
+         },
++        destroy() {
++          destroyed = true
++          pendingState = null
++          if (timer !== null) window.clearTimeout(timer)
++        },
+       }
+     }),
+   ]

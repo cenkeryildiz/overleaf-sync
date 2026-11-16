@@ -30,6 +30,7 @@ function generateBuildId() {
 }
 
 async function compile(projectId, userId, options = {}) {
+  if (Settings.participantCompilationOnly === true) return { status: 'error', outputFiles: [] }
   const recentlyCompiled = await CompileManager._checkIfRecentlyCompiled(
     projectId,
     userId

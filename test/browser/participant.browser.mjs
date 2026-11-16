@@ -33,7 +33,7 @@ try { await withSyntheticAccounts(async users => {
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
       if (url.origin !== base) { external.push(url.origin); return route.abort(); }
-      if (/\/compile$/.test(url.pathname)) { nativeCompiles.push(url.pathname); return route.abort(); }
+      if (/\/compile(?:\/stop)?$/.test(url.pathname)) { nativeCompiles.push(url.pathname); return route.abort(); }
       return route.continue();
     });
     const page = await context.newPage(); page.setDefaultTimeout(20000);
@@ -67,6 +67,13 @@ try { await withSyntheticAccounts(async users => {
     const extracted = readFileSync(join(work, 'output.txt'), 'utf8');
     assert(extracted.includes('Participant compilation fixture.')); assert(extracted.includes('Exact child source.'));
     assert(extracted.includes('Synthetic Author'), 'Bibliography must have completed');
+    const info = execFileSync('/Users/macc/miniforge3/envs/myproject/bin/pdfinfo', [join(work, 'output.pdf')], { encoding: 'utf8' });
+    assert(/Page size:\s+612 x 792 pts/.test(info), 'The exported PDF must preserve letter-page geometry');
+    const fonts = execFileSync('/Users/macc/miniforge3/envs/myproject/bin/pdffonts', [join(work, 'output.pdf')], { encoding: 'utf8' });
+    assert(/LMRoman10/.test(fonts) && !/Type 3/.test(fonts), 'The PDF must use the requested scalable Latin Modern text font');
+    execFileSync('/Users/macc/miniforge3/envs/myproject/bin/pdftotext', ['-bbox', join(work, 'output.pdf'), join(work, 'bbox.html')]);
+    const word = readFileSync(join(work, 'bbox.html'), 'utf8').match(/<word xMin="([\d.]+)"[^>]*>Participant<\/word>/);
+    assert(word && Math.abs(Number(word[1]) - 86.944) < 0.2, 'Requested margin and paragraph indentation must survive compilation');
     const target = page.locator('.textLayer span').filter({ hasText: /^Participant compilation fixture\./ }).first();
     const navigation = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/sync/pdf'));
     await target.dblclick(); const nav = await navigation;
@@ -83,12 +90,23 @@ try { await withSyntheticAccounts(async users => {
     assert.equal(await editor.evaluate(e => e.cmView.view.state.doc.toString()), expected);
     const compilerWorker = page.workers().find(worker => new URL(worker.url()).pathname.endsWith('/busytex_worker.js'));
     assert(compilerWorker, 'Browser compiler worker must be running');
-    const memory = await compilerWorker.evaluate(async () => { const module = await self.pipeline.Module; return module.HEAPU8?.length ?? module.HEAP8?.length; });
+    const memory = await compilerWorker.evaluate(async () => { const module = await self.pipeline.Module; return {
+      linearBytes: module.HEAPU8?.length ?? module.HEAP8?.length,
+      transferBytes: performance.getEntriesByType('resource').reduce((sum, entry) => sum + entry.transferSize, 0),
+    }; });
     await page.reload(); await editor.waitFor();
     await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, expected);
+    assert.equal(nativeCompiles.length, 0);
+    if (process.env.PARTICIPANT_POOL === '1') {
+      const { checkPool } = await import('./participant-pool.mjs');
+      await checkPool({ browser, alice: page, users, projectUrl, base });
+    }
+    if (process.env.PARTICIPANT_EDGES === '1') {
+      const { checkEdges } = await import('./participant-edges.mjs'); await checkEdges(page);
+    }
     assert.equal(nativeCompiles.length, 0);
     console.log(JSON.stringify({ passed: true, firstVisibleMs, warmVisibleMs, publicResponseBytes: publicBytes,
       workerLinearMemoryBytes: memory, exactSourceAfterReload: true, bibliography: true, inverseNavigation: true,
       nativeCompiles: nativeCompiles.length, externalRequestsBlocked: external.length, pageErrors: errors }));
   } finally { clearTimeout(hardStop); await browser.close(); }
-}); } finally { rmSync(work, { recursive: true, force: true }); }
+}, process.env.PARTICIPANT_POOL === '1' ? 5 : 2); } finally { rmSync(work, { recursive: true, force: true }); }

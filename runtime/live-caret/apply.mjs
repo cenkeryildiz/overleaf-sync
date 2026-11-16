@@ -27,6 +27,13 @@ export function patchImmediateCaret(source) {
   }
   return source;
 }
+export function patchTypingCaret(source) {
+  const before = 'a.Z9.define(()=>{let e=null;return{update(t){(t.selectionSet||t.docChanged)&&(e&&window.cancelAnimationFrame(e),e=window.requestAnimationFrame(()=>{e=null,L(t.state)}))}}})';
+  // Queue after this transaction's text-flush timers, without waiting for another display frame.
+  const after = 'a.Z9.define(()=>{let e=null,t=null,o=!1,n=!1;return{update(r){(r.selectionSet||r.docChanged)&&(t=r.state,o||(o=!0,queueMicrotask(()=>{n||(e=window.setTimeout(()=>{e=null,o=!1;const r=t;t=null,n||L(r)},0))})))},destroy(){n=!0,t=null,null!==e&&window.clearTimeout(e)}}})';
+  assert.equal(source.split(before).length - 1, 1, 'Unexpected or already-patched typing caret scheduling');
+  return source.replace(before, after);
+}
 export function versionCaretManifest(manifest, version) {
   assert(/^[a-f0-9]{64}$/.test(version), 'Invalid asset digest');
   const result = structuredClone(manifest), asset = '/js/8607-0a5113f4c48f158e90d6.js';

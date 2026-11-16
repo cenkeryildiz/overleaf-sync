@@ -21,6 +21,8 @@ if (kind === 'router') {
   once("    : getCompileDir(projectId, userId)\n  const timeout = 60 * 1000", "    : getCompileDir(projectId, userId)\n  if (runInOutputDir && !Settings.clsi?.dockerRunner) command.push('-d', directory)\n  const timeout = 60 * 1000");
 } else if (kind === 'editor') {
   assert.equal(hash, '4510ce9f048b891d5677316f905f0f4f190ae5fdd7a5462d188b7c9bb0be10e3');
+  const { patchTypingCaret } = await import('../live-caret/apply.mjs');
+  source = patchTypingCaret(source);
   source += '\n' + readFileSync(new URL('./editor.js', import.meta.url), 'utf8');
 } else if (kind === 'main') {
   assert.equal(hash, '100e8036346af0aae05c08e140ef86b1f8d1d0e6805c906d87b59d9d4bc34e53');
