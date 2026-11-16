@@ -1,20 +1,71 @@
 --- a/services/web/frontend/js/features/ide-react/context/online-users-context.tsx
 +++ b/services/web/frontend/js/features/ide-react/context/online-users-context.tsx
-@@ -83,7 +83,7 @@
-   const [currentPosition, setCurrentPosition] = useState<CursorPosition | null>(
-     null
-   )
+@@ -6,6 +6,7 @@
+   useCallback,
+   useMemo,
+   useState,
++  useRef,
+ } from 'react'
+ import { useIdeReactContext } from '@/features/ide-react/context/ide-react-context'
+ import { useConnectionContext } from '@/features/ide-react/context/connection-context'
+@@ -80,10 +81,8 @@
+   const [onlineUsersArray, setOnlineUsersArray] = useState<OnlineUser[]>([])
+   const [onlineUsersCount, setOnlineUsersCount] = useState(0)
+
+-  const [currentPosition, setCurrentPosition] = useState<CursorPosition | null>(
+-    null
+-  )
 -  const [cursorUpdateInterval, setCursorUpdateInterval] = useState(500)
++  const currentPosition = useRef<CursorPosition | null>(null)
 +  const [cursorUpdateInterval, setCursorUpdateInterval] = useState(0)
- 
+
    const calculateValues = useCallback(
      (onlineUsers: OnlineUsersContextValue['onlineUsers']) => {
-@@ -130,7 +130,7 @@
+@@ -130,7 +129,7 @@
        }
- 
+
        const cursorUpdateInterval =
 -        onlineUsersArray.length > 0 ? 500 : 60 * 1000 * 5
 +        onlineUsersArray.length > 0 ? 0 : 60 * 1000 * 5
- 
+
        return {
          onlineUsers: decoratedOnlineUsers,
+@@ -204,17 +203,24 @@
+     useCallback((event: CustomEvent<CursorPosition>) => {
+       const position = event.detail
+       if (position) {
+-        setCurrentPosition(position)
++        currentPosition.current = position
++        if (cursorUpdateInterval === 0 && currentDocumentId) {
++          socket.emit('clientTracking.updatePosition', {
++            row: position.row,
++            column: position.column,
++            doc_id: currentDocumentId,
++          })
++        }
+       }
+-    }, [])
++    }, [cursorUpdateInterval, currentDocumentId, socket])
+   )
+
+-  // Send the latest position to other clients when currentPosition changes
++  // Publish the latest position when peer/document state changes.
+   useEffect(() => {
+     const timer = window.setTimeout(() => {
+       socket.emit('clientTracking.updatePosition', {
+-        row: currentPosition?.row,
+-        column: currentPosition?.column,
++        row: currentPosition.current?.row,
++        column: currentPosition.current?.column,
+         doc_id: currentDocumentId,
+       })
+     }, cursorUpdateInterval)
+@@ -222,7 +228,7 @@
+     return () => {
+       window.clearTimeout(timer)
+     }
+-  }, [currentPosition, cursorUpdateInterval, currentDocumentId, socket])
++  }, [cursorUpdateInterval, currentDocumentId, socket])
+
+   const handleClientUpdated = useCallback(
+     (client: OnlineUser) => {
