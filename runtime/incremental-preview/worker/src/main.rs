@@ -1,8 +1,8 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
-use std::{fs, io::{self, BufRead, BufReader, Write}, os::unix::process::CommandExt,
+use std::{fs, io::{self, BufRead, BufReader, Read, Write}, os::unix::{process::CommandExt, fs::OpenOptionsExt},
     path::{Component, Path, PathBuf}, process::{Child, ChildStdin, Command, Stdio},
-    sync::{atomic::{AtomicI32, Ordering}, mpsc::{self, Receiver}}, thread, time::{Duration, Instant}};
+    sync::{atomic::{AtomicI32, Ordering}, mpsc::{self, Receiver, RecvTimeoutError}}, thread, time::{Duration, Instant}};
 
 static ENGINE: AtomicI32 = AtomicI32::new(0);
 extern "C" fn terminate(_: i32) { unsafe { let pid = ENGINE.load(Ordering::Relaxed); if pid > 0 { libc::kill(-pid, libc::SIGKILL); } libc::_exit(0); } }
@@ -14,8 +14,23 @@ fn relative(name: &str) -> Result<&Path, String> {
     if name.is_empty() || name.len() > 512 || name.contains(['\\', '\0']) || !p.components().all(|c| matches!(c, Component::Normal(_))) { return Err("invalid resource path".into()); } Ok(p)
 }
 
+fn record<R: BufRead>(reader: &mut R, limit: usize) -> io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    let size = reader.take(limit as u64 + 1).read_until(b'\n', &mut bytes)?;
+    if size == 0 { return Ok(None); }
+    if size > limit || bytes.last() != Some(&b'\n') { return Err(io::Error::new(io::ErrorKind::InvalidData, "record exceeds limit")); }
+    String::from_utf8(bytes).map(Some).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))
+}
+fn artifact(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).map_err(|_| "artifact unavailable")?;
+    let metadata = file.metadata().map_err(|_| "artifact metadata unavailable")?;
+    if !metadata.is_file() || metadata.len() > limit { return Err("artifact exceeds limit".into()); }
+    let mut bytes = Vec::new(); file.take(limit + 1).read_to_end(&mut bytes).map_err(|_| "artifact read failed")?;
+    if bytes.len() as u64 > limit { return Err("artifact exceeds limit".into()); } Ok(bytes)
+}
+
 // Linux Landlock confines every descendant to tool resources and its owned workspace.
-unsafe fn filesystem_sandbox(work: &Path) -> io::Result<()> {
+unsafe fn filesystem_sandbox(work: &Path, program: &Path) -> io::Result<()> {
     #[repr(C)] struct Rules { access: u64 }
     #[repr(C, packed)] struct Beneath { access: u64, parent: i32 }
     let abi = libc::syscall(libc::SYS_landlock_create_ruleset, std::ptr::null::<u8>(), 0, 1);
@@ -24,12 +39,12 @@ unsafe fn filesystem_sandbox(work: &Path) -> io::Result<()> {
     let fd = libc::syscall(libc::SYS_landlock_create_ruleset, &rules, std::mem::size_of::<Rules>(), 0) as i32;
     if fd < 0 { return Err(io::Error::last_os_error()); }
     let result = (|| {
-        for path in ["/usr", "/lib", "/lib64", "/opt", "/bin", "/sbin", "/etc/fonts", "/etc/texmf", "/etc/ld.so.cache", "/etc/localtime", "/media/rosetta", "/run/rosetta", "/dev/null", "/dev/urandom"].iter().map(Path::new).chain(std::iter::once(work)) {
+        for path in ["/usr", "/lib", "/lib64", "/opt", "/bin", "/sbin", "/etc/fonts", "/etc/texmf", "/etc/ld.so.cache", "/etc/localtime", "/dev/null", "/dev/urandom"].iter().map(Path::new).chain([work, program, Path::new("/opt/texpresso/bin/texpresso-xetex"), Path::new("/usr/local/texlive/2026/bin/aarch64-linux/kpsewhich"), Path::new("/lib/ld-linux-aarch64.so.1")]) {
             if !path.exists() { continue; }
             let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(io::Error::other)?;
             let parent = libc::open(name.as_ptr(), libc::O_PATH | libc::O_CLOEXEC);
             if parent < 0 { return Err(io::Error::last_os_error()); }
-            let access = if path == work { 0x7fff & !(64 | 2048) } else if path.is_dir() { 13 } else if path == Path::new("/dev/null") { 6 } else { 5 };
+            let access = if path == work { 0x7fff & !(1 | 64 | 2048) } else if [program, Path::new("/opt/texpresso/bin/texpresso-xetex"), Path::new("/usr/local/texlive/2026/bin/aarch64-linux/kpsewhich"), Path::new("/lib/ld-linux-aarch64.so.1")].contains(&path) { 5 } else if path.is_dir() { 12 } else if path == Path::new("/dev/null") { 6 } else { 4 };
             let beneath = Beneath { access, parent };
             let added = libc::syscall(libc::SYS_landlock_add_rule, fd, 1, &beneath, 0);
             libc::close(parent);
@@ -41,26 +56,34 @@ unsafe fn filesystem_sandbox(work: &Path) -> io::Result<()> {
     libc::close(fd); result
 }
 
-// Preserve Unix sockets used by the engine's checkpoints; deny network sockets in all descendants.
-unsafe fn sandbox(work: &Path, uid: u32) -> io::Result<()> {
+// Checkpoints are bounded by upstream MAX_PROCESS=32 and four host sessions.
+// A shared-UID RLIMIT_NPROC would also count unrelated web-service threads.
+// Preserve checkpoint Unix sockets; deny networking and cross-process inspection.
+unsafe fn sandbox(work: &Path, uid: u32, program: &Path) -> io::Result<()> {
     if libc::geteuid() == 0 {
         if libc::setgroups(0, std::ptr::null()) != 0 || libc::setgid(uid) != 0 || libc::setuid(uid) != 0 { return Err(io::Error::last_os_error()); }
     }
-    filesystem_sandbox(work)?;
+    filesystem_sandbox(work, program)?;
     if libc::setsid() < 0 { return Err(io::Error::last_os_error()); }
-    for (resource, limit) in [(libc::RLIMIT_AS, 2_147_483_648), (libc::RLIMIT_NOFILE, 256), (libc::RLIMIT_NPROC, 96), (libc::RLIMIT_CPU, 60)] {
+    for (resource, limit) in [(libc::RLIMIT_AS, 2_147_483_648), (libc::RLIMIT_NOFILE, 256), (libc::RLIMIT_CPU, 60)] {
         if libc::setrlimit(resource, &libc::rlimit { rlim_cur: limit, rlim_max: limit }) != 0 { return Err(io::Error::last_os_error()); }
     }
     let ins = |code, k, jt, jf| libc::sock_filter { code, k, jt, jf };
-    let mut filter = [
-        ins(0x20, 0, 0, 0), // syscall number
+    let mut filter = vec![
+        ins(0x20, 0, 0, 0),
+    ];
+    for syscall in [libc::SYS_ptrace, libc::SYS_process_vm_readv, libc::SYS_process_vm_writev, libc::SYS_pidfd_getfd, libc::SYS_setsid, libc::SYS_setpgid] {
+        filter.push(ins(0x15, syscall as u32, 0, 1));
+        filter.push(ins(0x06, 0x00050000 | libc::EACCES as u32, 0, 0));
+    }
+    filter.extend([
         ins(0x15, libc::SYS_socket as u32, 0, 4),
         ins(0x20, 16, 0, 0), // first argument: socket domain
         ins(0x15, libc::AF_UNIX as u32, 2, 0),
         ins(0x06, 0x00050000 | libc::EACCES as u32, 0, 0),
         ins(0x06, 0x7fff0000, 0, 0),
         ins(0x06, 0x7fff0000, 0, 0),
-    ];
+    ]);
     let program = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_mut_ptr() };
     if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 || libc::prctl(libc::PR_SET_SECCOMP, 2, &program) != 0 { return Err(io::Error::last_os_error()); }
     Ok(())
@@ -105,13 +128,12 @@ impl Session {
             .env("TEXPRESSO_BITMAP_FONTS", "/opt/texpresso/fonts").env("HOME", work)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let sandbox_root = work.to_path_buf();
-        unsafe { cmd.pre_exec(move || sandbox(&sandbox_root, uid)); }
-        let mut child = cmd.spawn().map_err(|_| "cannot start isolated renderer")?; ENGINE.store(child.id() as i32, Ordering::Relaxed);
+        unsafe { cmd.pre_exec(move || sandbox(&sandbox_root, uid, Path::new("/opt/texpresso/bin/texpresso"))); }
+        let mut child = cmd.spawn().map_err(|error| format!("renderer startup failed: errno {}", error.raw_os_error().unwrap_or(0)))?; ENGINE.store(child.id() as i32, Ordering::Relaxed);
         let input = child.stdin.take().unwrap(); let stdout = child.stdout.take().unwrap(); let stderr = child.stderr.take().unwrap();
         let (tx, events) = mpsc::sync_channel(16); let errors = tx.clone();
-        thread::spawn(move || { for line in BufReader::new(stderr).lines().map_while(Result::ok) { if line.contains("No fz nor vf font") || line.contains("could not represent character") || line.contains("bitmap font resource rejected") { let _ = errors.try_send(json!({"error":"font unavailable"})); } } });
-        thread::spawn(move || { for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if line.len() > 16 * 1024 * 1024 { break; }
+        thread::spawn(move || { let mut reader = BufReader::new(stderr); while let Ok(Some(line)) = record(&mut reader, 65536) { if line.contains("No fz nor vf font") || line.contains("could not represent character") || line.contains("bitmap font resource rejected") { let _ = errors.try_send(json!({"error":"font unavailable"})); } } });
+        thread::spawn(move || { let mut reader = BufReader::new(stdout); while let Ok(Some(line)) = record(&mut reader, 16 * 1024 * 1024) {
             if let Ok(value) = serde_json::from_str::<Value>(&line) { if value[0] == "frame" || value[0] == "frame-error" || value[0] == "synctex" { if tx.send(value).is_err() { break; } } }
         } });
         let mut session = Self { child, input, events, root: work.into(), active, source, revision: 0, page: None };
@@ -122,14 +144,14 @@ impl Session {
     fn frame(&mut self, timeout: Duration) -> Result<Value, String> {
         let until = Instant::now() + timeout;
         loop {
-            let message = self.events.recv_timeout(until.saturating_duration_since(Instant::now())).map_err(|_| "preview timed out")?;
+            let message = self.events.recv_timeout(until.saturating_duration_since(Instant::now())).map_err(|error| match error { RecvTimeoutError::Timeout => "preview timed out", RecvTimeoutError::Disconnected => "renderer stopped" })?;
             if message[0] == "frame-error" || message["error"].is_string() { return Err("font unavailable; use PDF".into()); }
             if message[0] != "frame" || message[6].as_u64() != Some(self.revision) { continue; }
             let serial = message[1].as_u64().ok_or("invalid frame")?;
             let file = self.root.join("frames").join(format!("{serial}.png"));
-            let png = fs::read(&file).map_err(|_| "frame unavailable")?; if png.len() > 8 * 1024 * 1024 { return Err("frame too large".into()); }
+            let png = artifact(&file, 8 * 1024 * 1024)?;
             let json_path = file.with_extension("json");
-            let layer: Value = serde_json::from_slice(&fs::read(&json_path).map_err(|_| "text layer unavailable")?).map_err(|_| "text layer invalid")?;
+            let layer: Value = serde_json::from_slice(&artifact(&json_path, 16 * 1024 * 1024)?).map_err(|_| "text layer invalid")?;
             for entry in fs::read_dir(self.root.join("frames")).map_err(|_| "frame directory unavailable")?.flatten() { let _ = fs::remove_file(entry.path()); }
             self.page = Some((message[2].as_u64().ok_or("invalid page")?, message[3].as_f64().ok_or("invalid width")?, message[4].as_f64().ok_or("invalid height")?));
             return Ok(json!({"revision":self.revision,"page":message[2],"width":message[3],"height":message[4],"pagesRendered":message[5],"png":B64.encode(png),"text":layer}));
@@ -168,8 +190,8 @@ fn run() -> Result<(), String> {
     if !work.is_absolute() || !work.is_dir() || fs::read_dir(&work).map_err(|_| "workspace unavailable")?.next().is_some() { return Err("workspace must be owned and empty".into()); }
     unsafe { libc::signal(libc::SIGTERM, terminate as libc::sighandler_t); libc::signal(libc::SIGINT, terminate as libc::sighandler_t); }
     let mut session: Option<Session> = None;
-    for line in io::stdin().lock().lines() {
-        let line = line.map_err(|_| "request read failed")?; if line.len() > 96 * 1024 * 1024 { break; }
+    let mut input = io::stdin().lock();
+    while let Some(line) = record(&mut input, 96 * 1024 * 1024).map_err(|_| "request exceeds limit")? {
         let result = match serde_json::from_str::<Value>(&line) {
             Ok(request) => match request["op"].as_str() {
                 Some("start") if session.is_none() => Session::start(&work, &request).and_then(|s| { session=Some(s); session.as_mut().unwrap().frame(Duration::from_secs(30)) }),
@@ -187,3 +209,51 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 fn main() { let work = std::env::args().nth(1); let result = run(); if let Some(work) = work { let path = Path::new(&work); if path.parent() == Some(Path::new("/var/lib/overleaf/data")) && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("live-preview-")) { let _ = fs::remove_dir_all(path); } } if result.is_err() { println!("{{\"ok\":false,\"error\":\"preview unavailable\"}}"); std::process::exit(1); } }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn records_and_artifacts_are_bounded_and_do_not_follow_links() {
+        let mut input = io::Cursor::new(b"ok\nlonger\n");
+        assert_eq!(record(&mut input, 3).unwrap().unwrap(), "ok\n");
+        assert!(record(&mut input, 3).is_err());
+        let work = std::env::temp_dir().join(format!("preview-files-{}", std::process::id()));
+        fs::create_dir(&work).unwrap();
+        fs::write(work.join("regular"), b"bytes").unwrap();
+        std::os::unix::fs::symlink(work.join("regular"), work.join("link")).unwrap();
+        assert_eq!(artifact(&work.join("regular"), 8).unwrap(), b"bytes");
+        assert!(artifact(&work.join("regular"), 2).is_err());
+        assert!(artifact(&work.join("link"), 8).is_err());
+        assert!(relative("../outside").is_err()); assert!(relative("/outside").is_err());
+        fs::remove_dir_all(work).unwrap();
+    }
+    #[test]
+    fn sandbox_child() {
+        let Some(work) = std::env::var_os("PREVIEW_SANDBOX_TEST_ROOT") else { return };
+        let work = PathBuf::from(work);
+        assert!(fs::read(work.with_extension("outside")).is_err());
+        fs::write(work.join("inside"), b"owned").unwrap();
+        assert_eq!(unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EACCES));
+        std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(unsafe { libc::setsid() }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EACCES));
+        for program in [Path::new("/bin/sh").to_path_buf(), work.join("blocked-exe")] {
+            assert_eq!(Command::new(program).status().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
+    }
+    #[test]
+    fn sandbox_confines_descendants_without_global_uid_process_limits() {
+        let work = std::env::temp_dir().join(format!("preview-sandbox-{}", std::process::id()));
+        fs::create_dir(&work).unwrap(); fs::write(work.with_extension("outside"), b"outside-fixture").unwrap();
+        let program = std::env::current_exe().unwrap(); fs::copy(&program, work.join("blocked-exe")).unwrap();
+        let mut command = Command::new(&program);
+        command.args(["--exact", "tests::sandbox_child", "--nocapture"]).env("PREVIEW_SANDBOX_TEST_ROOT", &work);
+        let root = work.clone(); let executable = program.clone(); let uid = unsafe { libc::geteuid() };
+        unsafe { command.pre_exec(move || sandbox(&root, uid, &executable)); }
+        let result = command.status();
+        fs::remove_dir_all(&work).unwrap(); fs::remove_file(work.with_extension("outside")).unwrap();
+        assert!(result.unwrap().success());
+    }
+}

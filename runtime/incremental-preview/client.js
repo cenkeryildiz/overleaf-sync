@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 (() => {
   const recovery = globalThis.overleafRecovery;
-  if (!recovery || globalThis.overleafLivePreview) return;
-  let current, session, enabled = false, failed = false, busy = false, epoch = 0, pending = false, button, panel, image, caption, lastFrame;
+  if (!recovery || globalThis.overleafLivePreview || new URLSearchParams(location.search).get('live-preview') !== '1') return;
+  let current, session, enabled = true, failed = false, busy = false, epoch = 0, pending = false, button, panel, image, caption, lastFrame;
   const encoder = new TextEncoder();
+  let accessible, hostState, hiddenChildren = [];
   function csrf() { const raw = document.querySelector('meta[name="ol-csrfToken"]')?.content || document.querySelector('meta[name="csrf-token"]')?.content; try { return JSON.parse(raw); } catch { return raw; } }
   async function request(body, keepalive = false) {
     const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1]; if (!project) throw Error('Project unavailable');
@@ -11,7 +12,7 @@
     if (!response.ok) throw Error('Live preview unavailable; PDF remains available.');
     return response.status === 204 ? null : response.json();
   }
-  function close() { const old = session; session = null; lastFrame = null; epoch++; panel?.remove(); panel = null; if (old) request({ op: 'close', token: old.token }, true).catch(() => {}); }
+  function close() { const old = session; session = null; lastFrame = null; epoch++; for (const [node, inert, aria] of hiddenChildren) { node.inert = inert; if (aria === null) node.removeAttribute('aria-hidden'); else node.setAttribute('aria-hidden', aria); } hiddenChildren = []; panel?.remove(); if (hostState) { hostState.host.style.position = hostState.position; hostState = null; } panel = null; accessible = null; if (old) request({ op: 'close', token: old.token }, true).catch(() => {}); }
   function status(message) { if (button) button.title = message; if (caption) caption.textContent = message; }
   function editor() { return document.querySelector('[aria-label^="Source Editor"]')?.cmView?.view; }
   function sourceLine() { const view = editor(); return view ? view.state.doc.lineAt(view.state.selection.main.head).number : 1; }
@@ -28,13 +29,14 @@
     if (!enabled || identity !== epoch || !current || session?.text !== current.facade.getValue()) return;
     const host = document.querySelector('[data-testid="pdf-viewer"]'); if (!host) return;
     if (!panel?.isConnected) {
-      host.style.position = 'relative'; panel = document.createElement('div'); panel.setAttribute('aria-label', 'Live preview');
+      hostState = { host, position: host.style.position }; if (getComputedStyle(host).position === 'static') host.style.position = 'relative'; hiddenChildren = [...host.children].map(node => [node, node.inert, node.getAttribute('aria-hidden')]); for (const [node] of hiddenChildren) { node.inert = true; node.setAttribute('aria-hidden', 'true'); } panel = document.createElement('div'); panel.setAttribute('aria-label', 'Live preview');
       panel.style.cssText = 'position:absolute;inset:0;z-index:5;overflow:auto;background:#ddd;display:flex;flex-direction:column;align-items:center';
-      caption = document.createElement('div'); caption.setAttribute('role', 'status'); caption.style.cssText = 'position:sticky;top:0;align-self:stretch;padding:5px 10px;background:#fff;color:#333;border-bottom:1px solid #bbb;font:12px system-ui;z-index:1'; panel.append(caption); host.append(panel);
+      caption = document.createElement('div'); caption.setAttribute('role', 'status'); caption.style.cssText = 'position:sticky;top:0;align-self:stretch;padding:5px 10px;background:#fff;color:#333;border-bottom:1px solid #bbb;font:12px system-ui;z-index:1'; panel.append(caption); accessible = document.createElement('div'); accessible.className = 'visually-hidden'; accessible.setAttribute('role', 'document'); panel.append(accessible); host.append(panel);
     }
     next.style.cssText = 'display:block;width:min(100%,816px);height:auto;background:white;box-shadow:0 1px 4px #888';
     next.addEventListener('dblclick', jump); image?.remove(); image = next; panel.append(next); lastFrame = frame;
     caption.textContent = `Live page ${frame.page + 1} · Final PDF updates separately`;
+    accessible.textContent = (frame.text.blocks || []).flatMap(block => (block.lines || []).map(line => line.text || '')).join('\n');
     panel.dataset.revision = String(frame.revision); panel.dataset.page = String(frame.page + 1);
     document.dispatchEvent(new CustomEvent('overleaf:live-frame', { detail: { revision: frame.revision, page: frame.page + 1 } }));
   }

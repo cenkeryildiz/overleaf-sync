@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Glue for the existing authenticated CE+ compile controller; the Rust worker owns preview state.
+import logger from '@overleaf/logger';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes, createHash } from 'node:crypto';
@@ -56,14 +57,16 @@ export async function livePreview(req, res) {
   if (!userId || !/^[a-f0-9]{24}$/.test(userId) || !/^[a-f0-9]{24}$/.test(projectId)) return res.sendStatus(401);
   if (!body || !['start', 'edit', 'jump', 'refresh', 'close'].includes(body.op)) return res.sendStatus(400);
   if (['start', 'edit', 'refresh'].includes(body.op) && (!Number.isInteger(body.line) || body.line < 1 || body.line > 1_000_000)) return res.sendStatus(400);
-  let session;
+  let session, stage = 'request';
   try {
     if (body.op === 'start') {
       if (sessions.size >= 4 || [...sessions.values()].filter(s => s.userId === userId).length >= 2) return res.status(429).json({ error: 'Live preview is busy. PDF remains available.' });
       const token = randomBytes(24).toString('hex');
       const slot = [0, 1, 2, 3].find(slot => ![...sessions.values()].some(s => s.slot === slot));
       session = { token, userId, projectId, slot, busy: false }; sessions.set(token, session);
+      stage = 'workspace';
       const work = await mkdtemp('/var/lib/overleaf/data/live-preview-');
+      stage = 'worker';
       const child = spawn('/opt/texpresso/bin/overleaf-live-preview', [work], { stdio: ['pipe', 'pipe', 'ignore'] });
       Object.assign(session, { child, work }); expiry(session);
       child.on('error', () => { session.pending?.reject(Error('Preview unavailable')); close(token); });
@@ -71,10 +74,12 @@ export async function livePreview(req, res) {
       createInterface({ input: child.stdout }).on('line', line => {
         try { const value = JSON.parse(line); const pending = session.pending; session.pending = null; pending?.resolve(value); } catch { session.pending?.reject(Error('Invalid preview response')); close(token); }
       });
+      stage = 'snapshot';
       const start = await snapshot(projectId, userId, body);
       Object.assign(session, { fingerprint: start.fingerprint, docId: body.docId });
+      stage = 'render';
       const result = await ask(session, { ...start, uid: 61000 + slot });
-      if (!result.ok) throw Error(result.error || 'Preview unavailable');
+      if (!result.ok) { session.failure = result.error; throw Error('Preview unavailable'); }
       return res.json({ ...result, token, active: start.active });
     }
     session = sessions.get(body.token);
@@ -96,7 +101,8 @@ export async function livePreview(req, res) {
     const result = await ask(session, { op: 'edit', base: body.base, revision: body.revision, offset: body.offset, remove: body.remove, insert: body.insert, line: body.line });
     if (!result.ok) throw Error(result.error || 'Preview unavailable');
     return res.json(result);
-  } catch {
+  } catch (error) {
+    logger.warn({ stage, failure: session?.failure, category: error.name }, 'Live preview unavailable');
     if (session) close(session.token);
     return res.status(503).json({ error: 'Live preview unavailable. The normal PDF compiler remains available.' });
   }
