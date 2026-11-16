@@ -1,0 +1,15 @@
+// Run in the trusted compiler service; touches only new synthetic job directories/containers.
+import assert from 'node:assert/strict';import Docker from 'dockerode';import Runner from './app/js/DockerRunner.mjs';import{mkdtemp,writeFile,readFile,rm}from'node:fs/promises';
+const docker=new Docker(),dir=await mkdtemp('/var/lib/overleaf/data/compiles/boundary-'),peer=await mkdtemp('/var/lib/overleaf/data/compiles/boundary-peer-'),host='/Users/macc/overleaf-ws1/toolkit/data/overleaf/data/compiles/'+dir.split('/').at(-1);
+const checks=[];let container;
+try{
+ const code='use Socket; open my $o, ">", "/compile/owned" or die $!; print $o "Owned"; close $o; open my $f, "<", $ARGV[0] and die "sibling readable"; open my $w, ">", $ARGV[0] and die "sibling writable"; exists $ENV{SYNTHETIC_APP_SECRET} and die "inherited secret"; -e "/var/run/docker.sock" and die "daemon socket exposed"; -e "/proc/'+process.pid+'/environ" and die "worker PID visible"; open my $r, ">", "/compile/result.txt" or die $!; print $r "BoundaryOK"; close $r;';
+ await writeFile(peer+'/private.txt','SyntheticOnly');process.env.SYNTHETIC_APP_SECRET='synthetic-not-a-credential';
+ const options=Runner._getContainerOptions(['perl','-e',code,peer+'/private.txt'],'overleafcep-local/compile:2026.1',{[host]:'/compile:rw'},10000,{},undefined,null);
+ for(const group of [undefined,'standard','priority','synctex','wordcount']){const o=Runner._getContainerOptions(['true'],'overleafcep-local/compile:2026.1',{[host]:'/compile:rw'},10000,{},group,null);assert.equal(o.HostConfig.Memory,1073741824);assert.equal(o.HostConfig.MemorySwap,1073741824);assert.equal(o.HostConfig.PidsLimit,64);assert.equal(o.HostConfig.NanoCpus,1000000000);assert.equal(o.HostConfig.NetworkMode,'none');assert.equal(o.HostConfig.ReadonlyRootfs,true);assert(o.HostConfig.SecurityOpt.includes('no-new-privileges'));assert.deepEqual(o.HostConfig.CapDrop,['ALL']);}
+ checks.push({name:'limits enforced for missing and named groups',passed:true});
+ container=await docker.createContainer(options);await container.start();const{StatusCode}=await container.wait();assert.equal(StatusCode,0,'Boundary job failed');assert.equal(await readFile(dir+'/result.txt','utf8'),'BoundaryOK');assert.equal(await readFile(dir+'/owned','utf8'),'Owned');assert.equal(await readFile(peer+'/private.txt','utf8'),'SyntheticOnly');const actual=await container.inspect();assert.equal(actual.Mounts.length,1);assert.equal(actual.Mounts[0].Destination,'/compile');assert.equal(actual.HostConfig.Memory,1073741824);assert.equal(actual.HostConfig.PidsLimit,64);assert.equal(actual.HostConfig.NetworkMode,'none');checks.push({name:'actual job files, secrets, daemon and process namespace',passed:true});
+ console.log(JSON.stringify({checks,resourceLimits:{memoryBytes:actual.HostConfig.Memory,pids:actual.HostConfig.PidsLimit,cpuNano:actual.HostConfig.NanoCpus}}));
+}finally{delete process.env.SYNTHETIC_APP_SECRET;await container?.remove({force:true});await rm(dir,{recursive:true,force:true});await rm(peer,{recursive:true,force:true});}
+
+process.exit(0);

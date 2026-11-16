@@ -1,0 +1,16 @@
+{
+  "standard": {
+    "HostConfig.Memory": 1073741824,
+    "HostConfig.MemorySwap": 1073741824,
+    "HostConfig.NanoCpus": 1000000000,
+    "HostConfig.PidsLimit": 64,
+    "HostConfig.ReadonlyRootfs": true,
+    "HostConfig.Tmpfs": {
+      "/tmp": "rw,noexec,nosuid,nodev,size=67108864"
+    },
+    "Labels": {
+      "com.cenker.overleaf.worker": "ws1"
+    },
+    "HostConfig.NetworkMode": "none"
+  }
+}

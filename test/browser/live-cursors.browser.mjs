@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const aliceEmail=process.env.OVERLEAF_TEST_ALICE_EMAIL||'alice@example.test',bobEmail=process.env.OVERLEAF_TEST_BOB_EMAIL||'bob@example.test';
 const base = process.env.OVERLEAF_TEST_BASE || 'http://127.0.0.1:8080';
 const work = mkdtempSync(join(tmpdir(), 'live-cursor-'));
 const name = 'Live collaboration demo ' + Date.now();
@@ -26,17 +27,17 @@ async function caret(p, word, offset = 0) {
   await editor(p).evaluate((e, { word, offset }) => { const v = e.cmView.view, at = v.state.doc.toString().indexOf(word); if (at < 0) throw Error('Anchor unavailable'); v.dispatch({ selection: { anchor: at + offset }, scrollIntoView: true }); v.focus(); }, { word, offset });
 }
 try {
-  const alice = await account('alice@example.test', process.env.OVERLEAF_TEST_ALICE_PASSWORD);
-  const bob = await account('bob@example.test', process.env.OVERLEAF_TEST_BOB_PASSWORD);
+  const alice = await account(aliceEmail, process.env.OVERLEAF_TEST_ALICE_PASSWORD);
+  const bob = await account(bobEmail, process.env.OVERLEAF_TEST_BOB_PASSWORD);
   const a = alice.page, b = bob.page;
   let projectUrl = process.env.OVERLEAF_TEST_PROJECT_URL;
   if (!projectUrl) {
-    await a.getByRole('button', { name: 'New project', exact: true }).click(); await a.getByText('Existing project (.zip)', { exact: true }).click();
+    await a.getByRole('button', { name: /^(New project|Create a new project)$/ }).click(); await a.getByText('Existing project (.zip)', { exact: true }).click();
     await a.locator('input[type=file]').first().setInputFiles(join(work, name + '.zip')); await a.waitForURL(/\/project\/[a-f0-9]+/); projectUrl = a.url();
     console.log(JSON.stringify({ retainedDemoProject: projectUrl })); await editor(a).waitFor();
     await a.getByRole('button', { name: /Share/ }).click(); const dialog = a.getByRole('dialog');
-    await dialog.locator('input[type=email]').fill('bob@example.test'); await dialog.getByRole('button', { name: 'Invite', exact: true }).click();
-    await dialog.getByText('bob@example.test', { exact: true }).waitFor(); await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
+    await dialog.locator('input[type=email]').fill(bobEmail); await dialog.getByRole('button', { name: 'Invite', exact: true }).click();
+    await dialog.getByText(bobEmail, { exact: true }).waitFor(); await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
     await b.reload(); const invite = b.getByRole('alert').filter({ hasText: name });
     await invite.getByRole('button', { name: 'Join Project', exact: true }).click(); await invite.getByText('Open Project', { exact: true }).click();
   } else { await a.goto(projectUrl); await b.goto(projectUrl); }
@@ -74,7 +75,7 @@ try {
     console.log(JSON.stringify({passed:true,base,projectUrl,loginMs:{alice:alice.loginMs,bob:bob.loginMs},caretMs,stream,exactFinalCaret:true,sourceUnchanged:true}));
   } else {
   await caret(a, 'Alice', 0); await caret(b, 'Bob', 0);
-  const started = performance.now(); await Promise.all([a.keyboard.type(markers.alice), b.keyboard.type(markers.bob)]);
+  const started = performance.now(); await Promise.all([a.keyboard.type(markers.alice,{delay:15}), b.keyboard.type(markers.bob,{delay:15})]);
   for (const p of [a,b]) await p.waitForFunction(m => { const t=document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString();return t?.includes(m.alice)&&t.includes(m.bob); }, markers);
   assert.equal(await text(a), await text(b)); const convergenceMs = performance.now() - started;
   const remoteHead = await editor(b).evaluate(e => e.cmView.view.state.selection.main.head);

@@ -43,10 +43,10 @@ try {
   const context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, serviceWorkers: 'block' });
   await context.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
   const page = await context.newPage(); page.setDefaultTimeout(20000);
-  await page.goto(base + '/login'); await page.locator('input[name=email]').fill('alice@example.test');
+  await page.goto(base + '/login'); await page.locator('input[name=email]').fill(process.env.OVERLEAF_TEST_ALICE_EMAIL||'alice@example.test');
   await page.locator('input[name=password]').fill(process.env.OVERLEAF_TEST_ALICE_PASSWORD);
   await page.getByRole('button', { name: /^Login/ }).click(); await page.waitForURL(base + '/project');
-  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await page.getByRole('button', { name: /^(New project|Create a new project)$/ }).click();
   await page.getByText('Existing project (.zip)', { exact: true }).click();
   await page.locator('input[type=file]').first().setInputFiles(join(work, readdirSync(work).find(f => f.endsWith('.zip'))));
   await page.waitForURL(/\/project\/[a-f0-9]+/); projectUrl = page.url(); console.log('Synthetic project: ' + projectUrl);
