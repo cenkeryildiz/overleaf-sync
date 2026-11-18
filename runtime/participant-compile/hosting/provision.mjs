@@ -2,15 +2,12 @@
 // Build only: assemble the qualified overlays from pinned public CE+ inputs.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, renameSync, rmSync, createWriteStream } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync, renameSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { Transform } from 'node:stream';
 import { patchBundle } from '../../fast-preview/apply.mjs';
 import { patchCaret, patchImmediateCaret, patchTypingCaret } from '../../live-caret/apply.mjs';
 import { patchSynctex, patchPdfViewer } from '../../synctex-selection/apply.mjs';
-import { patchSdk } from '../sdk-patch.mjs';
 import { patchOutputAuthorization } from './output-auth.mjs';
 import { provisionOffline } from '../../browser-recovery/provision-offline.mjs';
 import { patchRouter, patchSessionSockets } from '../../session-revocation/apply.mjs';
@@ -24,12 +21,6 @@ function pinned(path, digest) { const text = readFileSync(path, 'utf8'); assert.
 function apply(kind, path) {
   execFileSync(process.execPath, [new URL('../apply.mjs', import.meta.url).pathname, kind, path, path + '.participant']);
   renameSync(path + '.participant', path);
-}
-async function download(url, destination, algorithm, expected) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(300000) }); assert(response.ok, 'Public asset unavailable');
-  const hash = createHash(algorithm);
-  await pipeline(response.body, new Transform({ transform(chunk, _, next) { hash.update(chunk); next(null, chunk); } }), createWriteStream(destination, { flags: 'wx' }));
-  assert.equal(hash.digest(algorithm === 'sha512' ? 'base64' : 'hex'), expected, 'Public asset integrity mismatch');
 }
 
 const originalEditor = pinned(join(publicRoot, 'js', editorName), '9a78a0a8b867dec0d7e54357f4d78343fd9311e9fadc791950f25e263adedd24');
@@ -81,20 +72,12 @@ writeFileSync(nginxTemplate, patchOutputAuthorization(pinned(nginxTemplate, '1e1
 apply('email', join(root, 'app/src/Features/Email/EmailSender.mjs'));
 apply('sync', '/overleaf/services/clsi/app/js/CompileManager.js');
 
-const participant = join(publicRoot, 'participant'); mkdirSync(participant);
+// The cached busytex stage already placed the verified assets, license and patched SDK here.
+const participant = join(publicRoot, 'participant');
 copyFileSync(new URL('../client.mjs', import.meta.url), join(participant, 'client.mjs'));
-await download('https://registry.npmjs.org/texlyre-busytex/-/texlyre-busytex-1.4.1.tgz', '/tmp/busytex-sdk.tgz', 'sha512',
-  '7PswiiuCIYc0HGK/HyQz0At/6Pc9pMk7Qy+DkzHk+BGVInWetXaeZq2px7V06pHscJG215YOU6as/0sgRmulNA==');
-mkdirSync('/tmp/busytex-sdk'); execFileSync('tar', ['-xzf', '/tmp/busytex-sdk.tgz', '--no-same-owner', '-C', '/tmp/busytex-sdk', '--strip-components=1']);
-writeFileSync(join(participant, 'busytex-sdk.mjs'), patchSdk(readFileSync('/tmp/busytex-sdk/dist/index.js', 'utf8')));
-copyFileSync('/tmp/busytex-sdk/LICENSE', join(participant, 'BUSYTEX-LICENSE'));
-await download('https://github.com/TeXlyre/texlyre-busytex/releases/download/assets-v1.4.1/busytex-assets.tar.gz', '/tmp/busytex-assets.tar.gz', 'sha256',
-  '4f63731fe4ec9238d877846074ab424350add6f6e956944def389e6752d2c78b');
-execFileSync('tar', ['-xzf', '/tmp/busytex-assets.tar.gz', '--no-same-owner', '-C', participant]);
 renameSync(join(participant, 'busytex/busytex_worker.js'), join(participant, 'busytex/busytex_worker.original.js'));
 copyFileSync(new URL('../worker.js', import.meta.url), join(participant, 'busytex/busytex_worker.js'));
 await provisionOffline(publicRoot, '/overleaf/.yarn/cache/pdfjs-dist-npm-5.1.91-da7976c225-65ff148d09.zip');
-for (const path of ['/tmp/busytex-sdk', '/tmp/busytex-sdk.tgz', '/tmp/busytex-assets.tar.gz']) rmSync(path, { recursive: true, force: true });
 const realtime = '/overleaf/services/real-time/app/js/';
 writeFileSync(realtime + 'Router.js', patchRouter(pinned(realtime + 'Router.js', '8b48a1df3cfd314895d0c0cdbb0b0862a9f05ac381683c9159e3cb4b0962b26a')));
 writeFileSync(realtime + 'SessionSockets.js', patchSessionSockets(pinned(realtime + 'SessionSockets.js', '9e440d8be33020059545bcf30ab59ff112a41cb3ee8c507e76474442d95dc826')));
