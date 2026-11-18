@@ -32,7 +32,9 @@ async function initialize() {
     catalogDataPackages: ['/participant/busytex/texlive-recommended.js', '/participant/busytex/texlive-extra.js'],
     onDownloadProgress: p => show(`Preparing device compilation: ${Math.floor(p.percent)}%`),
   });
+  performance.mark('participant:initialize'); // measurement only (OPT-01)
   await runner.initialize(true);
+  performance.mark('participant:initialized');
   worker = (await request({ op: 'join' })).worker;
   show('Sharing compilation with this project');
   void contribute();
@@ -42,7 +44,7 @@ async function contribute() {
     while (!stopped) {
       const job = await request({ op: 'claim', worker });
       if (!job.job) { await pause(750); continue; }
-      active = job;
+      active = job; performance.mark('participant:claimed');
       let lost = false;
       timer = setInterval(() => request({ op: 'heartbeat', worker, job: job.job, lease: job.lease })
         .catch(() => { lost = true; runner.terminate(); }), 8000);
@@ -59,10 +61,11 @@ async function contribute() {
           // No source-derived public lookup endpoint: only pinned same-origin package catalogs.
           remoteEndpoint: '', shellHandlerScripts: [],
         }).catch(error => { lost = true; throw error; });
+        performance.mark('participant:compiled');
         if (lost || stopped || !result.success || !result.pdf || !result.synctex) throw Error('Compilation failed');
         await request({ op: 'finish', worker, job: job.job, lease: job.lease, digest: job.digest, pdfLength: result.pdf.length },
           new Blob([result.pdf, result.synctex], { type: 'application/octet-stream' }));
-        show('Device compilation complete');
+        performance.mark('participant:finished'); show('Device compilation complete');
       } catch {
         clearInterval(timer); clearTimeout(deadline);
         if (!lost && !stopped) await request({ op: 'fail', worker, job: job.job, lease: job.lease, digest: job.digest }).catch(() => {});
@@ -92,6 +95,7 @@ export async function compile(signal) {
   if (!editor || stopped || signal?.aborted) throw Error('Compilation unavailable');
   const text = editor.facade.getValue(), docId = String(editor.docId);
   if (lastJob) await request({ op: 'cancel', job: lastJob }).catch(() => {});
+  performance.mark('participant:queue');
   const queued = await request({ op: 'queue', docId, text });
   if (sequence !== generation) {
     await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw Error('Compilation canceled');
@@ -103,6 +107,7 @@ export async function compile(signal) {
       if (editor.facade.getValue() !== text) throw Error('Source changed');
       const result = await request({ op: 'status', job: queued.job });
       if (result.state === 'complete') {
+        performance.mark('participant:complete');
         document.dispatchEvent(new CustomEvent('overleaf:participant-result', { detail: { job: queued.job, digest: queued.digest } }));
         return Response.json(result.result);
       }

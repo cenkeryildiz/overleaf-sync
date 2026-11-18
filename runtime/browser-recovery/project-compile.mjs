@@ -10,6 +10,7 @@ export class LocalCompiler {
   stop() { this.runner?.terminate(); this.runner = undefined; }
   async compile(project, resources, progress, signal) {
     if (signal.aborted) throw Error('Compilation canceled. Source files are retained.');
+    performance.mark('compile:start'); // measurement only (OPT-01)
     const runner = this.runner ||= new BusyTexRunner({ busytexBasePath: '/recovery/busytex', engineMode: 'combined', initRetries: 0,
       preloadDataPackages: ['/recovery/busytex/texlive-basic.js'],
       catalogDataPackages: ['/recovery/busytex/texlive-recommended.js', '/recovery/busytex/texlive-extra.js'],
@@ -17,7 +18,7 @@ export class LocalCompiler {
     let deadline, abort;
     try {
       return await Promise.race([(async () => {
-        if (!runner.initialized) await runner.initialize(true);
+        if (!runner.initialized) { await runner.initialize(true); performance.mark('compile:initialized'); }
         if (signal.aborted) throw Error('Compilation canceled');
         const files = resources.map(file => ({ path: file.path, content: file.content ?? Uint8Array.from(atob(file.data), c => c.charCodeAt(0)) }));
         const root = files.find(file => file.path === project.main);
@@ -26,6 +27,7 @@ export class LocalCompiler {
         if (!Tool) throw Error('Unsupported compiler');
         const result = await new Tool(runner).compile({ input: root.content, mainTexPath: project.main,
           additionalFiles: files.filter(file => file !== root), rerun: true, shellEscape: false, remoteEndpoint: '', shellHandlerScripts: [] });
+        performance.mark('compile:result');
         if (!result.success || !result.pdf || !result.synctex) throw Error('Compilation failed. A package, font or source may be unsupported. Your files and previous PDF are retained.');
         return result;
       })(), new Promise((_, reject) => {
