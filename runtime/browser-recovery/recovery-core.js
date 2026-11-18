@@ -99,7 +99,9 @@
         if (globalThis.overleafOfflineNative?.savingHeld) throw Error('Local saving is held');
         const previous = recordFor(container, tr.startState.doc.toString(), name);
         const next = { ...previous, revision: previous.revision + 1, candidate: tr.newDoc.toString(), updatedAt: Date.now() };
-        save(next); entries.set(container.doc_id, next); note('Recovery copy of your latest edit saved in this browser.'); return tr;
+        const stored = save(next); entries.set(container.doc_id, next);
+        globalThis.overleafSessionCheckpoint?.track(stored, next);
+        note('Recovery copy of your latest edit saved in this browser.'); return tr;
       } catch {
         status('Edit paused: browser storage failed. Export your work or free browser storage.', true); return [];
       }
@@ -228,6 +230,7 @@
   function attach(facade, container, name) {
     current = { facade, container, name };
     if (globalThis.overleafOfflineNative) { globalThis.overleafOfflineNative.attach(facade, container, name); return; }
+    try { globalThis.overleafSessionCheckpoint?.start(scope(container)); } catch { /* Missing identity keeps recovery copies local. */ }
     if (location.hash?.startsWith('#recovery=') && location.hash !== offeredReview) {
       offeredReview = location.hash; queueMicrotask(() => openReview(decodeURIComponent(location.hash.slice(10))));
     }

@@ -37,7 +37,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const original = readFileSync(input, 'utf8');
   assert.equal(hash(original), '9a78a0a8b867dec0d7e54357f4d78343fd9311e9fadc791950f25e263adedd24', 'Pinned native editor hash mismatch');
   const files = new Map();
-  for (const name of ['recovery-core.js', 'review.js', 'review.css', 'offline-toolbar.js', 'offline-ui.css', 'project-store.js', 'project-workspace.html', 'project-workspace.js', 'project-workspace.css', 'native-workspace.html', 'native-workspace.mjs', 'project-compile.mjs', 'project-zip.mjs', 'client-zip.mjs', 'CLIENT-ZIP-LICENSE.txt', 'synctex-parser.mjs', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'local-workspace.html', 'local-workspace.js', 'workspace.css', 'LICENSE', 'CODEMIRROR-LICENSES.txt', 'diff.min.js', 'DIFF-LICENSE.txt']) files.set(name, readFileSync(join(directory, name)));
+  for (const name of ['session-checkpoint.js', 'recovery-core.js', 'review.js', 'review.css', 'offline-toolbar.js', 'offline-ui.css', 'project-store.js', 'project-workspace.html', 'project-workspace.js', 'project-workspace.css', 'native-workspace.html', 'native-workspace.mjs', 'project-compile.mjs', 'project-zip.mjs', 'client-zip.mjs', 'CLIENT-ZIP-LICENSE.txt', 'synctex-parser.mjs', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'local-workspace.html', 'local-workspace.js', 'workspace.css', 'LICENSE', 'CODEMIRROR-LICENSES.txt', 'diff.min.js', 'DIFF-LICENSE.txt']) files.set(name, readFileSync(join(directory, name)));
   const native = [
     { path: '/js/runtime-0239170c7f0b0a6c5b25.js', sha256: 'd5a88ef72332d8a2facfe62fb20980771e1c987b73d77468dd2c9616b5df81b3', type: 'application/javascript' },
     { path: '/js/2313-773b8816086b1956f53c.js', sha256: 'a5d6a292a1ee6356aa77fd3979a913c51b9756b8fab3eef3ee28bc13af1d09b7', type: 'application/javascript' },
@@ -48,7 +48,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const assets = [...files].filter(([name]) => name !== 'LICENSE').map(([name, bytes]) => ({ path: '/recovery/' + name, sha256: hash(bytes), type: name.endsWith('.html') ? 'text/html;charset=utf-8' : name.endsWith('.css') ? 'text/css' : name.endsWith('.txt') ? 'text/plain;charset=utf-8' : name.endsWith('.webmanifest') ? 'application/manifest+json' : name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.png') ? 'image/png' : 'application/javascript' }));
   const manifest = { version, nativePaths: native.map(a => a.path), assets: [...assets, ...native] };
   files.set('recovery-sw.js', Buffer.from(template.replace('__RECOVERY_MANIFEST__', JSON.stringify(manifest))));
-  files.set(assetName, Buffer.from(patchEditor(original, files.get('recovery-core.js').toString(), config)));
+  files.set(assetName, Buffer.from(patchEditor(original, files.get('session-checkpoint.js').toString() + '\n' + files.get('recovery-core.js').toString(), config)));
   // Validate every input before any destination is touched.
   if (existsSync(output)) {
     assert(lstatSync(output).isDirectory() && !lstatSync(output).isSymbolicLink(), 'Output must be a real directory');

@@ -14,6 +14,7 @@ COPY runtime/participant-compile/hosting/provision.mjs runtime/participant-compi
 RUN node /tmp/source/runtime/participant-compile/hosting/provision.mjs && rm -rf /tmp/source
 COPY --from=coordinator /work/target/release/overleaf-participant-coordinator /opt/participant/overleaf-participant-coordinator
 COPY runtime/participant-compile/host.mjs /overleaf/services/web/app/src/Features/Compile/ParticipantCompile.mjs
+COPY runtime/session-checkpoint/host.mjs /overleaf/services/web/app/src/Features/Compile/SessionCheckpoint.mjs
 COPY runtime/participant-compile/artifacts.mjs /overleaf/services/web/app/src/Features/Compile/ParticipantArtifacts.mjs
 COPY runtime/incremental-preview/host.mjs /overleaf/services/web/app/src/Features/Compile/LivePreview.mjs
 COPY runtime/fast-preview/CompileManager.mjs /overleaf/services/web/app/src/Features/Compile/CompileManager.mjs

@@ -54,11 +54,11 @@ self.addEventListener('install', event => event.waitUntil((async () => {
     for (const asset of manifest.assets) {
       await store(cache, asset);
     }
-    await self.skipWaiting();
+    // Let existing offline editing windows finish before replacing their runtime.
   } catch (error) { await caches.delete(cacheName); throw error; }
 })()));
 self.addEventListener('activate', event => event.waitUntil((async () => {
-  await self.clients.claim();
+  // Default activation waits for the previous worker's windows to close.
   for (const name of await caches.keys()) if (name.startsWith('overleaf-local-') && name !== cacheName) await caches.delete(name);
 })()));
 self.addEventListener('message', event => {

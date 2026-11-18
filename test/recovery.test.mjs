@@ -191,3 +191,19 @@ test('held local saving refuses further edits while keeping the existing recover
   assert.equal(api.list(account, project)[0].record.candidate, retained);
   const remote = change('base+edit', 'remote', true); assert.equal(capture(remote), remote);
 });
+
+test('offline updates wait for existing editing windows and retain reusable compiler caches', async () => {
+  const handlers = {}, removed = []; let forced = 0, claimed = 0;
+  const context = vm.createContext({ URL, Response, TextEncoder,
+    self: { location: { origin: 'https://local.example' }, addEventListener(name, fn) { handlers[name] = fn; },
+      skipWaiting() { forced++; }, clients: { claim() { claimed++; } } },
+    caches: { async open() { return {}; }, async keys() { return ['overleaf-local-old', 'overleaf-local-current', 'overleaf-compiler-pinned', 'unrelated']; }, async delete(name) { removed.push(name); } } });
+  const sw = readFileSync(new URL('../runtime/browser-recovery/recovery-sw.template.js', import.meta.url), 'utf8')
+    .replace('__RECOVERY_MANIFEST__', JSON.stringify({ version: 'current', assets: [], nativePaths: [] }));
+  vm.runInContext(sw, context);
+  let task; handlers.install({ waitUntil(value) { task = value; } }); await task;
+  assert.equal(forced, 0, 'A new runtime must not take over unfinished editing windows');
+  handlers.activate({ waitUntil(value) { task = value; } }); await task;
+  assert.equal(claimed, 0, 'Existing pages must keep their own runtime until navigation');
+  assert.deepEqual(removed, ['overleaf-local-old'], 'Only obsolete UI cache is recycled; compiler and unrelated storage stay available');
+});

@@ -150,6 +150,7 @@ test('offline preparation is bounded through response/abort, and native shutdown
     else if (name.endsWith('/GracefulShutdown.mjs')) exports = { addOptionalCleanupHandlerBeforeStoppingTraffic: (_, handler) => { cleanup = handler; } };
     else if (name.endsWith('/LivePreview.mjs')) exports = { snapshot: (...args) => { assert(args[3] && args[4]); return snapshotReader(); } };
     else if (name.endsWith('/ParticipantArtifacts.mjs')) exports = { prepareSnapshot, prepareResult() {} };
+    else if (name.endsWith('/SessionCheckpoint.mjs')) exports = { checkpoint() { throw Error('Unexpected checkpoint'); } };
     else exports = await import(name);
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });

@@ -7,6 +7,7 @@ import SessionManager from '../Authentication/SessionManager.mjs';
 import { addOptionalCleanupHandlerBeforeStoppingTraffic } from '../../infrastructure/GracefulShutdown.mjs';
 import { snapshot } from './LivePreview.mjs';
 import { prepareSnapshot, prepareResult } from './ParticipantArtifacts.mjs';
+import { checkpoint } from './SessionCheckpoint.mjs';
 
 const jobs = new Map(), pending = new Map(), artifacts = new Map(), preparing = new Set();
 let child, serial = 0, retainedBytes = 0, stopping = false;
@@ -70,6 +71,10 @@ export async function participantCompile(req, res) {
   if (!body || typeof body.op !== 'string') return res.sendStatus(400);
   try {
     const identity = { project, user };
+    if (body.op === 'checkpoint') {
+      try { return res.json({ checkpoint: await checkpoint(req, identity, body) }); }
+      catch (error) { return res.status([400, 401, 403, 429].includes(error.statusCode) ? error.statusCode : 409).json({ error: 'Session checkpoint unavailable.' }); }
+    }
     if (body.op === 'prepare-offline') {
       if (preparing.size >= 2 || preparing.has(user)) return res.sendStatus(429);
       preparing.add(user); let reading = true, closed = false;
