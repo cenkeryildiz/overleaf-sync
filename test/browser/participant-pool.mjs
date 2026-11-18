@@ -110,6 +110,8 @@ export async function checkPool({ browser, alice, users, projectUrl, base }) {
   }, users[1].id);
   assert(revoked >= 200 && revoked < 300, 'Native owner must be able to revoke the test member');
   const denied = await api(pages[1], { op: 'join' }); assert([403, 404].includes(denied.status), 'Revoked member must not register another worker');
+  // Later single-worker checks must not share this pool's contributing peer contexts.
+  await Promise.all(pages.slice(1).map(page => page.context().close()));
   console.log(JSON.stringify({ poolPassed: true, users: users.length, allFiveReadyMs, fiveUserRoundMs: rounds, twoOtherUsersOnOneWorkerMs: pairMs,
     workerFaultRecoveredMs: recoveryMs, nonMembersDenied: users.length - 1, duplicateResultDenied: true, revokedMemberDenied: true, sourcesUnchanged: true }));
 }

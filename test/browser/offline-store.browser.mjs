@@ -158,7 +158,7 @@ try {
     transport.on('reciveNewDoc', (parent, entity) => events.push(['doc', parent, entity.name]));
     transport.on('reciveNewFolder', (parent, entity) => events.push(['folder', parent, entity.name]));
     const tree = joined.project.rootFolder[0];
-    const joinedDoc = await new Promise(resolve => transport.emit('joinDoc', tree.docs[0]._id, {}, (...args) => resolve(args))); 
+    const joinedDoc = await new Promise(resolve => transport.emit('joinDoc', tree.docs[0]._id, {}, (...args) => resolve(args)));
     const post = (path, body) => fetch(`/project/${clientProject}${path}`, { method: 'POST', body: JSON.stringify(body) });
     const created = await post('/doc', { parent_folder_id: tree._id, name: 'new.tex' });
     const duplicate = await post('/doc', { parent_folder_id: tree._id, name: 'new.tex' });
