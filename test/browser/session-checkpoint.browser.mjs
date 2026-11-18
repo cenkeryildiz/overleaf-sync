@@ -94,10 +94,13 @@ try {
         assert(proof?.durable, 'Actual native durable receipt missing: ' + JSON.stringify(await Promise.all(observed.map(async r => ({ status: r.status, body: await r.body })))));
         stage('native durable receipt verified'); return { proof, ms: performance.now() - started };
       }
+      const label = page => page.locator('.recovery-controls .olx-durability').innerText().catch(() => '');
       const first = await edit(owner, '% First durable edit\n'); metrics.saveAckMs = first.ackMs; stage('synchronous recovery and native edit acknowledgement verified');
+      assert.match(await label(owner), /Not yet saved to server|Received by collaboration/, 'Unproven edit must show a not-yet-on-server state');
       metrics.candidateBytes = Buffer.byteLength(first.raw); diagnosticHash = hash(first.candidate);
       const unrelated = await otherTab.evaluate(record => { const copy = { ...record, writer: crypto.randomUUID(), candidate: record.candidate + '% Other tab retained copy\n' }; return { key: overleafRecovery.save(copy), raw: JSON.stringify(copy) }; }, first.record);
       const checked = await flush(owner, first.key); metrics.checkpointMs = checked.ms;
+      await owner.waitForFunction(() => /Saved to server — not backed up off-host/.test(document.querySelector('.recovery-controls .olx-durability')?.innerText || ''), null, { timeout: 5000 });
       assert.deepEqual(await storage(owner, first.key), { raw: null, marker: null });
       assert.equal(await owner.evaluate(key => localStorage.getItem(key), unrelated.key), unrelated.raw);
       const zip = await owner.request.get(`${base}/project/${project}/version/${checked.proof.version}/zip`, { timeout: 60000 });
@@ -121,6 +124,7 @@ try {
         const response = await route.fetch(); assert(response.ok(), 'Server failed before response loss: ' + response.status()); lostProof = (await response.json()).checkpoint; await route.abort('failed');
       });
       await owner.evaluate(() => overleafSessionCheckpoint.flush()); assert(lostProof?.durable); const lost = await storage(owner, closeCopy.key); assert(lost.raw && lost.marker);
+      assert.doesNotMatch(await label(owner), /Saved to server/, 'A lost receipt must not show saved to server');
       metrics.pendingMarkerBytes = Buffer.byteLength(lost.marker); const closeStarted = performance.now(); await owner.close(); metrics.pageCloseMs = performance.now() - closeStarted;
       assert.equal((await storage(otherTab, closeCopy.key)).raw, closeCopy.raw);
       const reopened = await otherTab.context().newPage(); reopened.setDefaultTimeout(20000); observe(reopened); const retryStarted = performance.now(); await reopened.goto(url); await editor(reopened).waitFor();
