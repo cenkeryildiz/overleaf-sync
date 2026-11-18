@@ -8,6 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import ProjectEntityHandler from '../Project/ProjectEntityHandler.mjs';
 import ClsiManager from './ClsiManager.mjs';
 import SessionManager from '../Authentication/SessionManager.mjs';
+import DocumentUpdaterHandler from '../DocumentUpdater/DocumentUpdaterHandler.mjs';
 
 const sessions = new Map();
 function close(token) {
@@ -24,7 +25,7 @@ function ask(session, request) {
     session.child.stdin.write(JSON.stringify(request) + '\n', error => { if (error) session.pending?.reject(Error('Preview unavailable')); });
   });
 }
-export async function snapshot(projectId, userId, body, loadAssets = true) {
+export async function snapshot(projectId, userId, body, loadAssets = true, offline = false) {
   if (!/^[a-f0-9]{24}$/.test(body.docId) || typeof body.text !== 'string' || body.text.length > 2_000_000) throw Error('Invalid document');
   const request = await ClsiManager.promises.buildDocumentConversionRequest(projectId, userId, { compileGroup: 'standard' });
   const compile = request.compile;
@@ -48,7 +49,24 @@ export async function snapshot(projectId, userId, body, loadAssets = true) {
     }
     if (size > 64 * 1024 * 1024) throw Error('Project exceeds preview limit');
   }
-  return { op: 'start', fingerprint, main: compile.rootResourcePath, compiler: compile.compiler, active, resources, text: body.text, line: body.line };
+  const documents = [];
+  if (offline) {
+    const paths = new Map(Object.entries(docs).map(([path, doc]) => [path.replace(/^\//, ''), String(doc._id)]));
+    const textFiles = resources.filter(resource => paths.has(resource.path));
+    for (let index = 0; index < textFiles.length; index += 4) {
+      await Promise.all(textFiles.slice(index, index + 4).map(async resource => {
+        const id = paths.get(resource.path), doc = await DocumentUpdaterHandler.promises.getDocument(projectId, id, -1);
+        if (!Number.isSafeInteger(doc.version) || doc.version < 0 || !Array.isArray(doc.lines)) throw Error('Document version unavailable');
+        const text = doc.lines.join('\n'); if (text.length > 2000000) throw Error('Document exceeds offline limit');
+        if (id === body.docId && (doc.version !== body.version || text !== body.text)) throw Error('Active source changed during preparation');
+        resource.content = text; delete resource.data;
+        documents.push({ path: resource.path, id, version: doc.version });
+      }));
+    }
+    if (!documents.some(doc => doc.id === body.docId) || resources.reduce((total, r) => total + Buffer.byteLength(r.content ?? r.data, r.content === undefined ? 'base64' : 'utf8'), 0) > 64 * 1024 * 1024)
+      throw Error('Offline project exceeds limits');
+  }
+  return { op: 'start', fingerprint, main: compile.rootResourcePath, compiler: compile.compiler, active, resources, text: body.text, line: body.line, ...(offline ? { documents } : {}) };
 }
 export async function livePreview(req, res) {
   res.set('Cache-Control', 'no-store');

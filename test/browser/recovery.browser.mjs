@@ -88,7 +88,7 @@ try {
     const base=overleafRecovery.list(account,project)[0].record, results={};
     for(const size of [200*1024,1024*1024]){const r=overleafRecovery.fork(base);r.candidate='x'.repeat(size);r.base={...r.base,text:r.candidate};const times=[];for(let i=0;i<10;i++){r.revision++;const t=performance.now();overleafRecovery.save(r);times.push(performance.now()-t)}localStorage.removeItem(overleafRecovery.key(r));times.sort((a,b)=>a-b);results[size]={p95Ms:times[Math.ceil(times.length*.95)-1],samples:times.length};}return results;
   },scope);
-  await a.getByRole('button',{name:'Local only',exact:true}).click(); await a.waitForURL(/\/recovery\/local-workspace.html#/,{timeout:40000});
+  await a.getByRole('button',{name:'Offline and recovery options',exact:true}).click(); await a.getByRole('menuitem',{name:'Recovery copies',exact:true}).click(); await a.waitForURL(/\/recovery\/local-workspace.html#/,{timeout:40000});
   const local = a.getByRole('textbox',{name:'Local source editor',exact:true}); await local.waitFor();
   assert.equal(await local.evaluate(e=>e.cmView.view.state.doc.toString()),beforeQuota); assert.equal(await a.evaluate(async()=> (await fetch('/project/'+location.hash.slice(1))).status),503); passed('Local only refuses uncached server requests'); const initialKey=decodeURIComponent(new URL(a.url()).hash.slice(1));
   await a.context().setOffline(true); await local.click(); await a.keyboard.press('Meta+ArrowDown'); await a.keyboard.insertText('\n% OfflineOnlyMarker');

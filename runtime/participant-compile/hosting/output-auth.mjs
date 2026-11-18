@@ -20,5 +20,24 @@ export function patchOutputAuthorization(source) {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
 
+  # Public immutable build inputs only; avoid the application send-stream abort failure.
+  location ~ ^/(?:recovery|participant|js|fonts|images)/|^/favicon(?:-[a-z]+)?\\.svg$ {
+    try_files $uri =404;
+    default_type application/octet-stream;
+    types {
+      text/html html;
+      application/javascript js mjs;
+      text/css css;
+      application/json json;
+      application/manifest+json webmanifest;
+      application/wasm wasm;
+      image/svg+xml svg;
+      image/png png;
+      font/woff2 woff2;
+      text/plain txt;
+    }
+    add_header Cache-Control "no-cache" always;
+  }
+
 ` + anchor);
 }

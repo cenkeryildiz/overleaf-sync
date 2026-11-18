@@ -28,6 +28,10 @@ test('independent instances use their own Google callback and fresh persistent s
     assert.throws(() => configuration(site, client('https://one.example.test')));
   assert.throws(() => configuration('https://two.example.test', client('https://one.example.test')), /exact site callback/);
   assert.throws(() => configuration('https://one.example.test', { installed: client('https://one.example.test').web }), /web client/);
+  const missingSecret = client('https://one.example.test'); delete missingSecret.web.client_secret;
+  assert.throws(() => configuration('https://one.example.test', missingSecret), /web client/);
+  const malformedCallbacks = client('https://one.example.test'); malformedCallbacks.web.redirect_uris = malformedCallbacks.web.redirect_uris[0];
+  assert.throws(() => configuration('https://one.example.test', malformedCallbacks), /exact site callback/);
   assert.throws(() => configuration('https://one.example.test', client('https://one.example.test'), '0'));
 });
 test('setup writes private configuration once and never prints or overwrites secrets', () => {
@@ -62,6 +66,8 @@ test('all fast PDF and cached-content paths check native project authorization f
   assert(result.includes('internal;') && result.includes('proxy_pass_request_body off;'));
   assert(result.includes('proxy_set_header Accept "application/json";'), 'Native global login must return 401 rather than redirect the auth subrequest');
   assert(result.includes('/project/$participant_output_project/participant-output-auth'));
+  assert(result.includes('location ~ ^/(?:recovery|participant|js|fonts|images)/'));
+  assert(result.includes('try_files $uri =404;') && result.includes('application/javascript js mjs;'));
   for (const invalid of ['', source + backend, result]) assert.throws(() => patchOutputAuthorization(invalid));
 });
 test('snapshots preserve exact source, binary inputs and selected compiler in the digest', () => {
@@ -127,9 +133,9 @@ test('hosted settings require persistent secrets and public HTTPS with secure co
   assert.throws(() => settings('https://latex.example.test', { ...complete, OVERLEAF_OIDC_CLIENT_ID: 'wrong-client' }), /web OAuth client ID/);
 });
 
-test('native graceful shutdown stops the metadata child, settles pending work and refuses restart', async () => {
+test('offline preparation is bounded through response/abort, and native shutdown settles work without restart', async () => {
   const context = vm.createContext({ Buffer, setTimeout, clearTimeout, setInterval: () => ({ unref() {} }) });
-  let cleanup, spawns = 0, kills = 0, respond = true;
+  let cleanup, spawns = 0, kills = 0, respond = true, snapshotReader;
   const child = new EventEmitter(); child.stdout = new PassThrough();
   child.stdin = { write(line, done) {
     done?.(); const request = JSON.parse(line);
@@ -140,17 +146,32 @@ test('native graceful shutdown stops the metadata child, settles pending work an
   await subject.link(async name => {
     let exports;
     if (name === 'node:child_process') exports = { spawn: () => { spawns++; return child; } };
-    else if (name.endsWith('/SessionManager.mjs')) exports = { default: { getLoggedInUserId: () => 'a'.repeat(24) } };
+    else if (name.endsWith('/SessionManager.mjs')) exports = { default: { getLoggedInUserId: session => session.user || 'a'.repeat(24) } };
     else if (name.endsWith('/GracefulShutdown.mjs')) exports = { addOptionalCleanupHandlerBeforeStoppingTraffic: (_, handler) => { cleanup = handler; } };
-    else if (name.endsWith('/LivePreview.mjs')) exports = { snapshot: () => { throw Error('Unexpected snapshot'); } };
-    else if (name.endsWith('/ParticipantArtifacts.mjs')) exports = { prepareSnapshot() {}, prepareResult() {} };
+    else if (name.endsWith('/LivePreview.mjs')) exports = { snapshot: (...args) => { assert(args[3] && args[4]); return snapshotReader(); } };
+    else if (name.endsWith('/ParticipantArtifacts.mjs')) exports = { prepareSnapshot, prepareResult() {} };
     else exports = await import(name);
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });
   await subject.evaluate();
   const request = { session: {}, params: { Project_id: 'b'.repeat(24) }, body: { op: 'join' } };
-  const response = () => ({ code: 200, set() {}, json() { return this; }, status(code) { this.code = code; return this; }, sendStatus(code) { this.code = code; return this; } });
+  const response = () => Object.assign(new EventEmitter(), { code: 200, set() {}, json(body) { this.body = body; return this; }, status(code) { this.code = code; return this; }, sendStatus(code) { this.code = code; return this; } });
   await subject.namespace.participantCompile(request, response()); assert.equal(spawns, 1);
+  const reads = []; snapshotReader = () => new Promise(resolve => reads.push(resolve));
+  const prepare = user => ({ ...request, session: { user }, body: { op: 'prepare-offline' } });
+  const a = response(), b = response();
+  const first = subject.namespace.participantCompile(prepare('a'.repeat(24)), a);
+  const duplicate = response(); await subject.namespace.participantCompile(prepare('a'.repeat(24)), duplicate); assert.equal(duplicate.code, 429);
+  const second = subject.namespace.participantCompile(prepare('b'.repeat(24)), b);
+  const crowded = response(); await subject.namespace.participantCompile(prepare('c'.repeat(24)), crowded); assert.equal(crowded.code, 429);
+  a.emit('close'); const aborted = response(); await subject.namespace.participantCompile(prepare('c'.repeat(24)), aborted);
+  assert.equal(aborted.code, 429, 'Abort cannot release a slot while its snapshot is still being read');
+  reads[0](fixture()); await first; assert.equal(a.body, undefined);
+  reads[1](fixture()); await second;
+  const held = response(); await subject.namespace.participantCompile(prepare('b'.repeat(24)), held); assert.equal(held.code, 429, 'Hold slot until response finishes');
+  b.emit('finish'); snapshotReader = () => Promise.resolve(fixture());
+  const released = response(); await subject.namespace.participantCompile(prepare('b'.repeat(24)), released);
+  assert.equal(released.code, 200); assert(released.body.source.digest); released.emit('finish');
   respond = false; const pendingResponse = response(), pending = subject.namespace.participantCompile(request, pendingResponse);
   cleanup(); await pending; assert.equal(kills, 1); assert.equal(pendingResponse.code, 409);
   const after = response(); await subject.namespace.participantCompile(request, after); assert.equal(after.code, 409); assert.equal(spawns, 1);

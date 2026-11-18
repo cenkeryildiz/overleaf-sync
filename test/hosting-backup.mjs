@@ -65,28 +65,38 @@ async function startStores(stack, initialize) {
   if (initialize) docker(['exec', stack.mongo, 'mongosh', '--quiet', '--eval', 'rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]})']);
   await waitFor(() => docker(['exec', stack.mongo, 'mongosh', '--quiet', '--eval', 'db.hello().isWritablePrimary']) === 'true', 'Mongo primary');
 }
-async function startApp(stack, config) {
+async function startApp(stack, config, image = appImage, role = '') {
   // Docker suppresses published ports on internal-only networks. Only the app joins ingress.
-  const ingress = network(stack.suffix + '-ingress', false); owned.container.push(stack.app);
+  if (role) stack.app = prefix + '-' + stack.suffix + '-' + role + '-app';
+  const ingress = network(stack.suffix + (role ? '-' + role : '') + '-ingress', false); owned.container.push(stack.app);
   docker(['create', '--name', stack.app, '--label', label, '--network', stack.network, '--network-alias', 'sharelatex', '--publish', '127.0.0.1::80', '--memory=4g', '--cpus=2', '--pids-limit=512',
     '--env-file', join(config, 'private.env'), '--env', 'OVERLEAF_MONGO_URL=mongodb://mongo/sharelatex?replicaSet=rs0',
     '--env', 'OVERLEAF_REDIS_HOST=redis', '--env', 'REDIS_HOST=redis', '--env', 'REDIS_PORT=6379', '--env', 'V1_HISTORY_URL=http://sharelatex:3100/api',
     ...mount(stack.appVolume, '/var/lib/overleaf', false), ...(process.env.HOSTING_APP_IMAGE ? [] : [
       ...bind(join(config, 'settings.cjs'), '/etc/overleaf/settings.js'), ...bind(join(config, 'base.cjs'), '/etc/overleaf/fixture-base.cjs'),
-      ...bind(join(config, 'CompileManager.mjs'), '/overleaf/services/web/app/src/Features/Compile/CompileManager.mjs')]), appImage]);
+      ...bind(join(config, 'CompileManager.mjs'), '/overleaf/services/web/app/src/Features/Compile/CompileManager.mjs')]), image]);
   docker(['network', 'connect', ingress, stack.app]); docker(['start', stack.app]);
   await waitFor(() => {
     const address = docker(['port', stack.app, '80/tcp']);
     if (!address) return false; stack.base = 'http://' + address; return true;
   }, 'published loopback port', 20000);
-  await waitFor(async () => (await fetch(stack.base + '/login', { signal: AbortSignal.timeout(3000) })).status === 200, 'app login', 180000);
+  // A bare 200 can arrive before the web process serves the real form; wait for the actual email field.
+  await waitFor(async () => { const r = await fetch(stack.base + '/login', { signal: AbortSignal.timeout(3000) }); return r.status === 200 && (await r.text()).includes('name="email"'); }, 'app login form', 180000);
 }
 async function login(stack, user) {
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, serviceWorkers: process.env.HOSTING_APP_IMAGE ? 'allow' : 'block' });
   await context.addInitScript(() => { globalThis.participantResults = []; document.addEventListener('overleaf:participant-result', e => participantResults.push(e.detail)); });
   await context.route('**/*', route => new URL(route.request().url()).origin === stack.base ? route.continue() : route.abort());
   const page = await context.newPage(); page.setDefaultTimeout(25000);
-  await page.goto(stack.base + '/login'); await page.locator('input[name=email]').fill(user.email);
+  // First boot of the self-contained image can serve a page without the form after readiness; record it and retry.
+  for (let attempt = 0; ; attempt++) {
+    const response = await page.goto(stack.base + '/login');
+    if (await page.locator('input[name=email]').count()) break;
+    if (attempt === 0) console.log(JSON.stringify({ loginFormMissing: response?.status(), path: new URL(page.url()).pathname, text: (await page.locator('body').innerText()).slice(0, 160) }));
+    if (attempt >= 40) throw Error('Login form never appeared');
+    await delay(3000);
+  }
+  await page.locator('input[name=email]').fill(user.email);
   await page.locator('input[name=password]').fill(user.password); await page.getByRole('button', { name: /^Login/ }).click();
   await page.waitForURL(stack.base + '/project'); return page;
 }
@@ -126,9 +136,9 @@ async function checkParticipant(page) {
   assert(Buffer.from(pdf).subarray(0, 5).equals(Buffer.from('%PDF-')));
   await page.evaluate(() => globalThis.overleafRecovery.offlineReady());
 }
-function stop(stack) {
-  metrics[stack.suffix + 'Stop'] = [];
-  for (const name of [stack.app, stack.mongo, stack.redis]) {
+function stop(stack, names = [stack.app, stack.mongo, stack.redis]) {
+  metrics[stack.suffix + 'Stop'] ||= [];
+  for (const name of names) {
     const started = performance.now(); docker(['stop', '--time', '60', name]);
     const state = JSON.parse(docker(['inspect', '--format', '{{json .State}}', name]));
     metrics[stack.suffix + 'Stop'].push({ role: name.split('-').at(-1), ms: performance.now() - started, exitCode: state.ExitCode });
@@ -273,7 +283,27 @@ try {
   const carol = await login(restored, users[2]);
   const denied = await carol.request.get(restored.base + '/Project/' + projectId + '/download/zip');
   assert([403, 404].includes(denied.status()), 'Non-member may not export restored files');
-  await browser.close(); browser = null; stop(restored); success = true;
+  await browser.close(); browser = null;
+  if (process.env.HOSTING_ROLLBACK_IMAGE) {
+    // R6 upgrade rollback: the same restored volumes run on the previous image, then on the candidate again.
+    const rollbackImage = process.env.HOSTING_ROLLBACK_IMAGE; assert.match(rollbackImage, /^sha256:[a-f0-9]{64}$/); assert.notEqual(rollbackImage, appImage);
+    for (const [role, image] of [['rollback', rollbackImage], ['upgrade', appImage]]) {
+      stop(restored, [restored.app]); started = performance.now();
+      await startApp(restored, restoredConfig, image, role); metrics[role + 'BootMs'] = performance.now() - started;
+      browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH });
+      for (const user of users.slice(0, 2)) {
+        const page = await login(restored, user); await page.goto(restored.base + '/project/' + projectId);
+        const text = page.getByRole('textbox', { name: /^Source Editor/ }); await text.waitFor();
+        assert.equal(await text.evaluate(e => e.cmView.view.state.doc.toString()), editedSource, role + ' must open the exact restored source');
+        await checkZip(page, restored, role + '-' + user.first_name);
+      }
+      const outsider = await login(restored, users[2]);
+      assert([403, 404].includes((await outsider.request.get(restored.base + '/Project/' + projectId + '/download/zip')).status()), role + ' must keep membership');
+      await browser.close(); browser = null;
+    }
+    metrics.upgradeRollback = true;
+  }
+  stop(restored); success = true;
   console.log(JSON.stringify({ passed: true, ...metrics }));
   }
 } catch (error) {

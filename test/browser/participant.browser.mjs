@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withSyntheticAccounts } from './synthetic-accounts.mjs';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const base = 'http://127.0.0.1:8080';
+// Default is the original LAN demo; set HOSTING_TEST_BASE/HOSTING_APP_CONTAINER to check a staging candidate.
+const base = process.env.HOSTING_TEST_BASE || 'http://127.0.0.1:8080';
+assert.equal(new URL(base).hostname, '127.0.0.1', 'This check is restricted to local instances');
 const source = String.raw`\documentclass{article}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern,amsmath,geometry,tikz}
@@ -109,4 +111,4 @@ try { await withSyntheticAccounts(async users => {
       workerLinearMemoryBytes: memory, exactSourceAfterReload: true, bibliography: true, inverseNavigation: true,
       nativeCompiles: nativeCompiles.length, externalRequestsBlocked: external.length, pageErrors: errors }));
   } finally { clearTimeout(hardStop); await browser.close(); }
-}, process.env.PARTICIPANT_POOL === '1' ? 5 : 2); } finally { rmSync(work, { recursive: true, force: true }); }
+}, process.env.PARTICIPANT_POOL === '1' ? 5 : 2, process.env.HOSTING_APP_CONTAINER || 'sharelatex'); } finally { rmSync(work, { recursive: true, force: true }); }

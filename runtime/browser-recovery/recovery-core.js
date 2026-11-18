@@ -12,7 +12,7 @@
   }
   const writer = randomUUID();
   const entries = new Map();
-  let current, controls, offeredReview;
+  let current, controls, offeredReview, toolbarLoading = false;
   const id = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
   const valid = value => value?.schema === 1 && id(value.account) && id(value.project) && id(value.doc)
     && typeof value.writer === 'string' && /^[a-f0-9-]{36}$/.test(value.writer)
@@ -50,16 +50,22 @@
     return { ...record, writer: randomUUID(), revision: 0, updatedAt: Date.now() };
   }
   function status(text, error = false) {
-    if (controls) { controls.querySelector('[role=status]').textContent = text; controls.dataset.error = String(error); }
+    if (!controls) return;
+    const node = controls.querySelector('[role=status]'); node.textContent = text; node.title = text; node.dataset.error = String(error); controls.dataset.error = String(error);
   }
+  // Routine confirmations go to the menu, not the toolbar, so typing does not flash messages.
+  function note(text) { const node = controls?.querySelector('[data-recovery-note]'); if (node) node.textContent = text; }
   function meta(name) {
     const element = document.querySelector('meta[name="' + name + '"]');
     if (!element) return null;
     return ['json', 'number'].includes(element.dataset.type) ? JSON.parse(element.content) : element.content;
   }
   function scope(container) {
-    const account = meta('ol-user_id'), project = meta('ol-project_id'), doc = container.doc_id;
-    if (!id(account) || !id(project) || !id(doc) || location.pathname !== '/project/' + project) throw Error('Recovery identity is unavailable');
+    const account = meta('ol-user_id'), clientProject = meta('ol-project_id'), doc = container.doc_id;
+    const local = globalThis.overleafOfflineNative;
+    const offline = location.pathname === '/recovery/native-workspace.html' && local?.account === account && local?.clientProject === clientProject;
+    const project = offline ? local.project : clientProject;
+    if (!id(account) || !id(project) || !id(doc) || (!offline && location.pathname !== '/project/' + project)) throw Error('Recovery identity is unavailable');
     return { account, project, doc };
   }
   function recordFor(container, text, name) {
@@ -75,6 +81,8 @@
       entry = { schema: 1, ...scoped, writer, revision: 0, name: typeof name === 'string' && name ? name : container.docName || scoped.doc + '.tex',
         base: { version, text, kind: doc?.type, snapshot: savedSnapshot },
         candidate: text, updatedAt: Date.now() };
+      const localFile = globalThis.overleafOfflineNative?.file(container.doc_id);
+      if (localFile) { entry.base = localFile.base; entry.workspace = globalThis.overleafOfflineNative.workspace; }
       // Freeze the baseline independently of subsequent engine mutations.
       entry = JSON.parse(JSON.stringify(entry));
       if (!valid(entry)) throw Error('Recovery baseline is unavailable');
@@ -88,9 +96,10 @@
     return State.transactionFilter.of(tr => {
       if (!tr.docChanged || tr.annotation(Transaction.remote)) return tr;
       try {
+        if (globalThis.overleafOfflineNative?.savingHeld) throw Error('Local saving is held');
         const previous = recordFor(container, tr.startState.doc.toString(), name);
         const next = { ...previous, revision: previous.revision + 1, candidate: tr.newDoc.toString(), updatedAt: Date.now() };
-        save(next); entries.set(container.doc_id, next); status('Recovery copy saved in this browser'); return tr;
+        save(next); entries.set(container.doc_id, next); note('Recovery copy of your latest edit saved in this browser.'); return tr;
       } catch {
         status('Edit paused: browser storage failed. Export your work or free browser storage.', true); return [];
       }
@@ -124,6 +133,21 @@
       status('Preparing offline workspace…'); await offlineReady();
       location.assign('/recovery/local-workspace.html#' + encodeURIComponent(name));
     } catch (error) { status(error.message, true); }
+  }
+  async function prepareCompiler(progress = () => {}, paths = []) {
+    await offlineReady();
+    const registration = await navigator.serviceWorker.getRegistration('/recovery/');
+    return new Promise((resolve, reject) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => { channel.port1.close(); reject(Error('Compiler preparation timed out; local projects are retained')); }, 1200000);
+      channel.port1.onmessage = event => {
+        if (event.data?.progress) { progress(event.data.progress); return; }
+        clearTimeout(timer); channel.port1.close();
+        event.data?.ready ? resolve(event.data) : reject(Error(event.data?.error || 'Compiler preparation failed'));
+      };
+      const observed = performance.getEntriesByType('resource').map(entry => new URL(entry.name)).filter(url => url.origin === location.origin).map(url => url.pathname);
+      registration.active.postMessage({ type: 'PREPARE_COMPILER', paths: [...paths, ...observed] }, [channel.port2]);
+    });
   }
   function reviewSnapshot(record) {
     if (!valid(record) || !current) throw Error('Recovery copy is unavailable');
@@ -166,26 +190,95 @@
       await globalThis.overleafRecoveryReview(key);
     } catch (error) { status(error.message, true); }
   }
+  async function prepareProject() {
+    try {
+      const record = recordFor(current.container, current.facade.getValue(), current.name), before = reviewSnapshot(record);
+      status('Saving the complete project for offline use…');
+      if (!globalThis.overleafLocalProjects) await new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = '/recovery/project-store.js?v=' + globalThis.overleafRecoveryBuild.version;
+        script.onload = resolve; script.onerror = () => { script.remove(); reject(Error('Offline project storage did not load')); }; document.head.append(script);
+      });
+      const response = await fetch('/project/' + before.project + '/participant-compile', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': meta('ol-csrfToken') },
+        body: JSON.stringify({ op: 'prepare-offline', docId: before.doc, version: before.version, text: before.text }),
+      });
+      if (!response.ok) throw Error('Offline preparation refused or source changed; your shared project is unchanged');
+      const payload = await response.json(), after = reviewSnapshot(record);
+      if (before.container !== after.container || before.version !== after.version || before.text !== after.text) throw Error('Source changed; prepare the project again');
+      const pdfUrl = performance.getEntriesByType('resource').map(entry => entry.name).reverse().find(name => {
+        const url = new URL(name); return url.origin === location.origin && url.pathname.startsWith('/project/' + before.project + '/') && /\/output\/output\.pdf$/.test(url.pathname);
+      });
+      let pdf;
+      if (pdfUrl) { const result = await fetch(pdfUrl, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' }); if (result.ok) pdf = await result.blob(); }
+      await offlineReady();
+      const publicUrl = value => { const url = new URL(value, location.href); return url.origin === location.origin && /^\/(js|stylesheets|fonts)\//.test(url.pathname) ? url.pathname : null; };
+      let projectMeta = {};
+      try {
+        const response = await fetch('/project/' + before.project + '/metadata', { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+        if (response.ok) projectMeta = (await response.json()).projectMeta || {};
+      } catch { /* Completion metadata is optional; exact project files remain authoritative. */ }
+      const native = { meta: [...document.querySelectorAll('meta[name^="ol-"]')].filter(node => !/csrf|token|session|analytics/i.test(node.name)).map(node => ({ name: node.name, content: node.content, present: node.hasAttribute('content'), type: node.dataset.type })),
+        scripts: [...document.querySelectorAll('script[src]')].map(node => publicUrl(node.src)).filter(Boolean),
+        styles: [...document.querySelectorAll('link[rel="stylesheet"]')].map(node => publicUrl(node.href)).filter(Boolean),
+        resources: performance.getEntriesByType('resource').map(entry => publicUrl(entry.name)).filter(Boolean), projectMeta };
+      const key = await globalThis.overleafLocalProjects.create(payload, before.account, before.project, pdf, native);
+      status('Project recovery copy saved in this browser.'); return key;
+    } catch (error) { status(error.message, true); }
+  }
   function attach(facade, container, name) {
     current = { facade, container, name };
+    if (globalThis.overleafOfflineNative) { globalThis.overleafOfflineNative.attach(facade, container, name); return; }
     if (location.hash?.startsWith('#recovery=') && location.hash !== offeredReview) {
       offeredReview = location.hash; queueMicrotask(() => openReview(decodeURIComponent(location.hash.slice(10))));
     }
     if (controls?.isConnected) return;
-    controls = document.createElement('div'); controls.className = 'recovery-controls'; controls.setAttribute('aria-label', 'Workspace connection and recovery');
-    const connection = document.createElement('span'); connection.textContent = container.socket.socket.connected ? 'Connected' : 'Disconnected'; controls.append(connection);
-    container.socket.on('disconnect', () => { connection.textContent = 'Disconnected'; });
-    container.socket.on('joinProjectResponse', () => { connection.textContent = 'Connected'; });
-    const state = document.createElement('span'); state.setAttribute('role', 'status'); state.textContent = 'Recovery ready'; controls.append(state);
-    const local = document.createElement('button'); local.type = 'button'; local.className = 'btn btn-sm btn-secondary'; local.textContent = 'Local only'; local.addEventListener('click', openLocal); controls.append(local);
-    const copies = document.createElement('button'); copies.type = 'button'; copies.className = 'btn btn-sm btn-secondary'; copies.textContent = 'Recovery copies'; copies.addEventListener('click', async () => {
-      try { const scoped = scope(current.container), first = list(scoped.account, scoped.project)[0]; if (!first) { status('No recovery copies yet'); return; } await offlineReady(); location.assign('/recovery/local-workspace.html#' + encodeURIComponent(first.key)); } catch (error) { status(error.message, true); }
-    }); controls.append(copies);
-    const review = document.createElement('button'); review.type = 'button'; review.className = 'btn btn-sm btn-secondary'; review.textContent = 'Review local changes';
-    review.onclick = () => openReview(); controls.append(review);
-    controls.style.cssText = 'position:fixed;bottom:8px;right:16px;z-index:1000;display:flex;gap:8px;align-items:center;padding:6px;background:var(--bg-primary,#fff);color:var(--content-primary,#333);border:1px solid #bbb;border-radius:5px;font:12px system-ui;max-width:90vw';
-    document.body.append(controls);
+    const ui = globalThis.overleafOfflineToolbar;
+    if (!ui) {
+      // The toolbar helper is a pinned public file; load it once, then build the controls.
+      if (!toolbarLoading) {
+        toolbarLoading = true; const script = document.createElement('script'); script.src = '/recovery/offline-toolbar.js';
+        script.onload = () => attach(current.facade, current.container, current.name); script.onerror = () => { toolbarLoading = false; };
+        (document.head || document.body).append(script);
+      }
+      return;
+    }
+    ui.stylesheet();
+    try { const settings = meta('ol-userSettings'); if (typeof settings?.overallTheme === 'string') ui.theme(settings.overallTheme); } catch { /* theme is cosmetic */ }
+    controls = document.createElement('div'); controls.className = 'recovery-controls olx-bar olx-native'; controls.setAttribute('aria-label', 'Workspace connection and recovery');
+    const state = document.createElement('span'); state.setAttribute('role', 'status'); state.setAttribute('aria-live', 'polite'); controls.append(state);
+    const trigger = ui.button({ className: 'olx-chip', iconName: 'cloud_done', label: 'Offline', ariaLabel: 'Offline and recovery options' });
+    const head = document.createElement('div'); head.className = 'olx-menu-head';
+    const dot = document.createElement('span'); dot.className = 'olx-dot'; const headText = document.createElement('div');
+    const title = document.createElement('strong'), detail = document.createElement('small'); detail.dataset.recoveryNote = '';
+    detail.textContent = 'Recovery copies of your edits are kept in this browser.'; headText.append(title, detail); head.append(dot, headText);
+    const connected = online => {
+      title.textContent = online ? 'Connected' : 'Disconnected'; dot.dataset.state = online ? 'connected' : 'disconnected';
+      trigger.dataset.tone = online ? 'connected' : 'disconnected'; trigger.querySelector('.olx-icon').textContent = online ? 'cloud_done' : 'cloud_off';
+    };
+    connected(container.socket.socket.connected);
+    container.socket.on('disconnect', () => connected(false));
+    container.socket.on('joinProjectResponse', () => connected(true));
+    const workOffline = async () => {
+      trigger.disabled = true;
+      try {
+        const workspace = await prepareProject(); if (!workspace) return;
+        const saved = await globalThis.overleafLocalProjects.read(workspace);
+        await prepareCompiler(message => status(message), saved.project.native.resources);
+        location.assign('/recovery/native-workspace.html#' + workspace);
+      } catch (error) { status(error.message + '. Saved project files are retained.', true); }
+      finally { trigger.disabled = false; }
+    };
+    const { list: menuList } = ui.menu(trigger, [
+      { header: head }, 'divider',
+      { icon: 'offline_pin', label: 'Work offline', description: 'Save this project with its compiler, then open it in this editor without a connection', onClick: workOffline },
+      { icon: 'folder_open', label: 'Saved projects', description: 'Open or create projects stored in this browser', onClick: () => location.assign('/recovery/project-workspace.html') },
+      'divider',
+      { icon: 'compare_arrows', label: 'Review local changes', description: 'Compare text saved in this browser with the shared version', onClick: () => openReview() },
+      { icon: 'history', label: 'Recovery copies', description: 'View, export or delete copies of this document', onClick: openLocal },
+    ]);
+    const wrap = document.createElement('div'); wrap.className = 'olx-menu-wrap'; wrap.append(trigger, menuList); controls.append(wrap);
+    ui.mount(controls);
   }
   globalThis.overleafRecovery = Object.freeze({ prefix, valid, key, read, save, list, fork, extension, attach, offlineReady, reviewSnapshot, applyReviewed,
-    currentScope: () => scope(current.container) });
+    prepareProject, prepareCompiler, currentScope: () => scope(current.container) });
 })();

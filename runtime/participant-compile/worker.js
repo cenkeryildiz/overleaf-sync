@@ -7,8 +7,9 @@ const publicFiles = new Set(['busytex_worker.original.js', 'busytex_biber.js', '
   'texlive-extra.js', 'texlive-extra.data', 'texlive-extra.js.providespackage.txt']);
 function allowed(value) {
   const url = new URL(typeof value === 'string' || value instanceof URL ? value : value.url, location.href);
-  if (url.origin !== location.origin || url.search || url.hash || !url.pathname.startsWith('/participant/busytex/') ||
-      !publicFiles.has(url.pathname.slice('/participant/busytex/'.length))) throw Error('Worker network request refused');
+  const path = url.pathname.replace(/^\/recovery\/busytex\//, '/participant/busytex/');
+  if (url.origin !== location.origin || url.search || url.hash || !path.startsWith('/participant/busytex/') ||
+      !publicFiles.has(path.slice('/participant/busytex/'.length))) throw Error('Worker network request refused');
   return url.href;
 }
 const nativeFetch = self.fetch.bind(self), nativeImport = self.importScripts.bind(self), nativeOpen = XMLHttpRequest.prototype.open;

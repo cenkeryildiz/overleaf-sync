@@ -7,6 +7,7 @@ FROM --platform=linux/amd64 overleafcep/sharelatex@sha256:3077cb674adff9155d5f7f
 COPY runtime/browser-recovery/ /tmp/source/runtime/browser-recovery/
 COPY runtime/fast-preview/ /tmp/source/runtime/fast-preview/
 COPY runtime/live-caret/ /tmp/source/runtime/live-caret/
+COPY runtime/session-revocation/ /tmp/source/runtime/session-revocation/
 COPY runtime/synctex-selection/ /tmp/source/runtime/synctex-selection/
 COPY runtime/participant-compile/apply.mjs runtime/participant-compile/client.mjs runtime/participant-compile/editor.js runtime/participant-compile/bootstrap.js runtime/participant-compile/worker.js runtime/participant-compile/sdk-patch.mjs /tmp/source/runtime/participant-compile/
 COPY runtime/participant-compile/hosting/provision.mjs runtime/participant-compile/hosting/output-auth.mjs /tmp/source/runtime/participant-compile/hosting/

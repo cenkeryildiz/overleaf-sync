@@ -2,9 +2,35 @@
 
 [![Build and release](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml/badge.svg)](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml)
 
-Planned self-hosted collaborative LaTeX **web application** for browser use on Windows/macOS, retaining nearly all capabilities of the selected CE+, Overleaf Workshop and LaTeX Workshop repositories and adding safe local/offline recovery, explicit Local only / Connect to server sessions, and multi-user server job distribution. No VS Code extension or Premium account is required.
+Self-hosted collaborative LaTeX **web application candidate** for browser use on Windows/macOS, retaining nearly all capabilities of the selected CE+, Overleaf Workshop and LaTeX Workshop repositories and adding safe local/offline recovery, explicit Local only / Connect to server sessions, and multi-user server job distribution. No VS Code extension or Premium account is required.
 
 **Current status: R0 is in progress. The local service and public-source image candidate have passed synthetic browser workflows and encrypted restore checks; Google login/logout/repeat login was user-confirmed locally. No application release or independent public host is active yet.**
+
+## Use an existing instance
+
+Ask the operator for their site address and an individual account or supported sign-in method. Open that address, sign in, and accept the project invitation. Joining an existing instance requires no server setup or OAuth client of your own. Sharing this repository does not grant access to any installation. An account or invitation on one instance grants no access to another instance.
+
+The application and its backend are served together at each operator's address. There is no central server list or automatic cross-server collaboration. To move a project, export its source ZIP and explicitly import it on the destination instance; browser recovery copies remain scoped to the original site and browser profile.
+
+## Host your own instance
+
+Follow the [independent hosting guide](runtime/participant-compile/hosting/README.md). Each operator provides their own host/domain, HTTPS, login-provider configuration, private secrets, persistent storage and backups. Their installation runs independently of this repository owner's server. Only authorized project members receive compilation jobs; their browsers perform the TeX work while the backend coordinates identities, collaboration, storage and jobs.
+
+The guide includes configuration, administrator creation, individual accounts/invitations and encrypted backup/restore. Keep private configuration outside Git. Public hosting, registration restrictions, mail delivery and off-host restore must be checked for the chosen host before public exposure. No public instance is supplied by this repository yet.
+
+## Languages
+
+| Component | Language |
+|---|---|
+| Reused Overleaf editor, application server and collaboration | JavaScript / TypeScript |
+| Participant-job coordinator | Rust |
+| Browser compilation, native-editor/offline adapters, and server snapshot/result integration | JavaScript |
+| Layout and styling | HTML / CSS |
+| Packaging and instance configuration | Dockerfile / YAML; Node.js setup helpers |
+
+This is a mixed-language integration. It preserves the upstream application's host language and uses Rust for the separate job coordinator; it is not an all-Rust rewrite.
+
+## Implementation status and development
 
 The current first-version direction shares compilation among authorized participants' browsers, while CE+ retains authentication, storage and live collaboration. The [self-hosting candidate](runtime/participant-compile/hosting/README.md) builds from pinned public images/resources and includes the selected editor/recovery/navigation overlays. The [encrypted cold-backup procedure](runtime/participant-compile/BACKUP.md) has passed an isolated source/assets/accounts/invitation restore drill. This is preparation for independent hosting; no public host or application release is active. The work-order checkpoint in the plan supersedes the older server-compilation roadmap below.
 
@@ -31,7 +57,7 @@ Reuse reduces implementation effort, not product scope. No feature is silently r
 | R6 / 0.7 | Shared server compilation, administration and backup/restore |
 | R7 / 0.8 | Required multi-user job distribution, fairness and worker recovery |
 
-Earlier accurately labelled partial releases need their own gates and prerequisites; later required phases remain part of complete-project acceptance. Local only must avoid remote-server contact. A possible loopback helper for local files/compilation is unresolved and must be justified by browser feasibility checks. Rust is intended for missing custom backend functions; reuse browser editor/engine code in its existing language.
+Earlier accurately labelled partial releases need their own gates and prerequisites; later required phases remain part of complete-project acceptance. Local only must avoid remote-server contact. A possible loopback helper for local files/compilation is unresolved and must be justified by browser feasibility checks. Rust and JavaScript are used where they fit the integration; reused browser/editor code retains its existing language.
 
 The existing builder produces **planning assets only**, not a web application or VSIX. No application phase has passed; R0 is in progress. The archived extension-based experiment is historical evidence, not the delivery architecture or browser acceptance. R0 must implement actual web/service packaging, browser smoke checks and rollback. No deployment or release is authorized by this documentation revision.
 
@@ -48,7 +74,7 @@ npm run test:package
 
 Build from a clean committed snapshot. These commands verify planning/tooling consistency, not application behavior.
 
-Free-account projects can be transferred through source ZIP download/upload; Premium Git access is not required. ZIP imports are separate projects, and returning changes to the original shared online project needs deliberate file updates and conflict review. Central login will use an external identity provider; project identities/permissions remain local, but collaborators need not give this application their provider passwords. External login is not activated.
+Free-account projects can be transferred through source ZIP download/upload; Premium Git access is not required. ZIP imports are separate projects, and returning changes to the original shared online project needs deliberate file updates and conflict review. The candidate supports operator-configured Google sign-in and native local accounts. Project identities and permissions remain local to each installation; collaborators enter provider passwords only at the provider. A public login callback remains unqualified.
 
 The opt-in live browser check is `test/browser/free-account.mjs` (retrieve it into a temporary checkout). It requires the existing synthetic Alice/Bob accounts, their passwords supplied privately as `OVERLEAF_TEST_ALICE_PASSWORD` and `OVERLEAF_TEST_BOB_PASSWORD`, and an installed Playwright runtime. Run `PLAYWRIGHT_MODULE=/absolute/path/to/playwright CHROME_PATH=/absolute/path/to/chrome node test/browser/free-account.mjs` on macOS. It creates a uniquely named synthetic project and reports its URL for scoped cleanup; it never uses real Overleaf accounts, imports browser cookies, exposes a port or uploads to overleaf.com. Page traffic is restricted to loopback; server/container egress is unchanged.
 
@@ -58,7 +84,7 @@ The local setup also includes the [required TeX package image](runtime/texlive-c
 
 FAST-02 same-machine comparison: overlapping-pair arrival p95 44 → 27 ms (32 pairs/profile), sustained 204-character streams 1,329/1,314 ms, and native outgoing edit frames 168 → 215 (+28%) for the complete identical workload. This is a latency/traffic tradeoff, not proven throughput/memory improvement. Input→send/peer receipt samples were 21.0/36.7 ms before and 10.5/27.1 ms after. Both profiles passed convergence, per-user undo/redo, cross-user review/chat, simultaneous PDFs, history/reload and exact synthetic job-group loss/failure/retry. Peak memory, large-project throughput and internet latency remain unmeasured.
 
-[Browser recovery and Local only](runtime/browser-recovery/README.md) adds durable per-tab text candidates and a cached local document workspace. Explicit Connect reads the shared project without applying local candidates automatically. Copies stay in this browser profile until deleted; offline assets/PDF/compile and complete review reconciliation remain unfinished.
+[Browser recovery and Local only](runtime/browser-recovery/README.md) provides per-tab candidates and side-by-side review against current shared text. Reconnect never applies changes automatically. Prepared projects now open the same native CE+ editor/file tree/PDF viewer offline, with local compilation, exact ZIP export and saved reload verified in Chrome. Local file/folder/project creation is implemented; broader navigation/recovery, project compatibility, installation and final delivery checks remain in progress. The separate recovery prototype is retained as test/support tooling, not the offline project interface.
 
 [Native pdfLaTeX](runtime/native-tex/README.md) and its native Perl/latexmk wrapper avoid emulation for those processes on the current ARM VM. The resumed continuous-typing check displayed its first changed PDF in 354 ms and final text 292 ms after typing ended; this single repeat is not a tail-latency or load guarantee. [Math PDF-to-source selection](runtime/synctex-selection/README.md) resolves unique literal terms within the mapped math block, retaining coarse SyncTeX behavior for repeated/unsupported terms. Hard-reload after installation; this is not Word-like instantaneous PDF delivery.
 

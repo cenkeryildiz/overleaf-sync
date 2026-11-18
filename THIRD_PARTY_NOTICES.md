@@ -17,3 +17,7 @@ Before adding dependencies or vendored code, record the exact revision, license,
 The TeX package image recipe in `runtime/texlive-course/` derives from the pinned CE+ image and uses individually licensed TeX Live packages; revisions/licenses are recorded there. No private document, source ZIP or PDF is included in the recipe, source archive or tests. The image itself is not published.
 
 The local recovery comparison includes the unchanged jsdiff 5.2.2 browser bundle (BSD-3-Clause); see runtime/browser-recovery/DIFF-LICENSE.txt and docs/dependencies.md for attribution and exact provenance.
+
+Offline PDF rendering reuses the pinned CE+ PDF.js5.1.91 distribution under Apache-2.0; the built UI ships its full license and individual CMap/font notices. runtime/browser-recovery/synctex-parser.mjs reuses LaTeX Workshop10.20.0's MIT SyncTeX parser with the original Thomas Durieux notice preserved; only its module exports are adapted for the browser. BusyTeX/CodeMirror licenses above continue to apply unchanged.
+
+runtime/browser-recovery/client-zip.mjs is client-zip2.5.1, Copyright2020David Junger, MIT; full terms are in CLIENT-ZIP-LICENSE.txt and shipped with the offline static assets. It supplies streaming ZIP container generation only; this application makes no upstream performance claim.

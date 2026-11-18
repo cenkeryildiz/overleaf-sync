@@ -8,7 +8,7 @@ import { addOptionalCleanupHandlerBeforeStoppingTraffic } from '../../infrastruc
 import { snapshot } from './LivePreview.mjs';
 import { prepareSnapshot, prepareResult } from './ParticipantArtifacts.mjs';
 
-const jobs = new Map(), pending = new Map(), artifacts = new Map();
+const jobs = new Map(), pending = new Map(), artifacts = new Map(), preparing = new Set();
 let child, serial = 0, retainedBytes = 0, stopping = false;
 addOptionalCleanupHandlerBeforeStoppingTraffic('participant coordinator', () => {
   stopping = true;
@@ -70,6 +70,17 @@ export async function participantCompile(req, res) {
   if (!body || typeof body.op !== 'string') return res.sendStatus(400);
   try {
     const identity = { project, user };
+    if (body.op === 'prepare-offline') {
+      if (preparing.size >= 2 || preparing.has(user)) return res.sendStatus(429);
+      preparing.add(user); let reading = true, closed = false;
+      const release = () => { closed = true; if (!reading) preparing.delete(user); };
+      res.once('finish', release); res.once('close', release);
+      try {
+        const raw = await snapshot(project, user, body, true, true);
+        if (!closed) return res.json({ ...identity, source: prepareSnapshot(raw), documents: raw.documents });
+      } finally { reading = false; if (closed) preparing.delete(user); }
+      return;
+    }
     if (body.op === 'queue') {
       if (jobs.size >= 32 || [...jobs.values()].filter(j => j.user === user).length >= 2) return res.sendStatus(429);
       const source = prepareSnapshot(await snapshot(project, user, body));

@@ -12,6 +12,8 @@ import { patchCaret, patchImmediateCaret, patchTypingCaret } from '../../live-ca
 import { patchSynctex, patchPdfViewer } from '../../synctex-selection/apply.mjs';
 import { patchSdk } from '../sdk-patch.mjs';
 import { patchOutputAuthorization } from './output-auth.mjs';
+import { provisionOffline } from '../../browser-recovery/provision-offline.mjs';
+import { patchRouter, patchSessionSockets } from '../../session-revocation/apply.mjs';
 
 const root = '/overleaf/services/web', publicRoot = root + '/public';
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -91,5 +93,9 @@ await download('https://github.com/TeXlyre/texlyre-busytex/releases/download/ass
 execFileSync('tar', ['-xzf', '/tmp/busytex-assets.tar.gz', '--no-same-owner', '-C', participant]);
 renameSync(join(participant, 'busytex/busytex_worker.js'), join(participant, 'busytex/busytex_worker.original.js'));
 copyFileSync(new URL('../worker.js', import.meta.url), join(participant, 'busytex/busytex_worker.js'));
+await provisionOffline(publicRoot, '/overleaf/.yarn/cache/pdfjs-dist-npm-5.1.91-da7976c225-65ff148d09.zip');
 for (const path of ['/tmp/busytex-sdk', '/tmp/busytex-sdk.tgz', '/tmp/busytex-assets.tar.gz']) rmSync(path, { recursive: true, force: true });
-console.log('Provisioned pinned public assets, participant-only UI, recovery, carets and source navigation.');
+const realtime = '/overleaf/services/real-time/app/js/';
+writeFileSync(realtime + 'Router.js', patchRouter(pinned(realtime + 'Router.js', '8b48a1df3cfd314895d0c0cdbb0b0862a9f05ac381683c9159e3cb4b0962b26a')));
+writeFileSync(realtime + 'SessionSockets.js', patchSessionSockets(pinned(realtime + 'SessionSockets.js', '9e440d8be33020059545bcf30ab59ff112a41cb3ee8c507e76474442d95dc826')));
+console.log('Provisioned pinned public assets, participant-only UI, recovery, carets, source navigation and live session checks.');

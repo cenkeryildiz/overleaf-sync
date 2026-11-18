@@ -69,6 +69,31 @@ test('review applies minimal native changes only against the exact connected doc
     assert.throws(() => api.applyReviewed(record, fresh, 'refused')); assert.equal(writes, 1);
   }
 });
+test('offline project storage refuses wrong identity, unsafe paths and malformed files before opening storage', async () => {
+  let opens = 0;
+  const context = vm.createContext({ TextEncoder, Blob, crypto: webcrypto, atob,
+    indexedDB: { open() { opens++; throw Error('Unexpected storage access'); } } });
+  vm.runInContext(readFileSync(new URL('../runtime/browser-recovery/project-store.js', import.meta.url), 'utf8'), context);
+  const payload = { user: account, project, source: { main: 'main.tex', compiler: 'pdflatex', resources: [{ path: 'main.tex', content: 'source' }] }, documents: [{ path: 'main.tex', id: docId, version: 7 }] };
+  await assert.rejects(context.overleafLocalProjects.create(payload, 'd'.repeat(24), project), /identity changed/);
+  for (const path of ['../private', '/absolute', 'a//b', 'a\\b']) {
+    const value = structuredClone(payload); value.source.resources[0].path = path;
+    await assert.rejects(context.overleafLocalProjects.create(value, account, project), /Invalid project file/);
+  }
+  const duplicate = structuredClone(payload); duplicate.source.resources.push(duplicate.source.resources[0]);
+  await assert.rejects(context.overleafLocalProjects.create(duplicate, account, project), /Invalid project file/);
+  const malformed = structuredClone(payload); malformed.documents[0].version = -1;
+  await assert.rejects(context.overleafLocalProjects.create(malformed, account, project), /document identity/);
+  const changed = structuredClone(payload); changed.source.digest = '0'.repeat(64);
+  await assert.rejects(context.overleafLocalProjects.create(changed, account, project), /integrity mismatch/);
+  assert.equal(opens, 0);
+  for (const name of ['', '../outside', '/absolute', 'a//b', 'a\\b']) {
+    await assert.rejects(context.overleafLocalProjects.add({ id: 'unused' }, 'doc', name), /Invalid local/);
+  }
+  await assert.rejects(context.overleafLocalProjects.add({}, 'linked_file', 'a.tex'), /Invalid local/);
+  for (const name of ['', ' ', 'a'.repeat(201), 'bad\0name']) await assert.rejects(context.overleafLocalProjects.blank('unused', name), /project name/);
+  assert.equal(opens, 0);
+});
 test('editor hook refuses duplicate/unknown/already-patched input', () => {
   const fixture='let{currentDoc:o}=e;const s=r.Z9.define;(0,y.WU)(e.currentDoc,e.handleError);return o.attachToCM6(t),{update(e){x}};return n.Nb.highest([s,i])};class u extends s.EventEmitter';
   const patched=patchEditor(fixture,'CORE','CONFIG');assert(patched.includes('overleafRecovery.extension(n.$t,n.ZX,o,recoveryName)'));assert(patched.startsWith('CONFIG\nCORE\n'));
@@ -94,4 +119,75 @@ test('LAN UUID editor patch refuses ambiguous or already-patched recovery source
   const fixture = '  const writer = globalThis.crypto.randomUUID();\nreturn { writer: globalThis.crypto.randomUUID(), revision: 0 };';
   const output = patchLanUuid(fixture, source); assert(output.includes('function randomUUID()'));
   assert.throws(() => patchLanUuid(output, source)); assert.throws(() => patchLanUuid(fixture + fixture, source)); assert.throws(() => patchLanUuid(fixture, 'unknown'));
+});
+
+test('offline navigation uses exact project paths and refuses malformed or oversized output', async () => {
+  const context = vm.createContext({ TextEncoder, Blob, DecompressionStream, Uint8Array, crypto: webcrypto, atob });
+  const parser = new vm.SourceTextModule(readFileSync(new URL('../runtime/browser-recovery/synctex-parser.mjs', import.meta.url), 'utf8'), { context });
+  const sdk = new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+    for (const name of ['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex']) this.setExport(name, class {});
+  }, { context });
+  const module = new vm.SourceTextModule(readFileSync(new URL('../runtime/browser-recovery/project-compile.mjs', import.meta.url), 'utf8'), { context });
+  await module.link(name => name.includes('synctex') ? parser : sdk); await module.evaluate();
+  const { fingerprint, forward, backward, navigation } = module.namespace;
+  const nodes = [{ path: 'one/child.tex', line: 5, page: 1, x: 10, y: 20, width: 30, height: 10 }, { path: 'two/child.tex', line: 7, page: 2, x: 5, y: 6, width: 10, height: 10 }];
+  assert.equal(forward(nodes, 'one/child.tex', 5), nodes[0]); assert.equal(forward(nodes, 'child.tex', 5), undefined);
+  assert.equal(backward(nodes, 2, 7, 8), nodes[1]); assert.equal(backward(nodes, 3, 7, 8), undefined);
+  const project = { main: 'main.tex', compiler: 'pdflatex' }, files = [{ path: 'main.tex', content: 'base' }, { path: 'figure.png', data: 'AA==' }];
+  assert.equal(await fingerprint(project, files), await fingerprint(project, files.toReversed()));
+  assert.notEqual(await fingerprint(project, files), await fingerprint(project, [{ ...files[0], content: 'changed' }, files[1]]));
+  await assert.rejects(navigation(new Uint8Array(8 * 1024 * 1024 + 1), project, files), /Invalid navigation/);
+  const { gzipSync } = await import('node:zlib');
+  await assert.rejects(navigation(new Uint8Array(gzipSync('not SyncTeX')), project, files), /Unsupported navigation/);
+});
+
+test('large public cache entries stream exact verified parts and do not publish failed writes', async () => {
+  const bytes = new Uint8Array(16 * 1024 * 1024 + 3); bytes[0] = 7; bytes[bytes.length - 1] = 93;
+  const digest = Buffer.from(await webcrypto.subtle.digest('SHA-256', bytes)).toString('hex');
+  const values = new Map(); let fail = true;
+  const cache = { async put(url, response) { if (fail && String(url).endsWith('?part=1')) throw Error('injected write failure'); values.set(String(url), response); }, async match(url) { return values.get(String(url))?.clone(); } };
+  const manifest = { version: 'test', nativePaths: [], assets: [] };
+  const context = vm.createContext({ self: { addEventListener() {}, location: { origin: 'https://fixture.test' } }, URL, Response, ReadableStream, Uint8Array,
+    crypto: webcrypto, fetch: async (_, options) => {
+      const range = options.headers?.Range?.match(/^bytes=(\d+)-(\d+)$/);
+      return range ? new Response(bytes.slice(Number(range[1]), Number(range[2]) + 1), { status: 206 }) : new Response(bytes);
+    } });
+  vm.runInContext(readFileSync(new URL('../runtime/browser-recovery/recovery-sw.template.js', import.meta.url), 'utf8').replace('__RECOVERY_MANIFEST__', JSON.stringify(manifest)), context);
+  const partHash = async value => Buffer.from(await webcrypto.subtle.digest('SHA-256', value)).toString('hex');
+  const url = new URL('https://fixture.test/recovery/package.data'), asset = { path: url.pathname, sha256: digest, size: bytes.length,
+    parts: [await partHash(bytes.slice(0, 16 * 1024 * 1024)), await partHash(bytes.slice(16 * 1024 * 1024))], type: 'application/octet-stream' };
+  await assert.rejects(context.store(cache, asset), /injected write/); assert.equal(values.has(url.href), false);
+  fail = false; await context.store(cache, asset);
+  const response = await context.cached(cache, url); assert.equal(Number(response.headers.get('Content-Length')), bytes.length);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+  values.clear(); await assert.rejects(context.store(cache, { ...asset, parts: ['0'.repeat(64), asset.parts[1]] }), /integrity mismatch/); assert.equal(values.size, 0);
+});
+
+test('native offline recovery retains the original shared baseline and enforces account/project identity', () => {
+  const { api, context } = client();
+  context.location.pathname = '/recovery/native-workspace.html';
+  context.overleafOfflineNative = { account, project, clientProject: project, file: () => ({ base: { version: 42, text: 'original shared text' } }) };
+  filter(api, 'local already changed')(change('local already changed', 'next edit'));
+  const record = api.list(account, project)[0].record; assert.equal(record.base.version, 42); assert.equal(record.base.text, 'original shared text');
+  context.overleafOfflineNative.account = 'd'.repeat(24);
+  assert.equal(filter(api)(change()).length, 0);
+});
+
+test('offline ZIP export refuses unsafe/duplicate/ambiguous paths and retains exact binary inputs', async () => {
+  const { projectZip } = await import('../runtime/browser-recovery/project-zip.mjs');
+  const files = [{ path: 'nested/chapter.tex', content: 'Exact source\n' }, { path: 'figure.png', data: 'AAEC/w==' }];
+  const zip = await projectZip(files); assert.equal((await zip.slice(0, 2).text()), 'PK'); assert(zip.size > 4);
+  for (const path of ['../secret', '/absolute', 'a/../b', 'a\\b', 'x:y']) await assert.rejects(projectZip([{ path, content: 'x' }]), /Invalid project file/);
+  await assert.rejects(projectZip([files[0], files[0]]), /Invalid project file/);
+  await assert.rejects(projectZip([{ path: 'x', content: 'x', data: 'AA==' }]), /Invalid project file/);
+  assert.equal(files[1].data, 'AAEC/w==');
+});
+
+test('held local saving refuses further edits while keeping the existing recovery copy', () => {
+  const { api, context } = client(); const capture = filter(api); capture(change());
+  const retained = api.list(account, project)[0].record.candidate;
+  context.overleafOfflineNative = { savingHeld: true };
+  assert.equal(capture(change('base+edit', 'must not apply')).length, 0);
+  assert.equal(api.list(account, project)[0].record.candidate, retained);
+  const remote = change('base+edit', 'remote', true); assert.equal(capture(remote), remote);
 });

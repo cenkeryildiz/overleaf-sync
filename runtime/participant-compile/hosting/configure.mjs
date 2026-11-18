@@ -12,9 +12,10 @@ export function configuration(site, client, port = '8080') {
   assert(url.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname), 'Public sites require HTTPS');
   assert(/^\d{1,5}$/.test(port) && +port > 0 && +port <= 65535, 'Invalid local port');
   const web = client.web;
-  assert(web && /^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(web.client_id) &&
+  assert(web && typeof web.client_id === 'string' && typeof web.client_secret === 'string' &&
+    /^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(web.client_id) &&
     /^[A-Za-z0-9_-]+$/.test(web.client_secret), 'Google JSON must contain a web client');
-  assert(web.redirect_uris?.includes(url.origin + '/oidc/login/callback'), 'Google client is missing this exact site callback');
+  assert(Array.isArray(web.redirect_uris) && web.redirect_uris.includes(url.origin + '/oidc/login/callback'), 'Google client is missing this exact site callback');
   const values = { OVERLEAF_SITE_URL: url.origin, LATEX_PORT: port,
     OVERLEAF_INVITE_TOKEN_SECRET: randomBytes(32).toString('hex'),
     OVERLEAF_SESSION_SECRET: randomBytes(32).toString('hex'),

@@ -1,0 +1,83 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Offline UI tokens. Standalone pages follow the saved Overleaf theme or the system theme;
+   inside the native editor the same tokens resolve to CE+'s own themed variables. */
+:root {
+  --olx-bg: #ffffff; --olx-bg-2: #f4f5f6; --olx-bg-3: #e7e9ee; --olx-raised: #ffffff;
+  --olx-fg: #1b222c; --olx-fg-2: #495365; --olx-fg-3: #677283; --olx-line: #d3d7de; --olx-line-strong: #b4bac5;
+  --olx-accent: #098842; --olx-accent-hover: #05692f; --olx-accent-soft: #e7f7ed; --olx-accent-fg: #ffffff;
+  --olx-warn: #8f5514; --olx-warn-soft: #fcf1e3; --olx-danger: #b83a33; --olx-danger-soft: #fbe9e7;
+  --olx-focus: #3265b2; --olx-shadow: 0 12px 32px rgba(27, 34, 44, .16), 0 2px 6px rgba(27, 34, 44, .08);
+  --olx-radius: 8px; --olx-radius-sm: 6px;
+  --olx-font: 'Noto Sans', 'Lato', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --olx-mono: 'DM Mono', 'Source Code Pro', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --olx-bg: #1b222c; --olx-bg-2: #151a21; --olx-bg-3: #2f3a4c; --olx-raised: #222a36;
+    --olx-fg: #f4f5f6; --olx-fg-2: #c7cbd3; --olx-fg-3: #9da7b7; --olx-line: #363f4f; --olx-line-strong: #4b5668;
+    --olx-accent: #31ab6b; --olx-accent-hover: #4cc17f; --olx-accent-soft: #14301f; --olx-accent-fg: #0b1610;
+    --olx-warn: #f0b25c; --olx-warn-soft: #3a2a12; --olx-danger: #f37d74; --olx-danger-soft: #3b1d1b;
+    --olx-focus: #7fa6e8; --olx-shadow: 0 12px 32px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .35); color-scheme: dark;
+  }
+}
+:root[data-theme=dark] {
+  --olx-bg: #1b222c; --olx-bg-2: #151a21; --olx-bg-3: #2f3a4c; --olx-raised: #222a36;
+  --olx-fg: #f4f5f6; --olx-fg-2: #c7cbd3; --olx-fg-3: #9da7b7; --olx-line: #363f4f; --olx-line-strong: #4b5668;
+  --olx-accent: #31ab6b; --olx-accent-hover: #4cc17f; --olx-accent-soft: #14301f; --olx-accent-fg: #0b1610;
+  --olx-warn: #f0b25c; --olx-warn-soft: #3a2a12; --olx-danger: #f37d74; --olx-danger-soft: #3b1d1b;
+  --olx-focus: #7fa6e8; --olx-shadow: 0 12px 32px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .35); color-scheme: dark;
+}
+
+/* Inside the native editor: inherit CE+ themed tokens so light/dark follow the user's editor theme. */
+.olx-native {
+  --olx-bg: var(--bg-primary-themed, #fff); --olx-bg-2: var(--bg-secondary-themed, #f4f5f6); --olx-bg-3: var(--bg-tertiary-themed, #e7e9ee);
+  --olx-raised: var(--bg-primary-themed, #fff); --olx-fg: var(--content-primary-themed, #1b222c);
+  --olx-fg-2: var(--content-secondary-themed, #495365); --olx-fg-3: var(--content-placeholder-themed, #677283);
+  --olx-line: var(--border-divider-themed, #d3d7de); --olx-line-strong: var(--border-primary-themed, #b4bac5);
+  --olx-accent-fg: #fff; --olx-warn: var(--content-warning-themed, #8f5514); --olx-danger: var(--content-danger-themed, #b83a33);
+  font-family: var(--olx-font);
+}
+
+/* Toolbar control group */
+.olx-bar { display: flex; align-items: center; gap: 4px; margin-right: 8px; min-width: 0; font: 13px/1.3 var(--olx-font); color: var(--olx-fg); }
+.olx-bar.olx-floating { position: fixed; top: 8px; right: 12px; z-index: 5000; padding: 4px; background: var(--olx-raised); border: 1px solid var(--olx-line); border-radius: var(--olx-radius); box-shadow: var(--olx-shadow); }
+.olx-bar [role=status] { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--olx-fg-3); font-size: 12px; padding: 0 6px; }
+.olx-bar [role=status]:empty { display: none; }
+.olx-bar [data-error=true], .olx-bar [role=status][data-error=true] { color: var(--olx-danger); }
+.olx-icon { font-size: 20px; line-height: 1; font-variation-settings: 'FILL' 0, 'wght' 400; }
+.olx-button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--olx-radius-sm);
+  background: transparent; color: var(--olx-fg); font: 500 13px/1 var(--olx-font); cursor: pointer; white-space: nowrap; transition: background-color .12s ease, border-color .12s ease; }
+.olx-button:hover { background: var(--olx-bg-3); }
+.olx-button:focus-visible, .olx-menu-item:focus-visible { outline: 2px solid var(--olx-focus); outline-offset: 1px; }
+.olx-button:disabled { opacity: .5; cursor: default; background: transparent; }
+.olx-button[aria-expanded=true] { background: var(--olx-bg-3); }
+.olx-icon-only { width: 32px; justify-content: center; padding: 0; }
+.olx-chip { gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 999px; border: 1px solid var(--olx-line); background: var(--olx-bg-2); font-weight: 600; }
+.olx-chip .olx-icon { font-size: 18px; }
+.olx-chip[data-tone=local] { background: var(--olx-warn-soft, var(--olx-bg-2)); border-color: transparent; color: var(--olx-warn); }
+.olx-chip[data-tone=connected] .olx-icon { color: var(--olx-accent); }
+.olx-chip[data-tone=disconnected] .olx-icon { color: var(--olx-warn); }
+.olx-separator { width: 1px; height: 20px; background: var(--olx-line); margin: 0 4px; }
+.olx-bar > .btn, .olx-bar > button:not(.olx-button) { height: 32px; padding: 0 10px; border-radius: var(--olx-radius-sm); font: 500 13px/1 var(--olx-font); }
+
+/* Menu */
+.olx-menu-wrap { position: relative; display: inline-flex; }
+.olx-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 6000; min-width: 300px; max-width: 360px; padding: 6px;
+  background: var(--olx-raised); color: var(--olx-fg); border: 1px solid var(--olx-line); border-radius: var(--olx-radius); box-shadow: var(--olx-shadow); }
+.olx-menu[hidden] { display: none; }
+.olx-menu-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; }
+.olx-menu-head strong { display: block; font-size: 14px; }
+.olx-menu-head small { display: block; color: var(--olx-fg-3); font-size: 12px; margin-top: 2px; }
+.olx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--olx-accent); flex: none; box-shadow: 0 0 0 3px var(--olx-accent-soft); }
+.olx-dot[data-state=disconnected] { background: var(--olx-warn); box-shadow: 0 0 0 3px var(--olx-warn-soft); }
+.olx-menu-divider { height: 1px; margin: 6px 4px; background: var(--olx-line); }
+.olx-menu-item { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: var(--olx-radius-sm);
+  background: transparent; color: var(--olx-fg); text-align: left; font: 13px/1.35 var(--olx-font); cursor: pointer; }
+.olx-menu-item:hover, .olx-menu-item:focus-visible { background: var(--olx-bg-2); }
+.olx-menu-item .olx-icon { color: var(--olx-fg-2); margin-top: 1px; }
+.olx-menu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.olx-menu-title { font-weight: 600; }
+.olx-menu-description { color: var(--olx-fg-3); font-size: 12px; }
+/* Status text and buttons other modules append to the connected controls stay before the menu. */
+.recovery-controls .olx-menu-wrap { order: 5; }
