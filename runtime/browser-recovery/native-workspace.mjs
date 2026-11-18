@@ -3,6 +3,7 @@
 import { LocalCompiler, fingerprint, navigation, forward, backward } from './project-compile.mjs';
 import { projectZip } from './project-zip.mjs';
 const api = globalThis.overleafLocalProjects;
+const report = state => dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } }));
 const status = (text, error = false) => { const node = document.querySelector('#local-status'); node.textContent = text; node.title = text; node.dataset.error = error; };
 {
   // Offline controls live in the native toolbar; server-only Share and History are hidden here.
@@ -23,6 +24,7 @@ const status = (text, error = false) => { const node = document.querySelector('#
   const separator = document.createElement('span'); separator.className = 'olx-separator';
   bar.append(iconButton('local-zip', 'Download project (.zip)', 'folder_zip'), iconButton('local-pdf', 'Download PDF', 'picture_as_pdf'),
     ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), separator, wrap);
+  bar.querySelector('#local-status').after(ui.durability());
   ui.mount(bar, { hideLabels: ['Share', 'History'] });
 }
 let project, files, active, pending = Promise.resolve(), failure, nav, controller, outputDigest;
@@ -112,9 +114,9 @@ try {
           if (!editor || !file || update.v !== version || typeof text !== 'string') throw Error('Local source version changed');
           const next = await api.save(file, text); files.set(next.path, next); nav = undefined;
           callback(null); broadcast('otUpdateApplied', { doc, v: update.v });
-          status('Saved in this browser. PDF may be from an earlier compilation.');
+          status('Saved in this browser. PDF may be from an earlier compilation.'); report('device');
         }).catch(error => {
-          failure = error; status(error.message + ' Export your work before closing.', true);
+          failure = error; status(error.message + ' Export your work before closing.', true); report('visible');
           // Keep the unsaved OT operation pending; an error acknowledgement opens a modal that blocks export.
           socket.disconnect();
         });

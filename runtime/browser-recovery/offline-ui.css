@@ -45,6 +45,13 @@
 .olx-bar [role=status] { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--olx-fg-3); font-size: 12px; padding: 0 6px; }
 .olx-bar [role=status]:empty { display: none; }
 .olx-bar [data-error=true], .olx-bar [role=status][data-error=true] { color: var(--olx-danger); }
+.olx-bar .olx-durability { display: inline-flex; align-items: center; gap: 4px; }
+.olx-bar .olx-durability[hidden] { display: none; }
+.olx-durability > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.olx-durability .olx-icon { font-size: 16px; }
+.olx-bar .olx-durability[data-state=visible] { color: var(--olx-danger); }
+.olx-bar .olx-durability[data-state=local], .olx-bar .olx-durability[data-state=acknowledged] { color: var(--olx-warn); }
+.olx-durability[data-state=server] .olx-icon, .olx-durability[data-state=device] .olx-icon { color: var(--olx-accent); }
 .olx-icon { font-size: 20px; line-height: 1; font-variation-settings: 'FILL' 0, 'wght' 400; }
 .olx-button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--olx-radius-sm);
   background: transparent; color: var(--olx-fg); font: 500 13px/1 var(--olx-font); cursor: pointer; white-space: nowrap; transition: background-color .12s ease, border-color .12s ease; }

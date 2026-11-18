@@ -14,6 +14,7 @@
   const entries = new Map();
   let current, controls, offeredReview, toolbarLoading = false;
   const id = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
+  const report = state => { try { dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } })); } catch { /* Display only. */ } };
   const valid = value => value?.schema === 1 && id(value.account) && id(value.project) && id(value.doc)
     && typeof value.writer === 'string' && /^[a-f0-9-]{36}$/.test(value.writer)
     && Number.isSafeInteger(value.revision) && value.revision >= 0
@@ -101,7 +102,7 @@
         const next = { ...previous, revision: previous.revision + 1, candidate: tr.newDoc.toString(), updatedAt: Date.now() };
         const stored = save(next); entries.set(container.doc_id, next);
         globalThis.overleafSessionCheckpoint?.track(stored, next);
-        note('Recovery copy of your latest edit saved in this browser.'); return tr;
+        note('Recovery copy of your latest edit saved in this browser.'); report('local'); return tr;
       } catch {
         status('Edit paused: browser storage failed. Export your work or free browser storage.', true); return [];
       }
@@ -248,7 +249,7 @@
     ui.stylesheet();
     try { const settings = meta('ol-userSettings'); if (typeof settings?.overallTheme === 'string') ui.theme(settings.overallTheme); } catch { /* theme is cosmetic */ }
     controls = document.createElement('div'); controls.className = 'recovery-controls olx-bar olx-native'; controls.setAttribute('aria-label', 'Workspace connection and recovery');
-    const state = document.createElement('span'); state.setAttribute('role', 'status'); state.setAttribute('aria-live', 'polite'); controls.append(state);
+    const state = document.createElement('span'); state.setAttribute('role', 'status'); state.setAttribute('aria-live', 'polite'); controls.append(state, ui.durability());
     const trigger = ui.button({ className: 'olx-chip', iconName: 'cloud_done', label: 'Offline', ariaLabel: 'Offline and recovery options' });
     const head = document.createElement('div'); head.className = 'olx-menu-head';
     const dot = document.createElement('span'); dot.className = 'olx-dot'; const headText = document.createElement('div');
@@ -259,6 +260,8 @@
       trigger.dataset.tone = online ? 'connected' : 'disconnected'; trigger.querySelector('.olx-icon').textContent = online ? 'cloud_done' : 'cloud_off';
     };
     connected(container.socket.socket.connected);
+    // Own-op acknowledgement carries no op; wait for ShareJS to clear its buffers first.
+    container.socket.on('otUpdateApplied', update => { if (!update?.op) setTimeout(() => { const doc = current?.container.doc; if (update?.doc === current?.container.doc_id && doc && !doc.hasBufferedOps()) report('acknowledged'); }, 0); });
     container.socket.on('disconnect', () => connected(false));
     container.socket.on('joinProjectResponse', () => connected(true));
     const workOffline = async () => {

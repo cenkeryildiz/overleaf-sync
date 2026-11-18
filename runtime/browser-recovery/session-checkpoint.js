@@ -4,11 +4,12 @@
   'use strict';
   if (globalThis.overleafSessionCheckpoint) return;
   const recoveryPrefix = 'overleaf.recovery.v1.', markerPrefix = 'overleaf.checkpoint.v1.';
-  const owned = new Map(), claiming = new Map();
+  const owned = new Map(), claiming = new Map(), unproven = new Set();
   let scope, timer, inflight;
   const id = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
   const hex = bytes => [...new Uint8Array(bytes)].map(value => value.toString(16).padStart(2, '0')).join('');
   const marker = key => markerPrefix + key.slice(recoveryPrefix.length);
+  const report = state => { try { dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } })); } catch { /* Display only. */ } };
   function live(expected = scope) {
     if (!expected || globalThis.overleafOfflineNative || location.pathname !== '/project/' + expected.project) return false;
     const node = document.querySelector('meta[name="ol-user_id"]');
@@ -82,7 +83,7 @@
   function track(key, value) {
     try {
       if (!live() || !key.startsWith(recoveryPrefix) || value.workspace) return;
-      const raw = localStorage.getItem(key); record(key, raw);
+      const raw = localStorage.getItem(key); record(key, raw); unproven.add(key);
       const item = owned.get(key);
       if (item) { item.raw = raw; void prepare(item); schedule(); }
       else claim(key, false);
@@ -122,8 +123,10 @@
         if (item.raw !== raw || localStorage.getItem(item.key) !== raw || record(item.key, raw).revision !== revision) continue;
         localStorage.removeItem(item.key);
         if (localStorage.getItem(item.key) !== null) continue;
-        localStorage.removeItem(marker(item.key)); owned.delete(item.key); item.release?.();
+        localStorage.removeItem(marker(item.key)); owned.delete(item.key); unproven.delete(item.key); item.release?.();
       }
+      // Server-durable only once every edit this page tracked was proven and removed.
+      if (!unproven.size && captured.length) report('server');
     } finally { clearTimeout(deadline); }
   }
   function flush({ keepalive = false } = {}) {
