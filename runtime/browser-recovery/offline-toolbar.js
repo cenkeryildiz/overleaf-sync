@@ -62,6 +62,26 @@
     const link = document.createElement('link'); link.rel = 'stylesheet'; link.dataset.olx = ''; link.href = '/recovery/offline-ui.css';
     document.head.append(link);
   }
+  // Edit durability, never overstated: no off-host backup exists, so none is claimed.
+  const durabilityLabels = {
+    visible: ['warning', 'Not saved: on screen only. Export your work before closing.'],
+    local: ['history', 'Not yet saved to server — kept on this device'],
+    acknowledged: ['cloud_sync', 'Received by collaboration — not yet saved to server, kept on this device'],
+    device: ['offline_pin', 'Saved on this device — not on the server'],
+    server: ['cloud_done', 'Saved to server — not backed up off-host'],
+  };
+  function durability() {
+    const node = document.createElement('span'); node.className = 'olx-durability'; node.setAttribute('role', 'status'); node.setAttribute('aria-live', 'polite'); node.hidden = true;
+    const label = document.createElement('span'); node.append(icon('history'), label);
+    const set = state => {
+      const entry = durabilityLabels[state], from = node.dataset.state;
+      // A late acknowledgement or receipt never upgrades past a newer edit or a failure.
+      if (!entry || (state === 'acknowledged' && from !== 'local') || (state === 'server' && from !== 'local' && from !== 'acknowledged')) return;
+      node.dataset.state = state; node.firstChild.textContent = entry[0]; label.textContent = entry[1]; node.title = entry[1]; node.hidden = false;
+    };
+    addEventListener('overleaf-durability', event => set(event.detail?.state));
+    return node;
+  }
   // CE+ overallTheme: 'light-' is light, '' is the dark default, 'system' follows the OS.
   const themeKey = 'overleaf-offline-theme';
   function theme(value) {
@@ -71,5 +91,5 @@
     if (value === 'light-') root.dataset.theme = 'light'; else if (value === '') root.dataset.theme = 'dark'; else delete root.dataset.theme;
   }
   theme();
-  globalThis.overleafOfflineToolbar = Object.freeze({ icon, button, menu, mount, stylesheet, theme });
+  globalThis.overleafOfflineToolbar = Object.freeze({ icon, button, menu, mount, stylesheet, theme, durability });
 })();

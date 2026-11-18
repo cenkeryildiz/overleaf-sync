@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 const helper = readFileSync(new URL('../runtime/browser-recovery/session-checkpoint.js', import.meta.url), 'utf8');
 const recovery = readFileSync(new URL('../runtime/browser-recovery/recovery-core.js', import.meta.url), 'utf8');
+const toolbar = readFileSync(new URL('../runtime/browser-recovery/offline-toolbar.js', import.meta.url), 'utf8');
+class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
 const account = 'a'.repeat(24), project = 'b'.repeat(24), doc = 'c'.repeat(24);
 class Storage {
   values = new Map();
@@ -26,7 +28,7 @@ function lockManager() {
   };
 }
 function client({ storage = new Storage(), manager = lockManager(), owner = Symbol(), locks = true, respond, digest, abortController = globalThis.AbortController, user = account, path = '/project/' + project } = {}) {
-  const listeners = new Map(), timers = new Map(), requests = [];
+  const listeners = new Map(), timers = new Map(), requests = [], events = [];
   const identity = { user }, location = { pathname: path, href: 'https://latex.example' + path };
   let serial = 0;
   const crypto = digest ? { randomUUID: () => webcrypto.randomUUID(), subtle: { digest } } : webcrypto;
@@ -37,6 +39,7 @@ function client({ storage = new Storage(), manager = lockManager(), owner = Symb
       addEventListener(name, callback) { listeners.set('document:' + name, callback); },
     },
     addEventListener(name, callback) { listeners.set(name, callback); },
+    CustomEvent, dispatchEvent: event => events.push(event.detail.state),
     setTimeout(callback, delay) { const id = ++serial; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     fetch: async (url, options) => {
@@ -52,7 +55,7 @@ function client({ storage = new Storage(), manager = lockManager(), owner = Symb
     name: 'main.tex', base: { version: 0, text: '' }, candidate, updatedAt: Date.now(), ...fields });
   const save = record => { const key = context.overleafRecovery.save(record); api.track(key, record); return key; };
   api.start({ account: user, project });
-  return { api, context, storage, requests, identity, location, listeners, timers, make, save, manager, close: () => manager.close(owner) };
+  return { api, context, storage, requests, events, identity, location, listeners, timers, make, save, manager, close: () => manager.close(owner) };
 }
 const markers = storage => [...storage.values.keys()].filter(key => key.startsWith('overleaf.checkpoint.v1.'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -215,4 +218,89 @@ test('without AbortController no unbounded checkpoint request is sent', async ()
   const c = client({ abortController: null }), key = c.save(c.make());
   await c.api.flush(); assert.equal(c.requests.length, 0); assert.notEqual(c.storage.getItem(key), null);
   assert.equal(markers(c.storage).length, 1); c.close();
+});
+
+// Minimal DOM for the toolbar durability label.
+function element() {
+  const node = { children: [], dataset: {}, attributes: {}, hidden: false, textContent: '', append(...nodes) { this.children.push(...nodes); },
+    setAttribute(name, value) { this.attributes[name] = value; }, get firstChild() { return this.children[0]; } };
+  return node;
+}
+function label() {
+  const listeners = new Map();
+  const context = vm.createContext({ localStorage: new Storage(), document: { createElement: element, documentElement: { dataset: {} } },
+    addEventListener(name, callback) { listeners.set(name, callback); } });
+  vm.runInContext(toolbar, context);
+  const node = context.overleafOfflineToolbar.durability();
+  const send = state => listeners.get('overleaf-durability')(new CustomEvent('overleaf-durability', { detail: { state } }));
+  return { node, send, text: () => node.children[1].textContent };
+}
+
+test('durability label is accessible text, starts hidden and never claims an off-host backup', () => {
+  const l = label();
+  assert.equal(l.node.attributes.role, 'status'); assert.equal(l.node.attributes['aria-live'], 'polite'); assert.equal(l.node.hidden, true);
+  for (const state of ['visible', 'local', 'acknowledged', 'device', 'server']) {
+    const fresh = label(); if (state === 'acknowledged' || state === 'server') fresh.send('local');
+    fresh.send(state); assert.equal(fresh.node.dataset.state, state); assert.equal(fresh.node.hidden, false);
+    assert(fresh.text().length > 10 && fresh.node.title === fresh.text(), state);
+    assert(!/backed up off-host/.test(fresh.text()) || /not backed up off-host/.test(fresh.text()), state);
+  }
+});
+
+test('durability label orders edit, acknowledgement, receipt and refuses late upgrades', () => {
+  const l = label();
+  l.send('local'); assert.equal(l.text(), 'Not yet saved to server — kept on this device');
+  l.send('acknowledged'); assert.match(l.text(), /not yet saved to server/);
+  l.send('server'); assert.equal(l.text(), 'Saved to server — not backed up off-host');
+  l.send('acknowledged'); assert.equal(l.node.dataset.state, 'server', 'late acknowledgement cannot downgrade a receipt');
+  l.send('local'); l.send('server'); assert.equal(l.node.dataset.state, 'server');
+  l.send('visible'); l.send('server'); l.send('acknowledged'); assert.equal(l.node.dataset.state, 'visible', 'failure stays visible');
+  l.send('bogus'); assert.equal(l.node.dataset.state, 'visible');
+  const offline = label(); offline.send('local'); offline.send('device'); offline.send('server');
+  assert.equal(offline.node.dataset.state, 'device', 'a receipt cannot follow an offline-only save');
+});
+
+test('receipt reports server-durable only after every tracked edit is proven; 409 and timeout keep saved locally', async () => {
+  const ok = client(); ok.save(ok.make()); await ok.api.flush(); assert.deepEqual(ok.events, ['server']);
+  const refused = client({ respond: async () => ({ ok: false, status: 409 }) }), key = refused.save(refused.make()); await refused.api.flush();
+  assert.deepEqual(refused.events, []); assert.notEqual(refused.storage.getItem(key), null);
+  const hung = client({ respond: request => new Promise((resolve, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })) });
+  const hungKey = hung.save(hung.make()); await tick(); await tick();
+  const running = hung.api.flush(); while (!hung.requests.length) await tick();
+  [...hung.timers.values()].find(timer => timer.delay === 15000).callback(); await running;
+  assert.deepEqual(hung.events, []); assert.notEqual(hung.storage.getItem(hungKey), null);
+  let release;
+  const racing = client({ respond: request => new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ checkpoint: { user: account, project, durable: true, version: 9, documents: request.data.docs.map(d => ({ ...d, version: 12 })) } }) }); }) });
+  const original = racing.make(); racing.save(original); const flushing = racing.api.flush(); while (!release) await tick();
+  racing.save({ ...original, revision: 2, candidate: 'Newer unsaved source' }); release(); await flushing;
+  assert.deepEqual(racing.events, [], 'a newer edit during proof is not server-durable');
+  const partial = client(); partial.save(partial.make());
+  const otherDoc = partial.make('Second doc', { doc: 'd'.repeat(24) });
+  partial.storage.setItem(partial.context.overleafRecovery.key(otherDoc), JSON.stringify(otherDoc));
+  partial.context.navigator.locks.request = async (name, options, hold) => hold(null); partial.api.track(partial.context.overleafRecovery.key(otherDoc), otherDoc);
+  await partial.api.flush(); assert.deepEqual(partial.events, [], 'an unclaimed tracked edit blocks the server state');
+});
+
+test('offline/native editing never reports server-durable', async () => {
+  const c = client({ path: '/recovery/native-workspace.html' }); c.context.overleafOfflineNative = {};
+  c.save(c.make()); await c.api.flush(); assert.deepEqual(c.events, []); assert.equal(c.requests.length, 0);
+});
+
+test('own OT acknowledgement after a local edit reports acknowledged; buffered or remote ops do not', async () => {
+  const c = client(), socketListeners = new Map();
+  let buffered = false;
+  const node = () => ({ append() {}, after() {}, setAttribute() {}, addEventListener() {}, querySelector: () => node(), dataset: {}, isConnected: true });
+  c.context.document.createElement = node; c.context.document.head = node();
+  c.context.overleafOfflineToolbar = { stylesheet() {}, theme() {}, mount() {}, durability: node, button: node, menu: () => ({ list: node() }) };
+  const container = { doc_id: doc, docName: 'main.tex', socket: { socket: { connected: true }, on(name, callback) { socketListeners.set(name, callback); } },
+    doc: { getVersion: () => 7, type: 'sharejs-text-ot', _doc: { snapshot: 'base' }, hasBufferedOps: () => buffered } };
+  const idle = c.context.setTimeout; c.context.setTimeout = (callback, delay) => delay === 0 ? (callback(), 0) : idle(callback, delay);
+  c.context.overleafRecovery.attach({}, container, 'main.tex');
+  const capture = c.context.overleafRecovery.extension({ transactionFilter: { of: fn => fn } }, { remote: true }, container);
+  capture({ docChanged: true, annotation: () => false, startState: { doc: { toString: () => 'base' } }, newDoc: { toString: () => 'base+edit' } });
+  assert.deepEqual(c.events, ['local']);
+  const ack = socketListeners.get('otUpdateApplied');
+  buffered = true; ack({ doc, v: 7 }); ack({ doc, v: 8, op: [{ i: 'x', p: 0 }] }); ack({ doc: 'e'.repeat(24), v: 7 });
+  buffered = false; ack({ doc, v: 8, op: [{ i: 'x', p: 0 }] }); assert.deepEqual(c.events, ['local']);
+  ack({ doc, v: 7 }); assert.deepEqual(c.events, ['local', 'acknowledged']);
 });
