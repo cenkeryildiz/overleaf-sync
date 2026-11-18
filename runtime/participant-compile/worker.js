@@ -20,4 +20,19 @@ XMLHttpRequest.prototype.open = function(method, url, ...rest) {
   return nativeOpen.call(this, method, allowed(url), ...rest);
 };
 self.WebSocket = class { constructor() { throw Error('Worker sockets disabled'); } };
+// Offline pages are served these pinned packages from the verified Cache Storage copy; Emscripten's IndexedDB package
+// cache would duplicate ~635 MB there, and writing it dominated the first offline compile (OPT-02). Connected pages keep it.
+if (location.pathname.startsWith('/recovery/busytex/')) Object.defineProperty(self, 'indexedDB', { value: undefined });
+// Measurement only (OPT-01): stage marks that browser checks read with performance.getEntriesByType('mark').
+const nativePost = self.postMessage.bind(self), compileStreaming = WebAssembly.compileStreaming, instantiate = WebAssembly.instantiate;
+self.postMessage = (data, ...rest) => {
+  const text = data?.print;
+  if (data?.initialized) performance.mark('worker:initialized');
+  else if (data?.pdf !== undefined) performance.mark('worker:result');
+  else if (typeof text === 'string' && /^(?:\$ busytex \S+|New compilation started|All downloads complete|Data packages used \(not preloaded\))/.test(text))
+    performance.mark('worker:' + text.slice(0, 160));
+  return nativePost(data, ...rest);
+};
+if (compileStreaming) WebAssembly.compileStreaming = (...args) => compileStreaming(...args).finally(() => performance.mark('worker:wasm compiled'));
+WebAssembly.instantiate = (...args) => instantiate(...args).finally(() => performance.mark('worker:wasm instantiated'));
 importScripts('busytex_worker.original.js');

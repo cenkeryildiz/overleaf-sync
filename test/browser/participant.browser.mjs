@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withSyntheticAccounts } from './synthetic-accounts.mjs';
+import { compileTimeline, now } from './compile-marks.mjs';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 // Default is the original LAN demo; set HOSTING_TEST_BASE/HOSTING_APP_CONTAINER to check a staging candidate.
 const base = process.env.HOSTING_TEST_BASE || 'http://127.0.0.1:8080';
@@ -51,12 +52,12 @@ try { await withSyntheticAccounts(async users => {
     await page.getByText('Existing project (.zip)', { exact: true }).click();
     await page.locator('input[type=file]').first().setInputFiles(join(work, 'participant.zip'));
     await page.waitForURL(/\/project\/[a-f0-9]+/); const projectUrl = page.url();
-    const started = performance.now();
+    const started = performance.now(), origin = await now(page);
     await page.goto(projectUrl + '?participant-compile=1'); nativeCompiles.length = 0;
     const editor = page.getByRole('textbox', { name: /^Source Editor/ }); await editor.waitFor();
     await page.waitForFunction(() => globalThis.participantResults?.length >= 1, null, { timeout: 180000 });
     await page.locator('.textLayer span').filter({ hasText: /^Participant compilation fixture\./ }).first().waitFor();
-    const firstVisibleMs = performance.now() - started;
+    const firstVisibleMs = performance.now() - started, firstVisible = await now(page) - origin;
     assert.equal(await editor.evaluate(e => e.cmView.view.state.doc.toString()), source);
     assert.equal(nativeCompiles.length, 0, 'Participant mode must not request server TeX');
     const output = await page.evaluate(async () => {
@@ -82,12 +83,12 @@ try { await withSyntheticAccounts(async users => {
     assert(nav.ok(), `Inverse navigation returned ${nav.status()}`);
     const navBody = await nav.json(); assert(navBody.code?.some(p => p.file === 'main.tex' && p.line === 6), JSON.stringify(navBody));
     const exactBefore = await editor.evaluate(e => e.cmView.view.state.doc.toString());
-    const warmStart = performance.now();
+    const warmStart = performance.now(), warmOrigin = await now(page);
     await editor.evaluate(e => { const view = e.cmView.view, text = view.state.doc.toString(), pos = text.indexOf('Participant compilation fixture.'); view.dispatch({ changes: { from: pos, to: pos + 'Participant'.length, insert: 'Repeated' } }); });
     await page.getByRole('button', { name: /^Recompile/ }).first().click();
     await page.waitForFunction(() => participantResults.length >= 2, null, { timeout: 120000 });
     await page.locator('.textLayer span').filter({ hasText: /^Repeated compilation fixture\./ }).first().waitFor();
-    const warmVisibleMs = performance.now() - warmStart;
+    const warmVisibleMs = performance.now() - warmStart, warmVisible = await now(page) - warmOrigin;
     const expected = exactBefore.replace('Participant compilation fixture.', 'Repeated compilation fixture.');
     assert.equal(await editor.evaluate(e => e.cmView.view.state.doc.toString()), expected);
     const compilerWorker = page.workers().find(worker => new URL(worker.url()).pathname.endsWith('/busytex_worker.js'));
@@ -96,6 +97,10 @@ try { await withSyntheticAccounts(async users => {
       linearBytes: module.HEAPU8?.length ?? module.HEAP8?.length,
       transferBytes: performance.getEntriesByType('resource').reduce((sum, entry) => sum + entry.transferSize, 0),
     }; });
+    // Page marks restart with the project page load; the timeline is relative to that page's origin.
+    const timeline = await compileTimeline(page, compilerWorker, await page.evaluate(() => performance.timeOrigin));
+    console.log(JSON.stringify({ participantCompileTimeline: { navigationStartsAt: Math.round(await page.evaluate(() => performance.timeOrigin) - origin),
+      firstVisible: Math.round(firstVisible), warmVisible: Math.round(warmVisible), warmStartsAt: Math.round(warmOrigin - await page.evaluate(() => performance.timeOrigin)), timeline } }));
     await page.reload(); await editor.waitFor();
     await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, expected);
     assert.equal(nativeCompiles.length, 0);

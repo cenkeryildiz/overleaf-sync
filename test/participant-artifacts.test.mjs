@@ -94,10 +94,18 @@ test('navigation is restricted to exact snapshot files and decompression is boun
 test('browser compiler can request only fixed public assets with no private credentials', async () => {
   const requests = [];
   class XHR { open(method, url) { requests.push([method, url]); } }
-  const context = { URL, location: new URL('https://fixture.test/participant/busytex/busytex_worker.js'), XMLHttpRequest: XHR,
-    fetch: (url, options) => { requests.push([url, options]); return Promise.resolve(); }, importScripts: (...urls) => requests.push(urls) };
-  context.self = context; vm.createContext(context);
-  vm.runInContext(readFileSync(new URL('../runtime/participant-compile/worker.js', import.meta.url), 'utf8'), context);
+  const load = path => {
+    const context = { URL, location: new URL('https://fixture.test' + path), XMLHttpRequest: XHR, indexedDB: {}, postMessage() {},
+      performance: { mark() {} }, WebAssembly: { instantiate: async () => {} },
+      fetch: (url, options) => { requests.push([url, options]); return Promise.resolve(); }, importScripts: (...urls) => requests.push(urls) };
+    context.self = context; vm.createContext(context);
+    vm.runInContext(readFileSync(new URL('../runtime/participant-compile/worker.js', import.meta.url), 'utf8'), context);
+    return context;
+  };
+  // Offline workers read packages from the verified Cache Storage copy; only connected workers keep Emscripten's IDB cache.
+  assert.equal(load('/recovery/busytex/busytex_worker.js').indexedDB, undefined);
+  const context = load('/participant/busytex/busytex_worker.js');
+  assert.deepEqual(context.indexedDB, {});
   await context.fetch('texlive-basic.data', { credentials: 'include' });
   assert.equal(requests.at(-1)[1].credentials, 'omit');
   for (const path of ['https://outside.test/source', '/project/private/file', 'texlive-basic.data?source=private', '../secret', 'invented.sty']) {

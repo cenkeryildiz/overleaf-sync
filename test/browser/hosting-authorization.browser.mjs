@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withSyntheticAccounts } from './synthetic-accounts.mjs';
+import { compileTimeline, now } from './compile-marks.mjs';
 
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const container = process.env.HOSTING_APP_CONTAINER;
@@ -279,10 +280,10 @@ try {
         assert.equal(exported.files.find(file => file.path === 'chapter.tex').content, chapter);
         assert.equal(exported.files.find(file => file.path === 'main.tex').content, onlineText);
         assert.deepEqual(Buffer.from(exported.files.find(file => file.path === 'figure.png').data, 'base64'), picture);
-        const compileStart = performance.now();
+        const compileStart = performance.now(), firstOrigin = await now(alice);
         await alice.getByRole('button', { name: 'Recompile', exact: true }).click();
         await alice.getByRole('status').filter({ hasText: 'Compiled and saved in this browser.' }).waitFor({ timeout: 120000 });
-        const firstCompileMs = performance.now() - compileStart;
+        const firstCompileMs = performance.now() - compileStart, firstVisible = await now(alice) - firstOrigin;
         const compiled = await exportBytes(alice, 'Download PDF', 'compiled-offline.pdf'); assert(compiled.subarray(0, 5).equals(Buffer.from('%PDF-')));
         const text = execFileSync('/Users/macc/miniforge3/envs/myproject/bin/pdftotext', [join(work, 'compiled-offline.pdf'), '-'], { encoding: 'utf8' });
         assert(text.includes('Authorization fixture.') && text.includes('Shared chapter.'));
@@ -302,9 +303,11 @@ try {
         await append(alice, '% Navigation must now be stale\n'); await saved(alice);
         await alice.getByRole('button', { name: 'Show in PDF', exact: true }).click();
         await alice.getByRole('status').filter({ hasText: 'Recompile the current source' }).waitFor();
-        const warmStart = performance.now(); await alice.getByRole('button', { name: 'Recompile', exact: true }).click();
+        const warmStart = performance.now(), warmOrigin = await now(alice); await alice.getByRole('button', { name: 'Recompile', exact: true }).click();
         await alice.getByRole('status').filter({ hasText: 'Compiled and saved in this browser.' }).waitFor({ timeout: 120000 });
-        const warmCompileMs = performance.now() - warmStart;
+        const warmCompileMs = performance.now() - warmStart, warmVisible = await now(alice) - warmOrigin;
+        const timeline = await compileTimeline(alice, compilerWorker, firstOrigin);
+        console.log(JSON.stringify({ offlineCompileTimeline: { firstVisible: Math.round(firstVisible), warmStartsAt: Math.round(warmOrigin - firstOrigin), warmVisible: Math.round(warmVisible), timeline } }));
         await alice.reload(); await offlineEditor(alice).waitFor(); await alice.locator('#pdf canvas').first().waitFor();
         await alice.getByRole('button', { name: 'Saved projects', exact: true }).click();
         console.log('Checking native CE+ offline interface');
