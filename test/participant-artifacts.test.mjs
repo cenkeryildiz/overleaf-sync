@@ -15,6 +15,25 @@ import { safePath, prepareSnapshot, prepareResult } from '../runtime/participant
 const fixture = () => ({ main: 'main.tex', active: 'chapters/one.tex', text: 'exact candidate', resources: [
   { path: 'main.tex', content: 'root' }, { path: 'chapters/one.tex', content: 'old' }, { path: 'figure.png', data: 'AA==' },
 ] });
+async function claimWaitClient() {
+  const timers = new Map(), listeners = new Map(); let serial = 0;
+  const context = vm.createContext({ location: { pathname: '/' },
+    document: { createElement: () => ({ style: {}, setAttribute() {} }), querySelector: () => null },
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    setTimeout: (callback, delay) => { const id = ++serial; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: id => timers.delete(id), clearInterval() {},
+  });
+  const source = readFileSync(new URL('../runtime/participant-compile/client.mjs', import.meta.url), 'utf8');
+  const subject = new vm.SourceTextModule(source + '\nexport { notifyWork, waitForWork };', { context });
+  await subject.link(name => {
+    assert(name.startsWith('./busytex-sdk.mjs'));
+    return new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+      for (const key of ['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex']) this.setExport(key, class { constructor() { assert.fail('Non-project claim wait must not initialize the compiler'); } });
+    }, { context });
+  });
+  await subject.evaluate();
+  return { ...subject.namespace, timers, pagehide: () => listeners.get('pagehide')() };
+}
 test('independent instances use their own Google callback and fresh persistent secrets', () => {
   const client = site => ({ web: { client_id: 'own-client.apps.googleusercontent.com', client_secret: 'synthetic-only',
     redirect_uris: [site + '/oidc/login/callback'] } });
@@ -184,4 +203,40 @@ test('offline preparation is bounded through response/abort, and native shutdown
   respond = false; const pendingResponse = response(), pending = subject.namespace.participantCompile(request, pendingResponse);
   cleanup(); await pending; assert.equal(kills, 1); assert.equal(pendingResponse.code, 409);
   const after = response(); await subject.namespace.participantCompile(request, after); assert.equal(after.code, 409); assert.equal(spawns, 1);
+});
+
+// Drain the controlled promise chain without coupling assertions to its microtask depth.
+const claimTurn = () => new Promise(resolve => setImmediate(resolve));
+test('claim wake retains one early signal, coalesces duplicates, then resumes the750ms idle fallback', async () => {
+  const client = await claimWaitClient();
+  client.notifyWork(); client.notifyWork();
+  let awake = false;
+  client.waitForWork().then(() => { awake = true; });
+  await claimTurn();
+  assert(awake, 'A queued job must wake the next claim without waiting for a timer');
+  assert.equal(client.timers.size, 0);
+  let fallback = false;
+  client.waitForWork().then(() => { fallback = true; });
+  await claimTurn();
+  assert.equal(fallback, false, 'Duplicate signals must not create a second immediate claim');
+  assert.equal(client.timers.size, 1);
+  const pending = [...client.timers.values()][0]; assert.equal(pending.delay, 750);
+  pending.callback(); await claimTurn();
+  assert(fallback); assert.equal(client.timers.size, 0);
+  client.pagehide();
+});
+
+test('queued work interrupts an idle claim timer and pagehide settles the next wait without leaking a timer', async () => {
+  const client = await claimWaitClient();
+  let awake = false;
+  client.waitForWork().then(() => { awake = true; });
+  assert.equal(client.timers.size, 1);
+  client.notifyWork(); client.notifyWork();
+  await claimTurn();
+  assert(awake); assert.equal(client.timers.size, 0);
+  let closed = false;
+  client.waitForWork().then(() => { closed = true; });
+  assert.equal(client.timers.size, 1, 'Waking a sleeper consumes the signal rather than causing a busy loop');
+  client.pagehide(); await claimTurn();
+  assert(closed); assert.equal(client.timers.size, 0);
 });

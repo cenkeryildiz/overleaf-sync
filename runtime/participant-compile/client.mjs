@@ -4,6 +4,17 @@ const original = globalThis.overleafParticipantFetch;
 const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1];
 let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+let pendingWork = false, wakeClaim;
+function notifyWork() { pendingWork = true; wakeClaim?.(); }
+async function waitForWork() {
+  if (pendingWork) { pendingWork = false; return; }
+  await new Promise(resolve => {
+    const deadline = setTimeout(done, 750);
+    function done() { clearTimeout(deadline); wakeClaim = undefined; resolve(); }
+    wakeClaim = done;
+  });
+  pendingWork = false;
+}
 const status = document.createElement('span');
 status.setAttribute('role', 'status'); status.style.cssText = 'padding:4px 8px;font:12px system-ui';
 status.textContent = 'Preparing device compilation…';
@@ -43,7 +54,8 @@ async function contribute() {
   try {
     while (!stopped) {
       const job = await request({ op: 'claim', worker });
-      if (!job.job) { await pause(750); continue; }
+      if (stopped) break;
+      if (!job.job) { await waitForWork(); continue; }
       active = job; performance.mark('participant:claimed');
       let lost = false;
       timer = setInterval(() => request({ op: 'heartbeat', worker, job: job.job, lease: job.lease })
@@ -101,6 +113,7 @@ export async function compile(signal) {
     await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw Error('Compilation canceled');
   }
   lastJob = queued.job;
+  notifyWork();
   show('Waiting for a project device…');
   try {
     while (Date.now() < deadline && !signal?.aborted && lastJob === queued.job && !stopped) {
@@ -126,6 +139,6 @@ export async function cancel() {
   return Response.json({ stopped: true });
 }
 addEventListener('pagehide', () => {
-  stopped = true; clearInterval(timer); runner?.terminate();
+  stopped = true; clearInterval(timer); wakeClaim?.(); runner?.terminate();
   if (worker) request({ op: 'leave', worker }).catch(() => {});
 });

@@ -100,6 +100,10 @@ try { await withSyntheticAccounts(async users => {
     }; });
     // Page marks restart with the project page load; the timeline is relative to that page's origin.
     const timeline = await compileTimeline(page, compilerWorker, await page.evaluate(() => performance.timeOrigin));
+    const queueToClaimMs = timeline.filter(e => e.name === 'participant:queue').map(queued => {
+      const claimed = timeline.find(e => e.name === 'participant:claimed' && e.t >= queued.t);
+      return claimed ? claimed.t - queued.t : null;
+    });
     console.log(JSON.stringify({ participantCompileTimeline: { navigationStartsAt: Math.round(await page.evaluate(() => performance.timeOrigin) - origin),
       firstVisible: Math.round(firstVisible), warmVisible: Math.round(warmVisible), warmStartsAt: Math.round(warmOrigin - await page.evaluate(() => performance.timeOrigin)), timeline } }));
     await page.reload(); await editor.waitFor();
@@ -117,7 +121,7 @@ try { await withSyntheticAccounts(async users => {
       const { checkEdges } = await import('./participant-edges.mjs'); await checkEdges(page);
     }
     assert.equal(nativeCompiles.length, 0);
-    console.log(JSON.stringify({ passed: true, firstVisibleMs, warmVisibleMs, publicResponseBytes: publicBytes, packageDownloads: [...packageDownloads],
+    console.log(JSON.stringify({ passed: true, firstVisibleMs, warmVisibleMs, queueToClaimMs, publicResponseBytes: publicBytes, packageDownloads: [...packageDownloads],
       workerLinearMemoryBytes: memory, exactSourceAfterReload: true, bibliography: true, inverseNavigation: true,
       nativeCompiles: nativeCompiles.length, externalRequestsBlocked: external.length, pageErrors: errors }));
   } finally { clearTimeout(hardStop); await browser.close(); }

@@ -101,6 +101,39 @@ try {
       const unrelated = await otherTab.evaluate(record => { const copy = { ...record, writer: crypto.randomUUID(), candidate: record.candidate + '% Other tab retained copy\n' }; return { key: overleafRecovery.save(copy), raw: JSON.stringify(copy) }; }, first.record);
       const checked = await flush(owner, first.key); metrics.checkpointMs = checked.ms;
       await owner.waitForFunction(() => /Saved to server — not backed up off-host/.test(document.querySelector('.recovery-controls .olx-durability')?.innerText || ''), null, { timeout: 5000 });
+      const badge = owner.locator('.recovery-controls .olx-durability');
+      assert.equal(await badge.getAttribute('role'), 'status');
+      assert.equal(await badge.getAttribute('aria-live'), 'polite');
+      assert.equal(await badge.locator('.olx-icon').getAttribute('aria-hidden'), 'true');
+      assert.equal(await badge.evaluate(node => {
+        const observer = new MutationObserver(() => {}); observer.observe(node, { subtree: true, attributes: true, childList: true, characterData: true });
+        for (let i = 0; i < 20; i++) dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state: node.dataset.state } }));
+        const changes = observer.takeRecords().length; observer.disconnect(); return changes;
+      }), 0, 'Duplicate save states must not rewrite the live region');
+      for (const [theme, overallTheme] of [['light', 'light-'], ['dark', '']]) {
+        assert((await request(owner, '/user/settings', { overallTheme })).ok());
+        await owner.reload(); await editor(owner).waitFor();
+        for (const state of ['local', 'device', 'visible']) {
+          const presentation = await owner.evaluate(async state => {
+            await document.fonts.ready;
+            const bar = document.querySelector('.recovery-controls'), node = bar.querySelector('.olx-durability');
+            bar.style.width = '280px'; bar.style.maxWidth = '280px';
+            dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } }));
+            const bounds = bar.getBoundingClientRect(), rect = node.getBoundingClientRect();
+            const icon = node.querySelector('.olx-icon'), text = node.lastChild;
+            return { inside: rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1,
+              iconWidth: icon.getBoundingClientRect().width, textWidth: text.getBoundingClientRect().width,
+              title: node.title, text: text.textContent, glyph: icon.textContent,
+              color: getComputedStyle(text).color, theme: document.documentElement.dataset.theme };
+          }, state);
+          if (process.env.OFFLINE_UI_OUTPUT) await owner.locator('.recovery-controls').screenshot({ path: join(process.env.OFFLINE_UI_OUTPUT, `durability-${theme}-${state}.png`) });
+          assert(presentation.inside && presentation.iconWidth >= 15 && presentation.textWidth > 0, JSON.stringify({ theme, state, presentation }));
+          assert.equal(presentation.title, presentation.text); assert.equal(presentation.theme, theme);
+          if (state === 'visible') assert.equal(presentation.glyph, 'warning');
+        }
+      }
+      await owner.evaluate(() => { const bar = document.querySelector('.recovery-controls'); bar.style.removeProperty('width'); bar.style.removeProperty('max-width'); });
+      metrics.durabilityUi = { politeStatus: true, duplicateMutations: 0, labelRegionPixels: 280, themes: ['light', 'dark'] };
       assert.deepEqual(await storage(owner, first.key), { raw: null, marker: null });
       assert.equal(await owner.evaluate(key => localStorage.getItem(key), unrelated.key), unrelated.raw);
       const zip = await owner.request.get(`${base}/project/${project}/version/${checked.proof.version}/zip`, { timeout: 60000 });
@@ -150,7 +183,7 @@ try {
       if (diagnosticProject && diagnosticDoc && diagnosticHash && !metrics.checkpointMs) {
         const code = "import {createHash} from 'node:crypto';import D from './app/src/Features/DocumentUpdater/DocumentUpdaterHandler.mjs';import H from './app/src/Features/History/HistoryManager.mjs';import P from './app/src/Features/Project/ProjectGetter.mjs';import E from './app/src/Features/Project/ProjectEntityHandler.mjs';import {getLatestSnapshot} from './app/src/Features/History/HistoryOTContentManager.mjs';let raw='';for await(const chunk of process.stdin)raw+=chunk;const input=JSON.parse(raw);if(!/^[a-f0-9]{24}$/.test(input.project)||!/^[a-f0-9]{24}$/.test(input.doc)||!/^[a-f0-9]{64}$/.test(input.hash))throw Error('Invalid diagnostic fixture');let active='import';const emit=v=>console.log('CHECKPOINT_DIAG:'+JSON.stringify(v));const timeout=setTimeout(()=>{emit({stage:active,timeout:true});process.exit(124)},45000);async function run(stage,fn){active=stage;const start=performance.now();emit({stage,start:true});try{const result=await fn();emit({stage,ms:performance.now()-start});return result}catch{emit({stage,ms:performance.now()-start,failed:true});throw Error('Native stage failed')}}try{const doc=await run('getDocument',()=>D.promises.getDocument(input.project,input.doc,-1));emit({stage:'documentHash',match:createHash('sha256').update(doc.lines.join(String.fromCharCode(10))).digest('hex')===input.hash,versionValid:Number.isSafeInteger(doc.version)});await run('flushMongo',()=>D.promises.flushProjectToMongo(input.project));await run('flushHistory',()=>H.promises.flushProject(input.project));const project=await run('getHistoryId',()=>P.promises.getProject(input.project,{overleaf:true}));emit({stage:'historyId',present:!!project.overleaf?.history?.id});const saved=await run('getLatestSnapshot',()=>getLatestSnapshot(project.overleaf.history.id));const docs=await E.promises.getAllDocs(input.project);const path=Object.entries(docs).find(([,v])=>String(v._id)===input.doc)?.[0]?.replace(new RegExp('^/'),'');const file=saved.snapshot.getFile(path);const content=file?.isEditable()?file.getContent({filterTrackedDeletes:true}):undefined;emit({stage:'historyFile',present:!!file,editable:!!file?.isEditable(),type:typeof content,hashMatch:typeof content==='string'&&createHash('sha256').update(content).digest('hex')===input.hash,versionValid:Number.isSafeInteger(saved.version)});clearTimeout(timeout);process.exit(0)}catch{clearTimeout(timeout);process.exit(1)}";
         let diagnostic;
-        try { diagnostic = execFileSync('docker', ['exec', '-i', '-w', '/overleaf/services/web', container, 'node', '--input-type=module', '-e', code], { input: JSON.stringify({ project: diagnosticProject, doc: diagnosticDoc, hash: diagnosticHash }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 55000 }); }
+        try { diagnostic = execFileSync('docker', ['exec', '-i', '-w', '/overleaf/services/web', container, '/usr/bin/chpst', '-e', '/etc/container_environment', 'node', '--input-type=module', '-e', code], { input: JSON.stringify({ project: diagnosticProject, doc: diagnosticDoc, hash: diagnosticHash }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 55000 }); }
         catch (failure) { diagnostic = failure.stdout?.toString() || ''; }
         for (const line of diagnostic.split('\n')) if (line.startsWith('CHECKPOINT_DIAG:')) console.error(line);
       }

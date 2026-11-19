@@ -76,7 +76,7 @@
     const set = state => {
       const entry = durabilityLabels[state], from = node.dataset.state;
       // A late acknowledgement or receipt never upgrades past a newer edit or a failure.
-      if (!entry || (state === 'acknowledged' && from !== 'local') || (state === 'server' && from !== 'local' && from !== 'acknowledged')) return;
+      if (!entry || from === state || (state === 'acknowledged' && from !== 'local') || (state === 'server' && from !== 'local' && from !== 'acknowledged')) return;
       node.dataset.state = state; node.firstChild.textContent = entry[0]; label.textContent = entry[1]; node.title = entry[1]; node.hidden = false;
     };
     addEventListener('overleaf-durability', event => set(event.detail?.state));

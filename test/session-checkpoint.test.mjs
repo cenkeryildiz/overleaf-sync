@@ -260,6 +260,20 @@ test('durability label is accessible text, starts hidden and never claims an off
   }
 });
 
+test('repeated durability states do not rewrite the live region while real transitions do', () => {
+  const l = label(), writes = [];
+  for (const [target, property] of [[l.node.dataset, 'state'], [l.node.firstChild, 'textContent'], [l.node.children[1], 'textContent'], [l.node, 'title'], [l.node, 'hidden']]) {
+    let value = target[property];
+    Object.defineProperty(target, property, { get: () => value, set(next) { writes.push(property); value = next; } });
+  }
+  for (const state of ['local', 'device', 'visible']) {
+    l.send(state); assert(writes.length > 0, 'A real state transition must update the region');
+    assert.equal(l.node.dataset.state, state);
+    writes.length = 0; l.send(state);
+    assert.deepEqual(writes, [], 'Repeating ' + state + ' must not mutate text, icon or attributes');
+  }
+});
+
 test('durability label orders edit, acknowledgement, receipt and refuses late upgrades', () => {
   const l = label();
   l.send('local'); assert.equal(l.text(), 'Not yet saved to server — kept on this device');
