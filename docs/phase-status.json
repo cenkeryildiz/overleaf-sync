@@ -4,49 +4,49 @@
   "phases": [
     {
       "id": "R0",
-      "name": "Web foundation and feasibility",
+      "name": "Stage 1 offline foundation",
       "status": "in_progress",
       "evidence": null
     },
     {
       "id": "R1",
-      "name": "Protected server project access",
+      "name": "Stage 1 local project integrity",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R2",
-      "name": "Safe web live editing",
+      "name": "Stage 1 offline publication checks",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R3",
-      "name": "Offline web recovery",
+      "name": "Stage 2 LAN collaboration",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R4",
-      "name": "Review, presence and chat",
+      "name": "Stage 2 owner permissions and LAN publication",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R5",
-      "name": "Web editing and project workflows",
+      "name": "Stage 3 optional local computation and LAN compilation",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R6",
-      "name": "Shared server compilation and operations",
+      "name": "Stage 4 internet collaboration and distributed work",
       "status": "not_started",
       "evidence": null
     },
     {
       "id": "R7",
-      "name": "Multi-user server job distribution",
+      "name": "Stage 4 automatic LAN routing",
       "status": "not_started",
       "evidence": null
     }

@@ -42,7 +42,7 @@ export class LocalCompiler {
         const carry = result.success ? result.logs?.at(-1)?.carry : null;
         this.carry = carry ? { key, files: Object.entries(carry).map(([path, content]) => ({ path, content })) } : undefined;
         performance.mark('compile:result');
-        if (!result.success || !result.pdf || !result.synctex) throw Error('Compilation failed. A package, font or source may be unsupported. Your files and previous PDF are retained.');
+        if (!result.success || !result.pdf || !result.synctex) throw Object.assign(Error('Compilation failed. A package, font or source may be unsupported. Your files and previous PDF are retained.'), { log: result.log });
         return result;
       })(), new Promise((_, reject) => {
         abort = () => { this.stop(); reject(Error('Compilation canceled. Source files are retained.')); };

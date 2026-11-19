@@ -21,3 +21,5 @@ The local recovery comparison includes the unchanged jsdiff 5.2.2 browser bundle
 Offline PDF rendering reuses the pinned CE+ PDF.js5.1.91 distribution under Apache-2.0; the built UI ships its full license and individual CMap/font notices. runtime/browser-recovery/synctex-parser.mjs reuses LaTeX Workshop10.20.0's MIT SyncTeX parser with the original Thomas Durieux notice preserved; only its module exports are adapted for the browser. BusyTeX/CodeMirror licenses above continue to apply unchanged.
 
 runtime/browser-recovery/client-zip.mjs is client-zip2.5.1, Copyright2020David Junger, MIT; full terms are in CLIENT-ZIP-LICENSE.txt and shipped with the offline static assets. It supplies streaming ZIP container generation only; this application makes no upstream performance claim.
+
+Standalone packaging modifies the pinned CE+ CodeMirror bundle's input sanitizer to use Unicode regular-expression mode, preserving valid astral characters while replacing NUL and lone surrogates. The native editor, OT implementation and their original license/notices remain applicable. This patch does not change or resolve the application's existing distribution-license boundary.

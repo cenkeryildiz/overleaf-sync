@@ -1,0 +1,407 @@
+{
+  "meta": [
+    {
+      "name": "ol-baseAssetPath",
+      "content": "/",
+      "present": true
+    },
+    {
+      "name": "ol-mathJaxPath",
+      "content": "/js/libs/mathjax-4.1.2/tex-svg.js",
+      "present": true
+    },
+    {
+      "name": "ol-dictionariesRoot",
+      "content": "/js/dictionaries/0.0.3/",
+      "present": true
+    },
+    {
+      "name": "ol-usersEmail",
+      "content": "local@example.invalid",
+      "present": true
+    },
+    {
+      "name": "ol-ab",
+      "content": "{}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-user_id",
+      "content": "000000000000000000000001",
+      "present": true
+    },
+    {
+      "name": "ol-i18n",
+      "content": "{\"currentLangCode\":\"en\"}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-ExposedSettings",
+      "content": "{\"isOverleaf\":false,\"env\":\"server-ce\",\"appName\":\"Overleaf Community Edition\",\"adminEmail\":\"placeholder@example.com\",\"dropboxAppName\":\"Overleaf\",\"ieeeBrandId\":15,\"hasAffiliationsFeature\":false,\"hasSamlFeature\":false,\"hasLinkUrlFeature\":false,\"hasLinkedProjectFileFeature\":false,\"hasLinkedProjectOutputFileFeature\":false,\"siteUrl\":\"http://127.0.0.1:8081\",\"emailConfirmationDisabled\":false,\"maxEntitiesPerProject\":2000,\"maxUploadSize\":52428800,\"projectUploadTimeout\":120000,\"recaptchaDisabled\":{\"invite\":true,\"login\":true,\"passwordReset\":true,\"register\":true,\"addEmail\":true},\"textExtensions\":[\"tex\",\"latex\",\"sty\",\"cls\",\"bst\",\"bib\",\"bibtex\",\"txt\",\"tikz\",\"mtx\",\"rtex\",\"md\",\"asy\",\"lbx\",\"bbx\",\"cbx\",\"m\",\"lco\",\"dtx\",\"ins\",\"ist\",\"def\",\"clo\",\"ldf\",\"rmd\",\"qmd\",\"lua\",\"py\",\"gv\",\"mf\",\"yml\",\"yaml\",\"lhs\",\"lean\",\"lean4\",\"hs\",\"mk\",\"xmpdata\",\"cfg\",\"rnw\",\"ltx\",\"inc\"],\"editableFilenames\":[\"latexmkrc\",\".latexmkrc\",\"makefile\",\"gnumakefile\"],\"validRootDocExtensions\":[\"tex\",\"Rtex\",\"ltx\",\"Rnw\"],\"fileIgnorePattern\":\"**/{{__MACOSX,.git,.texpadtmp,.R,.venv,venv}{,/**},.!(latexmkrc),*.{dvi,aux,log,toc,out,pdfsync,synctex,synctex(busy),fdb_latexmk,fls,nlo,ind,glo,gls,glg,bbl,blg,doc,docx,gz,swp}}\",\"enableSubscriptions\":false,\"templatesEnabled\":false,\"githubSyncEnabled\":false,\"zoteroEnabled\":false,\"enablePandocConversions\":false}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-splitTestVariants",
+      "content": "{\"png2pdf\":\"default\",\"plugin-dimensions\":\"default\",\"compile-log-events\":\"default\",\"visual-preview\":\"default\",\"external-socket-heartbeat\":\"default\",\"null-test-share-modal\":\"default\",\"pdf-caching-prefetch-large\":\"default\",\"pdf-caching-prefetching\":\"default\",\"revert-file\":\"default\",\"revert-project\":\"default\",\"ro-mirror-on-client\":\"default\",\"track-pdf-download\":\"default\",\"writefull-oauth-promotion\":\"default\",\"hotjar\":\"default\",\"word-count-client\":\"default\",\"editor-popup-ux-survey-03-2026\":\"default\",\"chat-edit-delete\":\"default\",\"comment-mentions\":\"default\",\"compile-timeout-target-plans\":\"default\",\"writefull-figure-generator\":\"default\",\"writefull-toolbar-migration\":\"enabled\",\"wf-citations-checker\":\"default\",\"wf-citations-checker-on-selection\":\"default\",\"writefull-asymetric-queue-size-per-model\":\"default\",\"email-notifications\":\"default\",\"wf-enable-freemium-super-complete\":\"default\",\"wf-enable-super-complete-promotion\":\"default\",\"wf-rebrand\":\"default\",\"testing-ai-usage\":\"default\",\"wf-fake-non-english-suggestions\":\"default\",\"overleaf-code\":\"enabled\",\"export-docx\":\"default\",\"sharing-updates\":\"default\",\"sharing-updates-new-link\":\"default\",\"export-markdown\":\"default\",\"export-html\":\"default\",\"command-palette\":\"default\",\"focus-mode\":\"default\",\"markdown-visual\":\"default\",\"ai-disabled-collaborators\":\"default\",\"group-link-sharing\":\"default\",\"compile-with-checkpoint\":\"default\",\"themed-modals\":\"enabled\",\"intermittent-connection-improvements\":\"default\",\"symbol-recognition\":\"default\",\"ai-assistant-pointer\":\"default\",\"pdf-caching-cached-url-lookup\":\"disabled\",\"pdf-caching-mode\":\"disabled\",\"monthly-texlive\":\"default\"}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-splitTestInfo",
+      "content": "{}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-isManagedAccount",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-navbar",
+      "content": "{\"title\":\"Overleaf Community Edition\",\"canDisplayAdminMenu\":false,\"canDisplayAdminRedirect\":false,\"canDisplayProjectUrlLookup\":false,\"canDisplaySplitTestMenu\":false,\"canDisplaySurveyMenu\":false,\"canDisplayScriptLogMenu\":false,\"suppressNavbarRight\":false,\"suppressNavContentLinks\":false,\"showSubscriptionLink\":false,\"showSignUpLink\":false,\"currentUrl\":\"/project/000000000000000000000002\",\"sessionUser\":{\"email\":\"local@example.invalid\"},\"items\":[]}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-footer",
+      "content": "{\"showThinFooter\":true,\"showPoweredBy\":true,\"subdomainLang\":{\"www\":{\"lngCode\":\"en\",\"url\":\"http://127.0.0.1:8081\"}},\"translatedLanguages\":{\"cs\":\"Čeština\",\"da\":\"Dansk\",\"de\":\"Deutsch\",\"en\":\"English\",\"es\":\"Español\",\"fi\":\"Suomi\",\"fr\":\"Français\",\"it\":\"Italiano\",\"ja\":\"日本語\",\"ko\":\"한국어\",\"nl\":\"Nederlands\",\"no\":\"Norsk\",\"pl\":\"Polski\",\"pt\":\"Português\",\"ru\":\"Русский\",\"sv\":\"Svenska\",\"tr\":\"Türkçe\",\"zh-CN\":\"简体中文\"},\"leftItems\":[],\"rightItems\":[{\"text\":\"<a href=\\\"https://github.com/overleaf/overleaf\\\">Fork on GitHub!</a>\"}]}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-project_id",
+      "content": "000000000000000000000002",
+      "present": true
+    },
+    {
+      "name": "ol-projectName",
+      "content": "Local project",
+      "present": true
+    },
+    {
+      "name": "ol-canUseClsiCache",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-canUsePng2Pdf",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-userSettings",
+      "content": "{\"mode\":\"none\",\"editorTheme\":\"textmate\",\"editorLightTheme\":\"textmate\",\"editorDarkTheme\":\"overleaf_dark\",\"fontSize\":12,\"autoComplete\":true,\"autoPairDelimiters\":true,\"pdfViewer\":\"pdfjs\",\"syntaxValidation\":true,\"previewTabs\":false,\"fontFamily\":\"lucida\",\"lineHeight\":\"normal\",\"overallTheme\":\"system\",\"mathPreview\":true,\"breadcrumbs\":false,\"editorTabs\":true,\"nonBlinkingCursor\":false,\"referencesSearchMode\":\"advanced\",\"darkModePdf\":false,\"floatingMenu\":true,\"zotero\":{\"enabled\":true,\"disablePersonalLibrary\":false,\"groups\":[]},\"mendeley\":{\"enabled\":true,\"disablePersonalLibrary\":false,\"groups\":[]},\"papers\":{\"enabled\":true,\"disablePersonalLibrary\":false,\"groups\":[]}}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-user",
+      "content": "{\"_id\":\"000000000000000000000001\",\"first_name\":\"Local\",\"last_name\":\"\",\"email\":\"local@example.invalid\"}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-learnedWords",
+      "content": "[]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-anonymous",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-brandVariation",
+      "content": "",
+      "present": false,
+      "type": "json"
+    },
+    {
+      "name": "ol-ownerHasSharingUpdates",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-maxDocLength",
+      "content": "2097152",
+      "present": true,
+      "type": "number"
+    },
+    {
+      "name": "ol-maxReconnectGracefullyIntervalMs",
+      "content": "30000",
+      "present": true,
+      "type": "number"
+    },
+    {
+      "name": "ol-wikiEnabled",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-capabilities",
+      "content": "[\"change-password\",\"chat\",\"link-sharing\"]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-gitBridgePublicBaseUrl",
+      "content": "",
+      "present": false
+    },
+    {
+      "name": "ol-gitBridgeEnabled",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-compilesUserContentDomain",
+      "content": "",
+      "present": false
+    },
+    {
+      "name": "ol-useShareJsHash",
+      "content": "",
+      "present": true,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-wsUrl",
+      "content": "",
+      "present": false,
+      "type": "string"
+    },
+    {
+      "name": "ol-wsRetryHandshake",
+      "content": "5",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-debugPdfDetach",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-showSymbolPalette",
+      "content": "",
+      "present": true,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-symbolPaletteAvailable",
+      "content": "",
+      "present": true,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-showAiFeatures",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-showAiFeaturesDisabled",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-hasUnlimitedAi",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-hasAiFreeTier",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-detachRole",
+      "content": "",
+      "present": false,
+      "type": "string"
+    },
+    {
+      "name": "ol-defaultLatexCompiler",
+      "content": "pdflatex",
+      "present": true,
+      "type": "string"
+    },
+    {
+      "name": "ol-imageNames",
+      "content": "[]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-languages",
+      "content": "[{\"code\":\"en\",\"name\":\"English\"},{\"code\":\"en_US\",\"dic\":\"en_US\",\"name\":\"English (American)\"},{\"code\":\"en_GB\",\"dic\":\"en_GB\",\"name\":\"English (British)\"},{\"code\":\"en_CA\",\"dic\":\"en_CA\",\"name\":\"English (Canadian)\"},{\"code\":\"en_AU\",\"dic\":\"en_AU\",\"name\":\"English (Australian)\",\"server\":false},{\"code\":\"en_ZA\",\"dic\":\"en_ZA\",\"name\":\"English (South African)\",\"server\":false},{\"code\":\"af\",\"dic\":\"af_ZA\",\"name\":\"Afrikaans\"},{\"code\":\"an\",\"dic\":\"an_ES\",\"name\":\"Aragonese\",\"server\":false},{\"code\":\"ar\",\"dic\":\"ar\",\"name\":\"Arabic\"},{\"code\":\"be_BY\",\"dic\":\"be_BY\",\"name\":\"Belarusian\",\"server\":false},{\"code\":\"eu\",\"dic\":\"eu\",\"name\":\"Basque\"},{\"code\":\"bn_BD\",\"dic\":\"bn_BD\",\"name\":\"Bengali\",\"server\":false},{\"code\":\"bs_BA\",\"dic\":\"bs_BA\",\"name\":\"Bosnian\",\"server\":false},{\"code\":\"br\",\"dic\":\"br_FR\",\"name\":\"Breton\"},{\"code\":\"bg\",\"dic\":\"bg_BG\",\"name\":\"Bulgarian\"},{\"code\":\"ca\",\"dic\":\"ca\",\"name\":\"Catalan\"},{\"code\":\"hr\",\"dic\":\"hr_HR\",\"name\":\"Croatian\"},{\"code\":\"cs\",\"dic\":\"cs_CZ\",\"name\":\"Czech\"},{\"code\":\"da\",\"dic\":\"da_DK\",\"name\":\"Danish\"},{\"code\":\"nl\",\"dic\":\"nl\",\"name\":\"Dutch\"},{\"code\":\"dz\",\"dic\":\"dz\",\"name\":\"Dzongkha\",\"server\":false},{\"code\":\"eo\",\"dic\":\"eo\",\"name\":\"Esperanto\"},{\"code\":\"et\",\"dic\":\"et_EE\",\"name\":\"Estonian\"},{\"code\":\"fo\",\"dic\":\"fo\",\"name\":\"Faroese\"},{\"code\":\"fr\",\"dic\":\"fr\",\"name\":\"French\"},{\"code\":\"gl\",\"dic\":\"gl_ES\",\"name\":\"Galician\"},{\"code\":\"de\",\"dic\":\"de_DE\",\"name\":\"German\"},{\"code\":\"de_AT\",\"dic\":\"de_AT\",\"name\":\"German (Austria)\",\"server\":false},{\"code\":\"de_CH\",\"dic\":\"de_CH\",\"name\":\"German (Switzerland)\",\"server\":false},{\"code\":\"el\",\"dic\":\"el_GR\",\"name\":\"Greek\"},{\"code\":\"gug_PY\",\"dic\":\"gug_PY\",\"name\":\"Guarani\",\"server\":false},{\"code\":\"gu_IN\",\"dic\":\"gu_IN\",\"name\":\"Gujarati\",\"server\":false},{\"code\":\"he_IL\",\"dic\":\"he_IL\",\"name\":\"Hebrew\",\"server\":false},{\"code\":\"hi_IN\",\"dic\":\"hi_IN\",\"name\":\"Hindi\",\"server\":false},{\"code\":\"hu_HU\",\"dic\":\"hu_HU\",\"name\":\"Hungarian\",\"server\":false},{\"code\":\"is_IS\",\"dic\":\"is_IS\",\"name\":\"Icelandic\",\"server\":false},{\"code\":\"id\",\"dic\":\"id_ID\",\"name\":\"Indonesian\"},{\"code\":\"ga\",\"dic\":\"ga_IE\",\"name\":\"Irish\"},{\"code\":\"it\",\"dic\":\"it_IT\",\"name\":\"Italian\"},{\"code\":\"kk\",\"dic\":\"kk_KZ\",\"name\":\"Kazakh\"},{\"code\":\"ko\",\"dic\":\"ko\",\"name\":\"Korean\",\"server\":false},{\"code\":\"ku\",\"name\":\"Kurdish\"},{\"code\":\"kmr\",\"dic\":\"kmr_Latn\",\"name\":\"Kurmanji\",\"server\":false},{\"code\":\"lv\",\"dic\":\"lv_LV\",\"name\":\"Latvian\"},{\"code\":\"lt\",\"dic\":\"lt_LT\",\"name\":\"Lithuanian\"},{\"code\":\"lo_LA\",\"dic\":\"lo_LA\",\"name\":\"Laotian\",\"server\":false},{\"code\":\"ml_IN\",\"dic\":\"ml_IN\",\"name\":\"Malayalam\",\"server\":false},{\"code\":\"mn_MN\",\"dic\":\"mn_MN\",\"name\":\"Mongolian\",\"server\":false},{\"code\":\"nr\",\"name\":\"Ndebele\"},{\"code\":\"ne_NP\",\"dic\":\"ne_NP\",\"name\":\"Nepali\",\"server\":false},{\"code\":\"ns\",\"name\":\"Northern Sotho\"},{\"code\":\"no\",\"name\":\"Norwegian\"},{\"code\":\"nb_NO\",\"dic\":\"nb_NO\",\"name\":\"Norwegian (Bokmål)\",\"server\":false},{\"code\":\"nn_NO\",\"dic\":\"nn_NO\",\"name\":\"Norwegian (Nynorsk)\",\"server\":false},{\"code\":\"oc_FR\",\"dic\":\"oc_FR\",\"name\":\"Occitan\",\"server\":false},{\"code\":\"fa\",\"dic\":\"fa_IR\",\"name\":\"Persian\"},{\"code\":\"pl\",\"dic\":\"pl_PL\",\"name\":\"Polish\"},{\"code\":\"pt_BR\",\"dic\":\"pt_BR\",\"name\":\"Portuguese (Brazilian)\"},{\"code\":\"pt_PT\",\"dic\":\"pt_PT\",\"name\":\"Portuguese (European)\"},{\"code\":\"pa\",\"name\":\"Punjabi\"},{\"code\":\"ro\",\"dic\":\"ro_RO\",\"name\":\"Romanian\"},{\"code\":\"ru\",\"dic\":\"ru_RU\",\"name\":\"Russian\"},{\"code\":\"gd_GB\",\"dic\":\"gd_GB\",\"name\":\"Scottish Gaelic\",\"server\":false},{\"code\":\"sr_RS\",\"dic\":\"sr_RS\",\"name\":\"Serbian\",\"server\":false},{\"code\":\"si_LK\",\"dic\":\"si_LK\",\"name\":\"Sinhala\",\"server\":false},{\"code\":\"sk\",\"dic\":\"sk_SK\",\"name\":\"Slovak\"},{\"code\":\"sl\",\"dic\":\"sl_SI\",\"name\":\"Slovenian\"},{\"code\":\"st\",\"name\":\"Southern Sotho\"},{\"code\":\"es\",\"dic\":\"es_ES\",\"name\":\"Spanish\"},{\"code\":\"sw_TZ\",\"dic\":\"sw_TZ\",\"name\":\"Swahili\",\"server\":false},{\"code\":\"sv\",\"dic\":\"sv_SE\",\"name\":\"Swedish\"},{\"code\":\"tl\",\"dic\":\"tl\",\"name\":\"Tagalog\"},{\"code\":\"te_IN\",\"dic\":\"te_IN\",\"name\":\"Telugu\",\"server\":false},{\"code\":\"th_TH\",\"dic\":\"th_TH\",\"name\":\"Thai\",\"server\":false},{\"code\":\"bo\",\"dic\":\"bo\",\"name\":\"Tibetan\",\"server\":false},{\"code\":\"ts\",\"name\":\"Tsonga\"},{\"code\":\"tn\",\"name\":\"Tswana\"},{\"code\":\"tr_TR\",\"dic\":\"tr_TR\",\"name\":\"Turkish\",\"server\":false},{\"code\":\"uk_UA\",\"dic\":\"uk_UA\",\"name\":\"Ukrainian\",\"server\":false},{\"code\":\"hsb\",\"name\":\"Upper Sorbian\"},{\"code\":\"uz_UZ\",\"dic\":\"uz_UZ\",\"name\":\"Uzbek\",\"server\":false},{\"code\":\"vi_VN\",\"dic\":\"vi_VN\",\"name\":\"Vietnamese\",\"server\":false},{\"code\":\"cy\",\"name\":\"Welsh\"},{\"code\":\"xh\",\"name\":\"Xhosa\"}]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-editorThemes",
+      "content": "[{\"name\":\"cobalt\",\"dark\":true},{\"name\":\"dracula\",\"dark\":true},{\"name\":\"eclipse\",\"dark\":false},{\"name\":\"monokai\",\"dark\":true},{\"name\":\"overleaf\",\"dark\":false},{\"name\":\"overleaf_dark\",\"dark\":true},{\"name\":\"textmate\",\"dark\":false}]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-legacyEditorThemes",
+      "content": "[{\"name\":\"ambiance\",\"dark\":true},{\"name\":\"chaos\",\"dark\":true},{\"name\":\"chrome\",\"dark\":false},{\"name\":\"clouds\",\"dark\":false},{\"name\":\"clouds_midnight\",\"dark\":true},{\"name\":\"crimson_editor\",\"dark\":false},{\"name\":\"dawn\",\"dark\":false},{\"name\":\"dreamweaver\",\"dark\":false},{\"name\":\"github\",\"dark\":false},{\"name\":\"gob\",\"dark\":true},{\"name\":\"gruvbox\",\"dark\":true},{\"name\":\"idle_fingers\",\"dark\":true},{\"name\":\"iplastic\",\"dark\":false},{\"name\":\"katzenmilch\",\"dark\":false},{\"name\":\"kr_theme\",\"dark\":true},{\"name\":\"kuroir\",\"dark\":false},{\"name\":\"merbivore\",\"dark\":true},{\"name\":\"merbivore_soft\",\"dark\":true},{\"name\":\"mono_industrial\",\"dark\":true},{\"name\":\"nord_dark\",\"dark\":true},{\"name\":\"pastel_on_dark\",\"dark\":true},{\"name\":\"solarized_dark\",\"dark\":true},{\"name\":\"solarized_light\",\"dark\":false},{\"name\":\"sqlserver\",\"dark\":false},{\"name\":\"terminal\",\"dark\":true},{\"name\":\"tomorrow\",\"dark\":false},{\"name\":\"tomorrow_night\",\"dark\":true},{\"name\":\"tomorrow_night_blue\",\"dark\":true},{\"name\":\"tomorrow_night_bright\",\"dark\":true},{\"name\":\"tomorrow_night_eighties\",\"dark\":true},{\"name\":\"twilight\",\"dark\":true},{\"name\":\"vibrant_ink\",\"dark\":true},{\"name\":\"xcode\",\"dark\":false}]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-showUpgradePrompt",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-showSupport",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-showTemplatesServerPro",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-hasTrackChangesFeature",
+      "content": "",
+      "present": true,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-otMigrationStage",
+      "content": "0",
+      "present": true,
+      "type": "number"
+    },
+    {
+      "name": "ol-inactiveTutorials",
+      "content": "[]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-projectTags",
+      "content": "[]",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-ro-mirror-on-client-no-local-storage",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-isSaas",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-shouldLoadHotjar",
+      "content": "",
+      "present": false,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-customerIoEnabled",
+      "content": "",
+      "present": true,
+      "type": "boolean"
+    },
+    {
+      "name": "ol-compileSettings",
+      "content": "{\"compileTimeout\":180}",
+      "present": true,
+      "type": "json"
+    },
+    {
+      "name": "ol-loadingText",
+      "content": "Loading",
+      "present": true,
+      "type": "string"
+    },
+    {
+      "name": "ol-translationIoNotLoaded",
+      "content": "Could not connect to WebSocket server",
+      "present": true,
+      "type": "string"
+    },
+    {
+      "name": "ol-translationLoadErrorMessage",
+      "content": "Could not load translations",
+      "present": true,
+      "type": "string"
+    },
+    {
+      "name": "ol-translationUnableToJoin",
+      "content": "Could not connect to collaboration server",
+      "present": true,
+      "type": "string"
+    },
+    {
+      "name": "ol-overallThemes",
+      "content": "[{\"name\":\"Dark\",\"val\":\"\"},{\"name\":\"Light\",\"val\":\"light-\"},{\"name\":\"System\",\"val\":\"system\"}]",
+      "present": true,
+      "type": "json"
+    }
+  ],
+  "scripts": [
+    "/js/runtime-0239170c7f0b0a6c5b25.js",
+    "/js/1772-297c3206f5cc21a3d38c.js",
+    "/js/7189-83cdb945648180d12ce9.js",
+    "/js/6467-54c261dc3355b8b50b30.js",
+    "/js/6603-88c5084f7b5614f1a26e.js",
+    "/js/3381-75052f1d74fc0b2a92ce.js",
+    "/js/4873-205131fd4fc944e43fe4.js",
+    "/js/3069-56d15ec5c4359d975bf2.js",
+    "/js/6272-7903376b327b8d845e55.js",
+    "/js/2849-6d93633770c30d9862cf.js",
+    "/js/490-b4ddd8517840493b60f0.js",
+    "/js/7042-c50ac18fbe628165d8cc.js",
+    "/js/8402-69a74b7bd63ff20a1b3a.js",
+    "/js/2313-773b8816086b1956f53c.js",
+    "/js/7258-76c500ff2bd9f7c2e69c.js",
+    "/js/7876-d23004496237ebf68c1b.js",
+    "/js/8352-d26589e2e5405ec36d8a.js",
+    "/js/884-6ff72652571008bc55e7.js",
+    "/js/6588-66a182334a1b1073c449.js",
+    "/js/8607-0a5113f4c48f158e90d6.js",
+    "/js/8118-059e2dd433b2f89c81e6.js",
+    "/js/pages/ide-a23d7d25788c243c5bb4.js",
+    "/js/1772-297c3206f5cc21a3d38c.js",
+    "/js/7189-83cdb945648180d12ce9.js",
+    "/js/tracking-931d84ce01745891d83d.js"
+  ],
+  "styles": [
+    "/stylesheets/main-style-fe1a0f373b9406ba7021.css",
+    "/stylesheets/pages/ide-8ff4876ea34a5830e278.css",
+    "/stylesheets/codemirror-editor-86e1562cf88f0ef0af07.css"
+  ],
+  "resources": [],
+  "projectMeta": {}
+}

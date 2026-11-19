@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
-import { patchEditor, patchLanUuid } from '../runtime/browser-recovery/apply.mjs';
+import { patchEditor, patchLanUuid, patchEditorUnicode } from '../runtime/browser-recovery/apply.mjs';
 const source = readFileSync(new URL('../runtime/browser-recovery/recovery-core.js', import.meta.url), 'utf8');
 const account = 'a'.repeat(24), project = 'b'.repeat(24), docId = 'c'.repeat(24);
 class Storage {
@@ -229,4 +229,16 @@ test('offline compiler warm-up shares one initialize with the first compile and 
   await compiler.compile(project, files, () => {}, new AbortController().signal); assert.equal(runners[1].inits, 1);
   compiler.stop(); assert.equal(runners[1].terminated, true);
   await compiler.compile(project, files, () => {}, new AbortController().signal); assert.equal(runners.length, 3);
+});
+
+
+test('offline editor sanitation preserves valid Unicode pairs and replaces only NUL or lone surrogates', () => {
+  const source = String.raw`text.replaceAll(/[\0\uD800-\uDFFF]/g, "�")`;
+  const patched = patchEditorUnicode(source);
+  const sanitize = text => vm.runInNewContext(patched, { text });
+  assert.equal(sanitize('Türkçe 😀 𝑥'), 'Türkçe 😀 𝑥');
+  assert.equal(sanitize('a\0b\uD800c\uDC00d'), 'a�b�c�d');
+  assert.throws(() => patchEditorUnicode('unknown'));
+  assert.throws(() => patchEditorUnicode(source + source));
+  assert.throws(() => patchEditorUnicode(patched));
 });

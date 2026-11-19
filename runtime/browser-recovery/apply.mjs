@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url';
 const directory = dirname(fileURLToPath(import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const assetName = 'codemirror-editor-57ce7aa576296ae31fad.js';
+export function patchEditorUnicode(source) {
+  const from = String.raw`/[\0\uD800-\uDFFF]/g`;
+  assert(!source.includes(from + 'u'), 'Editor Unicode sanitizer is already patched');
+  assert.equal(source.split(from).length - 1, 1, 'Unexpected or already patched editor Unicode sanitizer');
+  // Unicode mode matches lone surrogates while leaving valid astral code points intact.
+  return source.replace(from, from + 'u');
+}
 export function patchEditor(source, core, config) {
   const patches = [
     ['let{currentDoc:o}=e;const s=r.Z9.define', 'let{currentDoc:o,recoveryDocName:recoveryName}=e;const s=r.Z9.define'],

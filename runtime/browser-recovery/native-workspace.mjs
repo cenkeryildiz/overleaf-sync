@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Local data adapter: the existing CE+ UI and OT document remain the editor.
-import { LocalCompiler, fingerprint, navigation, forward, backward } from './project-compile.mjs';
 import { projectZip } from './project-zip.mjs';
+import { LocalCompiler, fingerprint, navigation, forward, backward } from './project-compile.mjs';
 const api = globalThis.overleafLocalProjects;
 const report = state => dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } }));
 const status = (text, error = false) => { const node = document.querySelector('#local-status'); node.textContent = text; node.title = text; node.dataset.error = error; };
@@ -12,23 +12,27 @@ const status = (text, error = false) => { const node = document.querySelector('#
   const chip = ui.button({ className: 'olx-chip', iconName: 'cloud_off', label: 'Local only', ariaLabel: 'Local only options' }); chip.dataset.tone = 'local';
   const head = document.createElement('div'); head.className = 'olx-menu-head';
   const dot = document.createElement('span'); dot.className = 'olx-dot'; dot.dataset.state = 'disconnected';
-  const text = document.createElement('div'); text.innerHTML = '<strong>Working in this browser</strong><small>Edits and compiled PDFs are saved on this device. Collaboration, history and sharing need a connection.</small>';
+  const text = document.createElement('div'); text.innerHTML = globalThis.overleafStandalone ? '<strong>Working on this device</strong><small>Source and compiled PDFs stay in this extension. Export a ZIP to transfer your project.</small>' : '<strong>Working in this browser</strong><small>Edits and compiled PDFs are saved on this device. Collaboration, history and sharing need a connection.</small>';
   head.append(dot, text);
   const { list } = ui.menu(chip, [
     { header: head }, 'divider',
     { id: 'local-projects', icon: 'folder_open', label: 'Saved projects', description: 'Switch to another project stored in this browser' },
     { id: 'local-copies', icon: 'history', label: 'Recovery copies', description: 'Compare this file with an earlier recovery copy' },
+    ...(globalThis.overleafStandalone ? [{ id: 'local-deleted', icon: 'restore', label: 'Deleted files', description: 'Restore files deleted from this local project' }] : []),
     { id: 'local-export', icon: 'data_object', label: 'Recovery copy (.json)', description: 'Download every file with its saved versions' },
   ]);
   const wrap = document.createElement('div'); wrap.className = 'olx-menu-wrap'; wrap.append(chip, list);
   const separator = document.createElement('span'); separator.className = 'olx-separator';
+  if (globalThis.overleafStandalone) bar.append(ui.button({ id: 'local-open-pdf', label: 'Open PDF', ariaLabel: 'Open an existing PDF', iconName: 'picture_as_pdf' }));
   bar.append(iconButton('local-zip', 'Download project (.zip)', 'folder_zip'), iconButton('local-pdf', 'Download PDF', 'picture_as_pdf'),
     ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), separator, wrap);
   bar.querySelector('#local-status').after(ui.durability());
   ui.mount(bar, { hideLabels: ['Share', 'History'] });
+  if (globalThis.overleafStandalone) document.querySelector('#local-review').hidden = true;
 }
 let project, files, active, pending = Promise.resolve(), failure, nav, controller, outputDigest;
 const compiler = new LocalCompiler(), editors = new Map();
+let compileLog = 'Compiled locally.\n';
 // Native CE+ reuses one editor view for every document: read each document's own text, never another file's.
 const textOf = editor => editor?.container.doc?.getSnapshot?.() ?? (editor && editor === active ? editor.facade.getValue() : undefined);
 async function flush() {
@@ -38,9 +42,9 @@ async function flush() {
   if (failure) throw failure;
 }
 function outputFiles() {
-  if (!project.pdf) return [];
-  const build = project.outputDigest || project.digest;
-  return ['output.pdf', ...(project.synctex ? ['output.synctex.gz'] : []), 'output.log'].map(path => ({ path,
+  if (!project.pdf && !globalThis.overleafStandalone) return [];
+  const build = project.pdfImported ? project.pdfDigest : project.outputDigest || project.digest;
+  return [...(project.pdf ? ['output.pdf'] : []), ...(project.synctex ? ['output.synctex.gz'] : []), 'output.log'].map(path => ({ path,
     type: path === 'output.pdf' ? 'pdf' : path === 'output.log' ? 'log' : 'synctex.gz', build,
     url: `/recovery/native-output/${project.id}/${build}/${path}`, ...(path === 'output.pdf' ? { size: project.pdf.size, ranges: [], createdAt: new Date() } : {}) }));
 }
@@ -49,8 +53,8 @@ function download(bytes, name, type = 'application/octet-stream') {
 }
 try {
   const stored = await api.read(location.hash.slice(1)); project = stored.project; files = new Map(stored.files.map(file => [file.path, file]));
-  // Native OT backups must never reuse a live shared project's version namespace.
-  const clientProject = crypto.randomUUID().replaceAll('-', '').slice(0, 24);
+  // Stable local UUID namespace keeps native preferences across reloads without using a shared project's ID.
+  const clientProject = project.id.replaceAll('-', '').slice(0, 24);
   if (!project.native?.scripts?.length || !project.native?.meta?.length) throw Error('Prepare this project again while connected to save the native editor');
   for (const item of project.native.meta) {
     if (!/^ol-[\w-]+$/.test(item.name) || /csrf|token|session|analytics/i.test(item.name) || typeof item.content !== 'string') throw Error('Invalid saved editor metadata');
@@ -66,7 +70,7 @@ try {
   setMeta('ol-project_id', clientProject); setMeta('ol-user_id', project.account); setMeta('ol-csrfToken', 'local-only');
   for (const name of ['ol-shouldLoadHotjar', 'ol-customerIoEnabled', 'ol-showAiFeatures', 'ol-hasTrackChangesFeature']) setMeta(name, false, 'boolean');
   setMeta('ol-wsUrl', '', 'string'); setMeta('ol-useShareJsHash', false, 'boolean'); setMeta('ol-otMigrationStage', 0, 'number');
-  setMeta('ol-baseAssetPath', '/recovery/');
+  setMeta('ol-baseAssetPath', globalThis.overleafStandalone ? '/' : '/recovery/');
   try { const settings = JSON.parse(document.querySelector('meta[name="ol-userSettings"]')?.content || '{}'); if (typeof settings.overallTheme === 'string') globalThis.overleafOfflineToolbar.theme(settings.overallTheme); } catch { /* theme is cosmetic */ }
   const user = JSON.parse(document.querySelector('meta[name="ol-user"]')?.content || '{}');
   const folder = name => ({ _id: crypto.randomUUID().replaceAll('-', '').slice(0, 24), name, docs: [], folders: [], fileRefs: [] });
@@ -136,7 +140,7 @@ try {
     constructor(input, options) {
       const url = new URL(input, location.href);
       if (url.origin !== location.origin) throw Error('Offline workers require prepared local resources');
-      if (url.pathname.startsWith('/js/')) url.pathname = '/recovery' + url.pathname;
+      if (!globalThis.overleafStandalone && url.pathname.startsWith('/js/')) url.pathname = '/recovery' + url.pathname;
       super(url, options);
     }
   };
@@ -144,12 +148,127 @@ try {
     get savingHeld() { return !!failure; },
     file: doc => [...files.values()].find(file => file.doc === doc),
     attach(facade, container) { active = { facade, container }; editors.set(container.doc_id, active); } });
+  // Native reference completion reads the current snapshot through history-shaped endpoints, even offline.
+  let snapshotVersion = 0, snapshotFiles = new Map();
+  const snapshot = async () => {
+    await flush();
+    const result = new Map();
+    for (const file of files.values()) {
+      if (typeof file.content === 'string') result.set(file.path, { content: file.content });
+      else {
+        const bytes = Uint8Array.from(atob(file.data), char => char.charCodeAt(0));
+        const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-1', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+        result.set(file.path, { hash, byteLength: bytes.length });
+      }
+    }
+    return result;
+  };
   const originalFetch = globalThis.fetch.bind(globalThis);
+  const change = async action => {
+    await flush();
+    const saved = await api.change(project, [...files.values()], action);
+    project = saved.project; files = new Map(saved.files.map(file => [file.path, file])); nav = undefined;
+    status('Saved in this browser. PDF may be from an earlier compilation.'); report('device');
+    return saved;
+  };
+  const entity = (kind, id) => {
+    for (const parent of folders.values()) {
+      const list = parent.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[kind]];
+      const node = list?.find(node => node._id === id);
+      if (node) return { node, parent, list, path: parent.path ? parent.path + '/' + node.name : node.name };
+    }
+    throw Error('Local file or folder is missing');
+  };
   const localFetch = async (input, init) => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
     const method = init?.method || (input instanceof Request ? input.method : 'GET');
     if (url.origin !== location.origin) return new Response('External requests disabled in Local only mode', { status: 503 });
+    if (globalThis.overleafStandalone && url.pathname.startsWith(`/recovery/native-output/${project.id}/`) && url.pathname.endsWith('/output.log')) return new Response(compileLog, { headers: { 'Content-Type': 'text/plain' } });
     if (url.pathname === `/editingSession/${clientProject}` && method === 'PUT') return new Response(null, { status: 204 });
+    const editing = url.pathname.match(new RegExp(`^/project/${clientProject}/(doc|file|folder)/([a-f0-9]{24})(?:/(rename|move))?$`));
+    if (globalThis.overleafStandalone && editing && (method === 'DELETE' || method === 'POST')) {
+      try {
+        const item = entity(editing[1], editing[2]), from = item.path;
+        const body = method === 'DELETE' ? {} : JSON.parse(init?.body ?? await input.clone().text());
+        const parent = editing[3] === 'move' ? folders.get(body.folder_id) : item.parent;
+        const name = editing[3] === 'rename' ? body.name : item.node.name;
+        if (!parent || typeof name !== 'string' || name.includes('/')) throw Error('Invalid local destination');
+        const to = parent.path ? parent.path + '/' + name : name;
+        const remove = method === 'DELETE';
+        await change(remove ? { kind: 'remove', from } : { kind: 'relocate', from, to });
+        item.list.splice(item.list.indexOf(item.node), 1);
+        if (!remove) { item.node.name = name; parent.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[editing[1]]].push(item.node); }
+        const inside = path => path === from || path.startsWith(from + '/');
+        for (const [id, folder] of folders) if (inside(folder.path)) { if (remove) folders.delete(id); else folder.path = to + folder.path.slice(from.length); }
+        for (const [id, file] of assets) if (inside(file.path)) { if (remove) assets.delete(id); else assets.set(id, files.get(to + file.path.slice(from.length))); }
+        if (remove) for (const [id, editor] of editors) if (![...files.values()].some(file => file.doc === id)) { editors.delete(id); if (active === editor) active = undefined; }
+        if (remove) broadcast('removeEntity', item.node._id);
+        else if (editing[3] === 'rename') broadcast('reciveEntityRename', item.node._id, name);
+        else broadcast('reciveEntityMove', item.node._id, parent.node._id);
+        broadcast('rootDocUpdated', files.get(project.main).doc);
+        return new Response(null, { status: 204 });
+      } catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
+    }
+    if (globalThis.overleafStandalone && url.pathname === `/project/${clientProject}/settings` && method === 'POST') {
+      try {
+        const body = JSON.parse(init?.body ?? await input.clone().text()), main = body.rootDocId === undefined ? undefined : [...files.values()].find(file => file.doc === body.rootDocId)?.path;
+        if (body.rootDocId !== undefined && !main) throw Error('Choose an existing text main document');
+        await change({ kind: 'settings', main, compiler: body.compiler, name: body.name });
+        if (body.compiler !== undefined) broadcast('compilerUpdated', project.compiler);
+        if (main !== undefined) broadcast('rootDocUpdated', files.get(project.main).doc);
+        return new Response(null, { status: 204 });
+      } catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
+    }
+    if (globalThis.overleafStandalone && url.pathname === '/user/settings' && method === 'POST') {
+      try { await change({ kind: 'settings', preferences: JSON.parse(init?.body ?? await input.clone().text()) }); return new Response(null, { status: 204 }); }
+      catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
+    }
+    if (globalThis.overleafStandalone && url.pathname.toLowerCase() === `/project/${clientProject}/upload` && method === 'POST') {
+      try {
+        const body = init?.body instanceof FormData ? init.body : await input.formData(), file = body.get('qqfile');
+        if (!(file instanceof File)) throw Error('Choose a file to upload');
+        const parent = folders.get(body.get('targetFolderId') || url.searchParams.get('folder_id') || root._id);
+        if (!parent) throw Error('Local upload folder is missing');
+        const { readProject } = await import('/extension/imports.mjs'), imported = await readProject([file]);
+        if (imported.resources.length !== 1 || imported.folders.length) throw Error('Import ZIP projects from Saved projects');
+        const resource = imported.resources[0], directoryPath = body.get('relativePath');
+        // Uppy serializes an absent relativePath as the literal string "null".
+        const relative = directoryPath && directoryPath !== 'null' ? directoryPath : body.get('name') || file.name;
+        resource.path = parent.path ? parent.path + '/' + relative : relative;
+        init?.signal?.throwIfAborted();
+        await change({ kind: 'put', file: resource });
+        const saved = files.get(resource.path), parts = saved.path.split('/'), name = parts.pop(), previousFolders = new Set(folders.keys());
+        const folder = ensureFolder(parts.join('/'));
+        // Nested upload folders must reach both the adapter and the native tree.
+        for (const [id, entry] of folders) if (!previousFolders.has(id)) {
+          const parentPath = entry.path.split('/').slice(0, -1).join('/'), parentFolder = [...folders.values()].find(folder => folder.path === parentPath);
+          broadcast('reciveNewFolder', parentFolder.node._id, { ...entry.node, folders: [], docs: [], fileRefs: [] });
+        }
+        const node = { _id: saved.doc || crypto.randomUUID().replaceAll('-', '').slice(0, 24), name };
+        folder[saved.doc ? 'docs' : 'fileRefs'].push(node);
+        if (!saved.doc) assets.set(node._id, saved);
+        broadcast(saved.doc ? 'reciveNewDoc' : 'reciveNewFile', folder._id, structuredClone(node));
+        return Response.json({ success: true, entity_id: node._id, entity_type: saved.doc ? 'doc' : 'file' });
+      } catch (error) { return Response.json({ success: false, error: error.message }, { status: 409 }); }
+    }
+    if (globalThis.overleafStandalone && url.pathname === `/project/${clientProject}/latest/history` && method === 'GET') {
+      snapshotFiles = await snapshot(); snapshotVersion = 0;
+      return Response.json({ chunk: { startVersion: 0, history: { snapshot: { files: Object.fromEntries(snapshotFiles) }, changes: [] } } });
+    }
+    if (globalThis.overleafStandalone && url.pathname === `/project/${clientProject}/changes` && method === 'GET') {
+      if (Number(url.searchParams.get('since')) !== snapshotVersion) return Response.json({ message: 'Reload the local project snapshot' }, { status: 409 });
+      const current = await snapshot(), operations = [];
+      for (const [pathname, previous] of snapshotFiles) if (JSON.stringify(current.get(pathname)) !== JSON.stringify(previous)) operations.push({ pathname, newPathname: '' });
+      for (const [pathname, file] of current) if (JSON.stringify(snapshotFiles.get(pathname)) !== JSON.stringify(file)) operations.push({ pathname, file });
+      snapshotFiles = current;
+      if (operations.length) snapshotVersion++;
+      return Response.json({ changes: operations.length ? [{ operations, timestamp: new Date().toISOString(), authors: [] }] : [], hasMore: false });
+    }
+    if (globalThis.overleafStandalone && url.pathname.startsWith(`/project/${clientProject}/blob/`) && method === 'GET') {
+      const hash = url.pathname.split('/').at(-1);
+      for (const [path, file] of snapshotFiles) if (file.hash === hash) return new Response(Uint8Array.from(atob(files.get(path).data), char => char.charCodeAt(0)));
+      return new Response('Local asset unavailable', { status: 404 });
+    }
     if (url.pathname === `/project/${clientProject}/flush` && method === 'POST') {
       try { await flush(); return new Response(null, { status: 204 }); }
       catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
@@ -169,7 +288,7 @@ try {
         } else {
           entity = folder(body.name); parent.node.folders.push(entity); folders.set(entity._id, { node: entity, path });
         }
-        broadcast(next.file ? 'reciveNewDoc' : 'reciveNewFolder', body.parent_folder_id, entity);
+        broadcast(next.file ? 'reciveNewDoc' : 'reciveNewFolder', body.parent_folder_id, structuredClone(entity));
         status('Created in this browser. Export the project to transfer new files.');
         return Response.json(entity);
       } catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
@@ -185,6 +304,10 @@ try {
     }
     if (url.pathname === `/project/${clientProject}/compile/stop`) { controller?.abort(); return Response.json({ stopped: true }); }
     if (url.pathname === `/project/${clientProject}/compile` && method === 'POST') {
+      if (url.searchParams.get('auto_compile') === 'true' && localStorage.getItem(`autocompile_enabled:${clientProject}`) === 'false') {
+        status('Autocompile is off. Recompile to update the PDF.');
+        return Response.json({ status: 'success', outputFiles: outputFiles(), compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
+      }
       if (controller) return Response.json({ error: 'Compilation already running' }, { status: 409 });
       controller = new AbortController();
       try {
@@ -202,6 +325,7 @@ try {
         }
         status('Compiling on this device…');
         const result = await compiler.compile(project, saved.files, text => status(text), controller.signal);
+        compileLog = result.log || 'Compiled locally.\n';
         await flush();
         if (controller.signal.aborted || digest !== await fingerprint(project, [...files.values()])) throw Error('Source changed during compilation. Compile again.');
         project = await api.output(project, saved.files, new Blob([result.pdf], { type: 'application/pdf' }), result.synctex, digest);
@@ -209,7 +333,7 @@ try {
         status('Compiled and saved in this browser.');
         return Response.json({ status: 'success', outputFiles: outputFiles(),
           compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
-      } catch (error) { status(error.message + ' Previous PDF retained.', true); return Response.json({ status: 'error', outputFiles: outputFiles() }); }
+      } catch (error) { compileLog = error.log || error.message; status(error.message + ' Previous PDF retained.', true); return Response.json({ status: 'error', outputFiles: outputFiles() }); }
       finally { controller = undefined; }
     }
     if (url.pathname.startsWith(`/project/${clientProject}/sync/`)) {
@@ -229,7 +353,68 @@ try {
     return originalFetch(input, init);
   };
   globalThis.fetch = localFetch; globalThis.overleafParticipantFetch = localFetch;
+  if (globalThis.overleafStandalone) {
+    // The native upload dialog uses XHR; route only its local endpoint through the same guarded adapter.
+    const NativeXHR = globalThis.XMLHttpRequest;
+    globalThis.XMLHttpRequest = class extends NativeXHR {
+      #local; #url; #state = 0; #result; #text = ''; #controller;
+      open(method, input, ...args) {
+        const url = new URL(input, location.href);
+        this.#local = method.toUpperCase() === 'POST' && url.origin === location.origin && url.pathname.toLowerCase() === `/project/${clientProject}/upload`;
+        this.#url = url.href; this.#result = undefined; this.#text = ''; this.#state = 1;
+        return super.open(method, input, ...args);
+      }
+      get readyState() { return this.#local ? this.#state : super.readyState; }
+      get status() { return this.#local ? this.#result?.status || 0 : super.status; }
+      get statusText() { return this.#local ? this.#result?.statusText || '' : super.statusText; }
+      get responseText() { return this.#local ? this.#text : super.responseText; }
+      get response() { return this.#local ? this.responseType === 'json' ? (this.#text ? JSON.parse(this.#text) : null) : this.#text : super.response; }
+      get responseURL() { return this.#local ? this.#url : super.responseURL; }
+      getResponseHeader(name) { return this.#local ? this.#result?.headers.get(name) || null : super.getResponseHeader(name); }
+      getAllResponseHeaders() { return this.#local ? [...(this.#result?.headers || [])].map(([key, value]) => `${key}: ${value}\r\n`).join('') : super.getAllResponseHeaders(); }
+      send(body) {
+        if (!this.#local) return super.send(body);
+        const controller = this.#controller = new AbortController();
+        const timer = this.timeout ? setTimeout(() => { this.abort(); this.dispatchEvent(new ProgressEvent('timeout')); }, this.timeout) : undefined;
+        this.dispatchEvent(new ProgressEvent('loadstart')); this.upload.dispatchEvent(new ProgressEvent('loadstart'));
+        void (async () => {
+          try {
+            const result = await localFetch(this.#url, { method: 'POST', body, signal: controller.signal });
+            const text = await result.text(); if (controller.signal.aborted) return;
+            this.#result = result; this.#text = text; this.#state = 4;
+            this.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: body.get('qqfile')?.size || 0, total: body.get('qqfile')?.size || 0 }));
+            this.upload.dispatchEvent(new ProgressEvent('load')); this.upload.dispatchEvent(new ProgressEvent('loadend'));
+            this.dispatchEvent(new Event('readystatechange')); this.dispatchEvent(new ProgressEvent('load')); this.dispatchEvent(new ProgressEvent('loadend'));
+          } catch { if (!controller.signal.aborted) { this.#state = 4; this.dispatchEvent(new ProgressEvent('error')); this.dispatchEvent(new ProgressEvent('loadend')); } }
+          finally { clearTimeout(timer); }
+        })();
+      }
+      abort() {
+        if (!this.#local) return super.abort();
+        this.#controller?.abort(); this.#state = 0;
+        this.dispatchEvent(new ProgressEvent('abort')); this.dispatchEvent(new ProgressEvent('loadend'));
+      }
+    };
+  }
   const resources = () => [...files.values()].map(file => { const text = textOf(editors.get(file.doc)); return typeof text === 'string' ? { ...file, content: text } : file; });
+  if (globalThis.overleafStandalone) document.querySelector('#local-open-pdf').onclick = () => {
+    const input = document.createElement('input'); input.type = 'file'; input.accept = 'application/pdf,.pdf'; input.setAttribute('aria-label', 'Choose an existing PDF');
+    input.onchange = async () => {
+      try {
+        const pdf = input.files[0]; if (!pdf) return;
+        if (pdf.size > 16 * 1024 * 1024 || await pdf.slice(0, 5).text() !== '%PDF-') throw Error('Choose a PDF of at most 16 MB');
+        const pdfjs = await import('./pdf.mjs'); pdfjs.GlobalWorkerOptions.workerSrc = '/recovery/pdf.worker.mjs';
+        const loading = pdfjs.getDocument({ data: new Uint8Array(await pdf.arrayBuffer()), isEvalSupported: false, stopAtErrors: true });
+        try { const document = await loading.promise; await document.getPage(1); }
+        catch { throw Error('This PDF could not be opened. The previous PDF is retained.'); }
+        finally { await loading.destroy(); }
+        await flush(); project = await api.viewPdf(project, pdf); location.reload();
+      }
+      catch (error) { status(error.message, true); }
+      finally { input.remove(); }
+    };
+    input.oncancel = () => input.remove(); input.hidden = true; document.body.append(input); input.click();
+  };
   async function exportZip() {
     try { download(await projectZip(resources()), project.project + '.zip', 'application/zip'); }
     catch (error) { status(error.message + '. Your source files are retained.', true); }
@@ -281,6 +466,22 @@ try {
       dialog.onclose = () => dialog.remove(); document.body.append(dialog); dialog.showModal();
     } catch (error) { status(error.message, true); }
   };
+  if (globalThis.overleafStandalone) document.querySelector('#local-deleted').onclick = async () => {
+    try {
+      await flush();
+      if (!project.deleted?.length) { status('No deleted files to restore.'); return; }
+      const dialog = document.createElement('dialog'); dialog.setAttribute('aria-label', 'Restore deleted local files'); dialog.className = 'recovery-review';
+      const title = document.createElement('h2'); title.textContent = 'Deleted files'; dialog.append(title);
+      for (const entry of project.deleted) {
+        const row = document.createElement('p'), label = document.createElement('span'), button = document.createElement('button');
+        label.textContent = [...entry.files.map(file => file.path), ...entry.folders].join(', ') + ' '; button.textContent = 'Restore';
+        button.onclick = async () => { button.disabled = true; try { await change({ kind: 'restore', id: entry.id }); location.reload(); } catch (error) { status(error.message, true); button.disabled = false; } };
+        row.append(label, button); dialog.append(row);
+      }
+      const close = document.createElement('button'); close.textContent = 'Close'; close.onclick = () => dialog.close(); dialog.append(close);
+      dialog.onclose = () => dialog.remove(); document.body.append(dialog); dialog.showModal();
+    } catch (error) { status(error.message, true); }
+  };
   document.querySelector('#local-review').onclick = async () => {
     try {
       if (!active) throw Error('Open a source file first'); await flush();
@@ -293,15 +494,16 @@ try {
   };
   document.querySelector('#local-projects').onclick = () => location.assign('/recovery/project-workspace.html');
   addEventListener('beforeunload', event => { if ([...editors.values()].some(editor => editor.container.doc?.hasBufferedOps())) { event.preventDefault(); event.returnValue = ''; } });
-  addEventListener('pagehide', () => compiler.stop());
-  compiler.warm().catch(() => {}); // OPT-02: compiler start overlaps native editor script loading; failures resurface on compile
+  addEventListener('pagehide', () => compiler?.stop());
+  compiler?.warm().catch(() => {}); // OPT-02: compiler start overlaps native editor script loading; failures resurface on compile
   for (const href of project.native.styles) {
     const url = new URL(href, location.origin); if (url.origin !== location.origin || !url.pathname.startsWith('/stylesheets/')) throw Error('Invalid native stylesheet');
-    const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '/recovery' + url.pathname; document.head.append(link);
+    const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = (globalThis.overleafStandalone ? '' : '/recovery') + url.pathname; document.head.append(link);
   }
   for (const src of project.native.scripts) {
     const url = new URL(src, location.origin); if (url.origin !== location.origin || !url.pathname.startsWith('/js/')) throw Error('Invalid native script');
-    await new Promise((resolve, reject) => { const script = document.createElement('script'); script.src = '/recovery' + url.pathname; script.onload = resolve; script.onerror = () => reject(Error('Native editor asset unavailable; prepare again while connected')); document.body.append(script); });
+    await new Promise((resolve, reject) => { const script = document.createElement('script'); script.src = (globalThis.overleafStandalone ? '' : '/recovery') + url.pathname; script.onload = resolve; script.onerror = () => reject(Error('Native editor asset unavailable')); document.body.append(script); });
   }
-  status('Native editor — Local only. Logins, collaboration and server actions require connectivity.');
+
+  status('Native editor — Local only. Compile and export on this device.');
 } catch (error) { status(error.message + '. Existing local files are retained.', true); }
