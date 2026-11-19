@@ -12,6 +12,7 @@ import { PassThrough } from 'node:stream';
 import { patchOutputAuthorization } from '../runtime/participant-compile/hosting/output-auth.mjs';
 import { configuration } from '../runtime/participant-compile/hosting/configure.mjs';
 import { safePath, prepareSnapshot, prepareResult } from '../runtime/participant-compile/artifacts.mjs';
+import { patchPasses } from '../runtime/participant-compile/sdk-patch.mjs';
 const fixture = () => ({ main: 'main.tex', active: 'chapters/one.tex', text: 'exact candidate', resources: [
   { path: 'main.tex', content: 'root' }, { path: 'chapters/one.tex', content: 'old' }, { path: 'figure.png', data: 'AA==' },
 ] });
@@ -286,4 +287,30 @@ test('a page\'s first claim waits for its own in-flight queue so an older job of
   await compiled;
   listeners.get('pagehide')();
   assert(events.indexOf('claim') > events.indexOf('queued'), JSON.stringify(events));
+});
+
+test('pdflatex pass fixed point compares every file TeX reads back and refuses a changed pinned anchor', () => {
+  const loop = `                    ({ exit_code, log: last_log } = run(cmd, error_messages));
+
+                    if (exit_code != 0)
+                        break;
+
+                    if (!this._needs_rerun(last_log)) {
+                        if (cmd !== final_cmd) {`;
+  const pinned = `class BusytexPipeline {\n    _needs_rerun(log_text) {\n        return false;\n    }\n    loop() {\n        for (;;) {\n${loop}\n        }}}\n    }\n}\nself.BusytexPipeline = BusytexPipeline;`;
+  assert.throws(() => patchPasses(pinned.replace('_needs_rerun(log_text) {', '_needs_rerun(text) {')), /anchor changed/);
+  const context = vm.createContext({ self: {} }); vm.runInContext(patchPasses(pinned), context);
+  const { prototype } = context.self.BusytexPipeline, root = '/home/web_user/project_dir', files = new Map([
+    [root + '/main.tex', 'a'], [root + '/main.aux', 'x'], [root + '/main.pdf', 'p'], [root + '/main.log', 'l'], [root + '/main.synctex.gz', 's'], [root + '/sub/c.toc', 't']]);
+  const isDir = path => [...files.keys()].some(key => key.startsWith(path + '/'));
+  const FS = { readdir: dir => ['.', '..', ...new Set([...files.keys()].filter(key => key.startsWith(dir + '/')).map(key => key.slice(dir.length + 1).split('/')[0]))],
+    stat: path => ({ mode: isDir(path) ? 1 : 0, size: files.get(path)?.length ?? 0, mtime: new Date(1) }), isDir: mode => mode === 1, readFile: path => new TextEncoder().encode(files.get(path)) };
+  const PATH = { join: (...parts) => parts.join('/').replace(/\/+/g, '/') }, self = { project_dir: root }, skip = new Set([root + '/main.pdf', root + '/main.log']);
+  const snapshot = () => prototype._reread_snapshot.call(self, FS, PATH, skip), before = snapshot();
+  assert.deepEqual([...before.keys()].sort(), [root + '/main.aux', root + '/main.tex', root + '/sub/c.toc']);
+  files.set(root + '/main.pdf', 'new pdf'); files.set(root + '/main.log', 'new log'); files.set(root + '/main.synctex.gz', 'new');
+  assert.equal(prototype._reread_unchanged(before, snapshot()), true, 'Outputs TeX does not read back must not force another pass');
+  files.set(root + '/sub/c.toc', 'T'); assert.equal(prototype._reread_unchanged(before, snapshot()), false, 'A changed TOC needs the final pass');
+  files.set(root + '/sub/c.toc', 't'); files.set(root + '/main.out', 'o'); assert.equal(prototype._reread_unchanged(before, snapshot()), false, 'A new auxiliary file needs the final pass');
+  files.delete(root + '/main.out'); files.delete(root + '/main.aux'); assert.equal(prototype._reread_unchanged(before, snapshot()), false);
 });

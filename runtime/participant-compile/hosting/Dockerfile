@@ -10,7 +10,7 @@ COPY runtime/participant-compile/hosting/fetch-busytex.mjs /busytex/
 RUN node /busytex/fetch-busytex.mjs
 COPY runtime/participant-compile/sdk-patch.mjs /busytex/
 RUN node /busytex/sdk-patch.mjs /busytex/sdk-index.js /busytex/busytex-sdk.mjs
-RUN node /busytex/sdk-patch.mjs /busytex/participant/busytex/busytex_pipeline.js /busytex/participant/busytex/busytex_pipeline.patched.js catalog && mv /busytex/participant/busytex/busytex_pipeline.patched.js /busytex/participant/busytex/busytex_pipeline.js
+RUN node /busytex/sdk-patch.mjs /busytex/participant/busytex/busytex_pipeline.js /busytex/participant/busytex/busytex_pipeline.patched.js pipeline && mv /busytex/participant/busytex/busytex_pipeline.patched.js /busytex/participant/busytex/busytex_pipeline.js
 
 FROM --platform=linux/amd64 overleafcep/sharelatex@sha256:3077cb674adff9155d5f7f3ddbb52c384565adbb1011f610706e7ae3dfd8d962
 RUN cp /etc/overleaf/settings.js /etc/overleaf/participant-base.cjs

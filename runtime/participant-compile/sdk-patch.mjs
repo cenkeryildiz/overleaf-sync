@@ -26,8 +26,60 @@ export function patchPackageCatalog(source) {
   assert.equal(source.split(before).length - 1, 1, 'Pinned package catalog anchor changed');
   return source.replace(before, after);
 }
+// A pdflatex pass that needs no rerun and changed nothing TeX reads back (latexmk's fixed point) is final; the pinned
+// pipeline always typeset it once more in nonstopmode. Other drivers and every changed .aux/.toc/.bbl keep that final pass.
+export function patchPasses(source) {
+  function once(from, to) { assert.equal(source.split(from).length - 1, 1, 'Pinned pass anchor changed'); source = source.replace(from, to); }
+  once('    _needs_rerun(log_text) {', `    _reread_snapshot(FS, PATH, skip) {
+        const files = new Map();
+        const walk = dir => {
+            for (const name of FS.readdir(dir)) {
+                if (name === '.' || name === '..') continue;
+                const path = PATH.join(dir, name), stat = FS.stat(path);
+                if (FS.isDir(stat.mode)) walk(path);
+                else if (!skip.has(path) && !/\\.synctex(?:\\.gz)?(?:\\(busy\\))?$/.test(name))
+                    files.set(path, stat.size <= 4194304 ? FS.readFile(path) : stat.size + ':' + (+stat.mtime));
+            }
+        };
+        walk(this.project_dir);
+        return files;
+    }
+
+    _reread_unchanged(before, after) {
+        if (before.size !== after.size) return false;
+        for (const [path, value] of before) {
+            const other = after.get(path);
+            if (other === undefined || typeof value !== typeof other) return false;
+            if (typeof value === 'string' ? value !== other : value.length !== other.length || value.some((byte, i) => byte !== other[i])) return false;
+        }
+        return true;
+    }
+
+    _needs_rerun(log_text) {`);
+  once(`                    ({ exit_code, log: last_log } = run(cmd, error_messages));
+
+                    if (exit_code != 0)
+                        break;
+
+                    if (!this._needs_rerun(last_log)) {
+                        if (cmd !== final_cmd) {`, `                    const reread_skip = new Set([pdf_path, log_path].map(path => PATH.join(source_dir, path)));
+                    const reread_before = driver === 'pdftex_bibtex8' && cmd !== final_cmd ? this._reread_snapshot(FS, PATH, reread_skip) : null;
+                    const pass_started = Date.now();
+                    ({ exit_code, log: last_log } = run(cmd, error_messages));
+
+                    if (exit_code != 0)
+                        break;
+
+                    if (!this._needs_rerun(last_log)) {
+                        const fixed_point = reread_before !== null && FS.analyzePath(pdf_path).exists && +FS.stat(pdf_path).mtime >= pass_started &&
+                            !this.error_messages_all.some(err => last_log.includes(err)) && this._reread_unchanged(reread_before, this._reread_snapshot(FS, PATH, reread_skip));
+                        if (fixed_point) this.print('$ # no rerun needed and nothing TeX reads changed; this pass is final');
+                        if (cmd !== final_cmd && !fixed_point) {`);
+  return source;
+}
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   const [input, output, kind = 'sdk'] = process.argv.slice(2); assert(input && output && input !== output);
-  assert(['sdk', 'catalog'].includes(kind));
-  writeFileSync(output, (kind === 'catalog' ? patchPackageCatalog : patchSdk)(readFileSync(input, 'utf8')), { flag: 'wx' });
+  assert(['sdk', 'catalog', 'pipeline'].includes(kind));
+  const patch = { sdk: patchSdk, catalog: patchPackageCatalog, pipeline: source => patchPasses(patchPackageCatalog(source)) }[kind];
+  writeFileSync(output, patch(readFileSync(input, 'utf8')), { flag: 'wx' });
 }
