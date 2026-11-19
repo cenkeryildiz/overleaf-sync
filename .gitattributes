@@ -1,1 +1,5 @@
+* text=auto eol=lf
+*.png binary
+*.vsix binary
+*.tar.gz binary
 .env* export-ignore
