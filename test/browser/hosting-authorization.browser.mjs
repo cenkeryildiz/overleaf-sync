@@ -46,8 +46,13 @@ try {
           let current = globalThis.fetch.bind(globalThis), refusals = 0;
           Object.defineProperty(globalThis, 'fetch', { configurable: true, get: () => current, set(fn) {
             current = async (...args) => {
-              const response = await fn(...args);
               const target = new URL(typeof args[0] === 'string' || args[0] instanceof URL ? args[0] : args[0].url, location.href);
+              const compiling = location.pathname === '/recovery/native-workspace.html' && /\/compile$/.test(target.pathname);
+              const mark = compiling ? { start: performance.now() } : undefined;
+              if (mark) { const calls = globalThis.nativeCompileCalls ||= []; calls.push(mark); if (calls.length > 16) calls.shift(); }
+              const response = await fn(...args);
+              if (mark) { mark.end = performance.now(); mark.status = response.status; mark.result = (await response.clone().json()).status; }
+              if (location.pathname === '/recovery/native-workspace.html' && /\/output$/.test(target.pathname) && args[1]?.method === 'DELETE') globalThis.nativeClearStatus = response.status;
               if (location.pathname === '/recovery/native-workspace.html' && /\/sync\/(code|pdf)$/.test(target.pathname)) {
                 (globalThis.nativeSyncCalls ||= []).push({ path: target.pathname, query: target.search, status: response.status, body: await response.clone().json() });
               }
@@ -313,7 +318,12 @@ try {
         console.log('Checking native CE+ offline interface');
         await alice.locator('a[href*="native-workspace.html#"]').first().click();
         await alice.getByRole('textbox', { name: /^Source Editor/ }).waitFor({ timeout: 30000 });
-        await alice.evaluate(() => { const node = document.querySelector('#local-status'); console.log('Native local status: ' + node.textContent); new MutationObserver(() => console.log('Native local status: ' + node.textContent)).observe(node, { subtree: true, childList: true, characterData: true }); });
+        await alice.evaluate(() => {
+          const node = document.querySelector('#local-status'); let last = node.textContent;
+          console.log('Native local status: ' + last);
+          new MutationObserver(() => { if (node.textContent !== last) { last = node.textContent; console.log('Native local status: ' + last); } })
+            .observe(node, { subtree: true, childList: true, characterData: true });
+        });
         // Keep bounded diagnostics for this synthetic fixture when the real SDK rejects a compile.
         await alice.evaluate(async () => {
           const { PdfLatex } = await import('/recovery/busytex-sdk.mjs'), compile = PdfLatex.prototype.compile;
@@ -332,6 +342,41 @@ try {
         };
         await nativeCompiled();
         await alice.locator('.textLayer span').filter({ hasText: /^Authorization fixture\./ }).first().waitFor({ timeout: 120000 });
+        // Native Recompile from scratch must drop carried auxiliary files, while preserving source and the saved PDF.
+        await alice.evaluate(async () => {
+          const { LocalCompiler } = await import('/recovery/project-compile.mjs'), compile = LocalCompiler.prototype.compile;
+          LocalCompiler.prototype.compile = async function(...args) {
+            globalThis.nativeScratchCarry = this.carry !== undefined;
+            const result = await compile.apply(this, args);
+            if (globalThis.seedNativeScratch) {
+              this.carry = { key: [args[0].id, args[0].main, args[0].compiler].join('\n'), files: [{ path: 'main.aux', content: 'Invalid auxiliary file for clean-build regression' }] };
+              globalThis.seedNativeScratch = false;
+            }
+            return result;
+          };
+          globalThis.seedNativeScratch = true;
+        });
+        await alice.getByRole('button', { name: 'Recompile', exact: true }).click();
+        await alice.waitForFunction(() => globalThis.seedNativeScratch === false);
+        await alice.getByRole('button', { name: 'Recompile', exact: true }).waitFor();
+        await alice.evaluate(() => { delete globalThis.nativeScratchCarry; });
+        const beforeScratch = await alice.evaluate(async () => {
+          const { project, files } = await globalThis.overleafLocalProjects.read(location.hash.slice(1));
+          return { digest: project.outputDigest, files };
+        });
+        const scratchStart = performance.now();
+        await alice.getByRole('button', { name: 'Toggle compile options menu', exact: true }).click();
+        await alice.getByRole('menuitem', { name: 'Recompile from scratch', exact: true }).click();
+        await alice.waitForFunction(() => typeof globalThis.nativeScratchCarry === 'boolean');
+        assert.equal(await alice.evaluate(() => globalThis.nativeClearStatus), 204, 'Native clear-cache request must succeed');
+        assert.equal(await alice.evaluate(() => globalThis.nativeScratchCarry), false, 'Recompile from scratch must clear auxiliary files');
+        await alice.getByRole('button', { name: 'Recompile', exact: true }).waitFor();
+        await nativeCompiled();
+        assert.deepEqual(await alice.evaluate(async () => {
+          const { project, files } = await globalThis.overleafLocalProjects.read(location.hash.slice(1));
+          return { digest: project.outputDigest, files };
+        }), beforeScratch, 'Clean compile must preserve exact sources and output identity');
+        console.log(JSON.stringify({ nativeScratchCompileMs: performance.now() - scratchStart }));
         const nativeEditor = alice.getByRole('textbox', { name: /^Source Editor/ });
         await alice.getByRole('treeitem', { name: 'chapter.tex', exact: true }).click();
         assert.equal(await nativeEditor.evaluate(element => element.cmView.view.state.doc.toString()), chapter + '% Navigation must now be stale\n');
@@ -369,7 +414,15 @@ try {
         assert((await nativeEditor.evaluate(element => element.cmView.view.state.doc.toString())).includes('% Explicit recovery candidate'));
         await nativeEditor.evaluate(element => { const view = element.cmView.view, text = view.state.doc.toString(), from = text.indexOf('Authorization fixture.'); view.dispatch({ changes: { from, to: from + 'Authorization fixture.'.length, insert: 'Native offline fixture.' } }); });
         await alice.locator('#local-status').filter({ hasText: 'Saved in this browser.' }).waitFor();
-        await alice.getByRole('button', { name: /^Recompile/ }).first().click();
+        try { await alice.getByRole('button', { name: /^Recompile/ }).first().click(); }
+        catch (error) {
+          console.error(JSON.stringify({ stage: 'native-recompile-after-edit', diagnostics: await alice.evaluate(() => ({
+            status: document.querySelector('#local-status')?.textContent,
+            calls: globalThis.nativeCompileCalls,
+            buttons: [...document.querySelectorAll('.compile-button')].map(button => ({ text: button.textContent, disabled: button.disabled })),
+            savingHeld: globalThis.overleafOfflineNative?.savingHeld,
+          })) })); throw error;
+        }
         await nativeCompiled();
         await alice.locator('.textLayer span').filter({ hasText: /^Native offline fixture\./ }).first().waitFor({ timeout: 120000 });
         await exportBytes(alice, 'Download project (.zip)', 'native-offline.zip');

@@ -178,6 +178,11 @@ try {
     if (url.pathname === `/project/${clientProject}/metadata` && method === 'GET') return Response.json({ projectMeta: project.native.projectMeta || {} });
     const metadata = url.pathname.match(new RegExp(`^/project/${clientProject}/doc/([a-f0-9]{24})/metadata$`));
     if (metadata && method === 'POST') return Response.json({ docId: metadata[1], meta: project.native.projectMeta?.[metadata[1]] || { labels: [], packages: {}, packageNames: [] } });
+    if (url.pathname === `/project/${clientProject}/output` && method === 'DELETE') {
+      if (controller) return Response.json({ error: 'Compilation already running' }, { status: 409 });
+      compiler.carry = undefined;
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === `/project/${clientProject}/compile/stop`) { controller?.abort(); return Response.json({ stopped: true }); }
     if (url.pathname === `/project/${clientProject}/compile` && method === 'POST') {
       if (controller) return Response.json({ error: 'Compilation already running' }, { status: 409 });
