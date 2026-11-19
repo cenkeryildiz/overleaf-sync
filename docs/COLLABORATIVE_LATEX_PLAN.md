@@ -1297,3 +1297,5 @@ OPT-02-B delivered — 2026-11-19 05:58 CET: commit 563a0898 pushed on work/simu
 - Rollback: latex-participant:pass-fixed-point 6658eb7f7cce. LAN app, volumes, demo untouched.
 
 OPT-07-C delivered — 2026-11-19 06:20 CET: commit 5be80f9e pushed; 3/3 blobs equal local; CI 44461271142 SUCCESS (Linux/macOS/Windows + package). Scratch removed. Staging ceeab235aaa8 accepted; rollback 6658eb7f7cce retained. Next: OPT-04/06/09, repeat-visit IDB unpack; physical-device/host/off-host gates unchanged.
+
+Rejected OPT-02-C (do not redo) — 2026-11-19 06:05 CET: remembering a project's last package segments (from the SDK logger's "Data packages used" print, localStorage, catalog-path allow-list) and preloading them at init removes the second module creation, but on staging reload the PDF appeared at 4905/4932 ms vs 5232/4916 ms baseline; IndexedDB reads of basic+recommended do not overlap usefully. ~150 ms did not justify an SDK logger wrapper and per-project stored state. Source reverted, never committed; staging back on ceeab235aaa8; candidate image removed. Remaining repeat-visit cost is the IndexedDB read/unpack itself (pinned Emscripten loader).
