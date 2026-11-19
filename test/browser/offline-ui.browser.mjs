@@ -26,15 +26,42 @@ try {
       page.on('console', m => { if (m.type() === 'error') console.error(m.text().slice(0, 250)); });
       await page.goto(base + '/login'); await page.locator('input[name=email]').fill(user.email); await page.locator('input[name=password]').fill(user.password);
       await page.getByRole('button', { name: /^Login/ }).click(); await page.waitForURL(base + '/project');
+      async function keyboardMenu(name) {
+        const trigger = page.getByRole('button', { name, exact: true });
+        const menu = trigger.locator('..').getByRole('menu', { includeHidden: true });
+        await trigger.focus(); await trigger.press('ArrowDown');
+        const downOpens = await trigger.getAttribute('aria-expanded') === 'true';
+        if (!downOpens) await trigger.press('Enter');
+        const items = menu.getByRole('menuitem');
+        assert(await items.first().evaluate(node => node === document.activeElement));
+        await page.keyboard.press('End'); assert(await items.last().evaluate(node => node === document.activeElement));
+        await page.keyboard.press('Home'); assert(await items.first().evaluate(node => node === document.activeElement));
+        await page.keyboard.press('ArrowUp'); assert(await items.last().evaluate(node => node === document.activeElement));
+        await page.keyboard.press('Escape'); assert(await trigger.evaluate(node => node === document.activeElement));
+        await trigger.press('ArrowUp');
+        const upOpens = await trigger.getAttribute('aria-expanded') === 'true';
+        if (!upOpens) { await trigger.press('Enter'); await page.keyboard.press('End'); }
+        assert(await items.last().evaluate(node => node === document.activeElement));
+        await page.keyboard.press('Tab');
+        const tabCloses = await menu.isHidden();
+        if (!tabCloses) await trigger.click();
+        const controls = await trigger.getAttribute('aria-controls');
+        const relationship = !!controls && controls === await menu.getAttribute('id') && await menu.getAttribute('aria-labelledby') === await trigger.getAttribute('id') && await menu.evaluate(node => document.querySelectorAll('#' + CSS.escape(node.id)).length === 1);
+        console.log(JSON.stringify({ keyboardMenu: name, theme: label, downOpens, upOpens, tabCloses, relationship }));
+        if (process.env.TOOLBAR_KEYBOARD_BASELINE !== '1') assert(downOpens && upOpens && tabCloses && relationship);
+      }
       const token = await page.locator('meta[name="ol-csrfToken"]').getAttribute('content');
       const settings = await page.request.post(base + '/user/settings', { headers: { 'X-CSRF-Token': token }, data: { overallTheme: theme } }); assert(settings.ok());
       await page.getByRole('button', { name: /^(New project|Create a new project)$/i }).click(); await page.getByText('Existing project (.zip)', { exact: true }).click();
       await page.locator('input[type=file]').first().setInputFiles(join(work, 'fixture.zip')); await page.waitForURL(/\/project\/[a-f0-9]{24}/);
       await page.getByRole('textbox', { name: /^Source Editor/ }).waitFor();
-      await page.getByRole('button', { name: 'Offline and recovery options' }).click();
+      await keyboardMenu('Offline and recovery options');
+      await page.getByRole('button', { name: 'Offline and recovery options' }).focus(); await page.keyboard.press('Enter');
       await page.screenshot({ path: join(output, 'connected-' + label + '.png') });
-      await page.getByRole('menuitem', { name: 'Work offline', exact: true }).click(); await page.waitForURL(/native-workspace/, { timeout: 120000 });
+      assert(await page.getByRole('menuitem', { name: 'Work offline', exact: true }).evaluate(node => node === document.activeElement));
+      await page.keyboard.press('Enter'); await page.waitForURL(/native-workspace/, { timeout: 120000 });
       const editor = page.getByRole('textbox', { name: /^Source Editor/ }); await editor.waitFor();
+      await keyboardMenu('Local only options');
       await context.setOffline(true);
       console.log('Native compile controls', await page.getByRole('button').evaluateAll(nodes => nodes.map(n => n.getAttribute('aria-label') || n.textContent.trim()).filter(s => /compile|stop/i.test(s))));
       await page.screenshot({ path: join(output, 'native-' + label + '.png') });
@@ -57,7 +84,8 @@ try {
         const { project, files } = await overleafLocalProjects.read(location.hash.slice(1)), file = files.find(f => f.path === 'main.tex');
         overleafRecovery.save({ schema: 1, account: project.account, project: project.project, workspace: project.id, doc: file.doc, writer: crypto.randomUUID(), revision: file.revision, base: file.base, candidate: file.content + '% Recovery candidate\n', name: file.path, updatedAt: Date.now() });
       });
-      await page.getByRole('button', { name: 'Local only options' }).click(); await page.getByRole('menuitem', { name: 'Recovery copies', exact: true }).click();
+      await page.getByRole('button', { name: 'Local only options' }).focus(); await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
+      assert(await page.getByRole('menuitem', { name: 'Recovery copies', exact: true }).evaluate(node => node === document.activeElement)); await page.keyboard.press('Enter');
       const review = page.getByRole('dialog', { name: 'Review offline recovery copy' }); await review.waitFor();
       assert.equal(await review.locator('h2').evaluate(n => getComputedStyle(n).color), await review.evaluate(n => getComputedStyle(n).color), 'Recovery heading must inherit the readable dialog theme');
       await page.screenshot({ path: join(output, 'recovery-' + label + '.png') }); await review.getByRole('button', { name: 'Close', exact: true }).click();

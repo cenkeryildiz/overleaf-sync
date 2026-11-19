@@ -11,32 +11,43 @@
     if (onClick) node.addEventListener('click', onClick);
     return node;
   }
+  let menuSerial = 0;
   function menu(trigger, entries) {
     const list = document.createElement('div'); list.className = 'olx-menu'; list.setAttribute('role', 'menu'); list.hidden = true;
+    list.id = 'olx-menu-' + ++menuSerial; trigger.setAttribute('aria-controls', list.id);
+    trigger.id ||= list.id + '-trigger'; list.setAttribute('aria-labelledby', trigger.id);
     const items = [];
     for (const entry of entries) {
       if (entry === 'divider') { const line = document.createElement('div'); line.className = 'olx-menu-divider'; line.setAttribute('role', 'separator'); list.append(line); continue; }
       if (entry.header) { list.append(entry.header); continue; }
       const item = document.createElement('button'); item.type = 'button'; item.className = 'olx-menu-item'; item.setAttribute('role', 'menuitem'); if (entry.id) item.id = entry.id;
+      item.tabIndex = -1;
       item.append(icon(entry.icon));
       const text = document.createElement('span'); text.className = 'olx-menu-text';
       const title = document.createElement('span'); title.className = 'olx-menu-title'; title.textContent = entry.label; text.append(title);
       if (entry.description) { const small = document.createElement('span'); small.className = 'olx-menu-description'; small.textContent = entry.description; text.append(small); }
       item.append(text); item.setAttribute('aria-label', entry.label);
-      item.addEventListener('click', () => { close(); entry.onClick?.(); });
+      item.addEventListener('click', () => { close(true); entry.onClick?.(); });
       items.push(item); list.append(item);
     }
-    const open = () => { list.hidden = false; trigger.setAttribute('aria-expanded', 'true'); items[0]?.focus(); };
+    const enabled = () => items.filter(item => !item.disabled && !item.hidden);
+    const open = (last = false) => { list.hidden = false; trigger.setAttribute('aria-expanded', 'true'); const available = enabled(); available[last ? available.length - 1 : 0]?.focus(); };
     const close = (focus = false) => { if (list.hidden) return; list.hidden = true; trigger.setAttribute('aria-expanded', 'false'); if (focus) trigger.focus(); };
     trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
     trigger.addEventListener('click', () => (list.hidden ? open() : close()));
+    trigger.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); open(event.key === 'ArrowUp'); }
+      else if (event.key === 'Escape' && !list.hidden) { event.preventDefault(); close(true); }
+    });
     list.addEventListener('keydown', event => {
-      const index = items.indexOf(document.activeElement);
+      const available = enabled(), index = available.indexOf(document.activeElement);
       if (event.key === 'Escape') { event.preventDefault(); close(true); }
       else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault(); items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
-      } else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); items[event.key === 'Home' ? 0 : items.length - 1]?.focus(); }
+        event.preventDefault(); const next = index < 0 ? (event.key === 'ArrowUp' ? available.length - 1 : 0) : (index + (event.key === 'ArrowDown' ? 1 : available.length - 1)) % available.length; available[next]?.focus();
+      } else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); available[event.key === 'Home' ? 0 : available.length - 1]?.focus(); }
     });
+    const leave = event => { if (!trigger.contains(event.relatedTarget) && !list.contains(event.relatedTarget)) close(); };
+    list.addEventListener('focusout', leave); trigger.addEventListener('focusout', leave);
     document.addEventListener('pointerdown', event => { if (!list.hidden && !list.contains(event.target) && !trigger.contains(event.target)) close(); }, true);
     return { list, close };
   }

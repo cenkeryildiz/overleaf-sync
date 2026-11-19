@@ -249,6 +249,87 @@ function label() {
   return { node, send, text: () => node.children[1].textContent };
 }
 
+function menuFixture() {
+  const document = { activeElement: null, documentElement: { dataset: {} }, addEventListener() {} };
+  document.createElement = () => {
+    const node = element(), listeners = new Map();
+    node.addEventListener = (name, callback) => listeners.set(name, [...(listeners.get(name) || []), callback]);
+    node.focus = () => { document.activeElement = node; };
+    node.contains = target => target === node || node.children.some(child => child.contains?.(target));
+    node.send = (name, properties = {}) => {
+      const event = { target: node, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...properties };
+      for (const callback of listeners.get(name) || []) callback(event);
+      return event;
+    };
+    return node;
+  };
+  const context = vm.createContext({ document, localStorage: new Storage(), addEventListener() {} }); vm.runInContext(toolbar, context);
+  const create = entries => {
+    const trigger = document.createElement('button'), result = context.overleafOfflineToolbar.menu(trigger, entries);
+    return { trigger, ...result, items: result.list.children.filter(node => node.attributes.role === 'menuitem') };
+  };
+  return { document, create };
+}
+
+test('toolbar menu links unique popup IDs and navigates available items without intercepting activation keys', () => {
+  const f = menuFixture(), m = f.create(['First', 'Disabled', 'Hidden', 'Last'].map(label => ({ label })));
+  const second = f.create([]);
+  assert(m.list.id); assert.notEqual(m.list.id, second.list.id);
+  assert.equal(m.trigger.attributes['aria-controls'], m.list.id);
+  assert.equal(m.list.attributes['aria-labelledby'], m.trigger.id);
+  assert.equal(m.trigger.attributes['aria-haspopup'], 'menu');
+  for (const item of m.items) assert.equal(item.tabIndex, -1);
+  m.items[1].disabled = true; m.items[2].hidden = true;
+  const triggerKey = key => m.trigger.send('keydown', { key });
+  const listKey = key => m.list.send('keydown', { key });
+  assert.equal(triggerKey('ArrowDown').defaultPrevented, true);
+  assert.equal(m.list.hidden, false); assert.equal(m.trigger.attributes['aria-expanded'], 'true');
+  assert.equal(f.document.activeElement, m.items[0]);
+  listKey('ArrowDown'); assert.equal(f.document.activeElement, m.items[3]);
+  listKey('ArrowDown'); assert.equal(f.document.activeElement, m.items[0]);
+  listKey('ArrowUp'); assert.equal(f.document.activeElement, m.items[3]);
+  listKey('Home'); assert.equal(f.document.activeElement, m.items[0]);
+  listKey('End'); assert.equal(f.document.activeElement, m.items[3]);
+  for (const key of ['Enter', ' ']) assert.equal(listKey(key).defaultPrevented, false);
+  assert.equal(listKey('Escape').defaultPrevented, true);
+  assert.equal(m.list.hidden, true); assert.equal(m.trigger.attributes['aria-expanded'], 'false');
+  assert.equal(f.document.activeElement, m.trigger);
+  triggerKey('ArrowUp'); assert.equal(f.document.activeElement, m.items[3]);
+});
+
+test('toolbar menu restores trigger before activation and only closes when focus leaves the whole control', () => {
+  const f = menuFixture(); let activated = 0, m;
+  m = f.create([{ label: 'Save', onClick() {
+    activated++; assert.equal(m.list.hidden, true); assert.equal(f.document.activeElement, m.trigger);
+  } }]);
+  m.trigger.send('click');
+  m.trigger.send('focusout', { relatedTarget: m.items[0] }); assert.equal(m.list.hidden, false);
+  m.list.send('focusout', { relatedTarget: m.trigger }); assert.equal(m.list.hidden, false);
+  m.list.send('focusout', { relatedTarget: m.items[0].firstChild }); assert.equal(m.list.hidden, false);
+  assert.equal(m.list.send('keydown', { key: 'Tab' }).defaultPrevented, false);
+  m.items[0].send('click'); assert.equal(activated, 1);
+  m.trigger.send('click');
+  const outside = f.document.createElement('button'); outside.focus();
+  m.list.send('focusout', { relatedTarget: outside });
+  assert.equal(m.list.hidden, true); assert.equal(f.document.activeElement, outside);
+  m.trigger.send('click'); m.trigger.send('focusout', { relatedTarget: null });
+  assert.equal(m.list.hidden, true);
+});
+
+test('empty and all-unavailable toolbar menus keep focus safe for every navigation key', () => {
+  const f = menuFixture();
+  for (const entries of [[], [{ label: 'Disabled' }, { label: 'Hidden' }]]) {
+    const m = f.create(entries);
+    if (m.items.length) { m.items[0].disabled = true; m.items[1].hidden = true; }
+    m.trigger.focus(); m.trigger.send('keydown', { key: 'ArrowUp' });
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+      m.list.send('keydown', { key }); assert.equal(f.document.activeElement, m.trigger);
+    }
+    m.list.send('keydown', { key: 'Escape' }); assert.equal(m.list.hidden, true);
+    assert.equal(f.document.activeElement, m.trigger);
+  }
+});
+
 test('durability label is accessible text, starts hidden and never claims an off-host backup', () => {
   const l = label();
   assert.equal(l.node.attributes.role, 'status'); assert.equal(l.node.attributes['aria-live'], 'polite'); assert.equal(l.node.hidden, true);
