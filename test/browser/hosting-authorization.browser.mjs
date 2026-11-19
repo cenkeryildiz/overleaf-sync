@@ -325,8 +325,9 @@ try {
           };
         });
         if ((await alice.locator('#local-status').textContent()).startsWith('Native editor')) await alice.getByRole('button', { name: /^Recompile/ }).first().click();
-        const nativeCompiled = async () => {
-          await alice.waitForFunction(() => { const status = document.querySelector('#local-status'); return status.dataset.error === 'true' || status.textContent === 'Compiled and saved in this browser.'; }, null, { timeout: 120000 });
+        // `stale`: a status already shown before this compile was requested (e.g. an earlier refusal) is not its outcome.
+        const nativeCompiled = async stale => {
+          await alice.waitForFunction(stale => { const status = document.querySelector('#local-status'); return status.textContent !== stale && (status.dataset.error === 'true' || status.textContent === 'Compiled and saved in this browser.'); }, stale, { timeout: 120000 });
           assert.equal(await alice.locator('#local-status').getAttribute('data-error'), 'false', JSON.stringify({ status: await alice.locator('#local-status').textContent(), result: await alice.evaluate(() => globalThis.nativeCompileResult) }));
         };
         await nativeCompiled();
@@ -438,7 +439,8 @@ try {
         // Every exported file must hold its own text, not the text of whichever file the shared editor shows last.
         const exportedMain = execFileSync('/usr/bin/unzip', ['-p', join(work, 'local-created.zip'), 'main.tex'], { encoding: 'utf8' });
         assert(exportedMain.includes('Hello world.') && !exportedMain.includes('% Created without a server'), 'Offline ZIP main.tex must be its own saved text: ' + JSON.stringify(exportedMain.slice(0, 60)));
-        await alice.getByRole('button', { name: /^Recompile/ }).first().click(); await nativeCompiled();
+        const staleStatus = await alice.locator('#local-status').textContent();
+        await alice.getByRole('button', { name: /^Recompile/ }).first().click(); await nativeCompiled(staleStatus);
         await alice.locator('.textLayer span').filter({ hasText: /^Hello/ }).first().waitFor({ timeout: 120000 });
         assert(nativeInversePassed, 'Native inverse navigation must open the child source');
         await alice.goto(localUrl); await offlineEditor(alice).waitFor();

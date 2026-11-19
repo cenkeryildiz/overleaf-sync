@@ -186,7 +186,16 @@ try {
         await flush();
         const saved = await api.read(project.id);
         if ([...files.values()].some(file => saved.files.find(other => other.path === file.path)?.revision !== file.revision)) throw Error('Another tab changed this project. Reload before compiling.');
-        const digest = await fingerprint(project, saved.files); status('Compiling on this device…');
+        const digest = await fingerprint(project, saved.files);
+        // The editor's automatic compile on open: the saved PDF was compiled from exactly these sources, so show it.
+        if (url.searchParams.get('auto_compile') === 'true' && project.pdf && project.synctex && project.outputDigest === digest) {
+          const savedNav = await navigation(project.synctex, project, [...files.values()]).catch(() => undefined);
+          if (savedNav) {
+            nav = savedNav; outputDigest = digest; status('Compiled and saved in this browser.');
+            return Response.json({ status: 'success', outputFiles: outputFiles(), compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
+          }
+        }
+        status('Compiling on this device…');
         const result = await compiler.compile(project, saved.files, text => status(text), controller.signal);
         await flush();
         if (controller.signal.aborted || digest !== await fingerprint(project, [...files.values()])) throw Error('Source changed during compilation. Compile again.');

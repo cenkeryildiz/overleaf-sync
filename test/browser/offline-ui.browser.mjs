@@ -93,6 +93,13 @@ try {
       await page.screenshot({ path: join(output, 'recovery-' + label + '.png') }); await review.getByRole('button', { name: 'Close', exact: true }).click();
       const chooser = await context.newPage(); await chooser.goto(base + '/recovery/project-workspace.html'); await chooser.getByRole('heading', { name: 'Saved projects', exact: true }).waitFor();
       await chooser.screenshot({ path: join(output, 'chooser-' + label + '.png') }); await chooser.close();
+      // OPT-07-E: reopening unchanged offline sources shows the saved PDF without compiling again.
+      const reopened = performance.now(); await page.reload(); await editor.waitFor();
+      await page.waitForFunction(() => document.querySelector('#local-status')?.textContent === 'Compiled and saved in this browser.', null, { timeout: 120000 });
+      await page.locator('.textLayer span').filter({ hasText: 'Native UI fixture.' }).first().waitFor();
+      const reopenMarks = await page.evaluate(() => performance.getEntriesByType('mark').filter(e => e.name.startsWith('compile:')).map(e => e.name));
+      console.log(JSON.stringify({ nativeReopen: label, visibleMs: Math.round(performance.now() - reopened), compileMarks: reopenMarks }));
+      if (process.env.OFFLINE_REOPEN_BASELINE !== '1') assert(!reopenMarks.includes('compile:start'), 'Unchanged sources must not recompile on reopen');
       await page.evaluate(() => { const original = IDBDatabase.prototype.transaction; IDBDatabase.prototype.transaction = function(...args) { const tx = original.apply(this, args); if (this.name === 'overleaf-local-projects' && args[1] === 'readwrite') queueMicrotask(() => tx.abort()); return tx; }; });
       await editor.evaluate(e => e.cmView.view.dispatch({ changes: { from: 0, insert: '% Unsaved recovery text\n' } }));
       await page.locator('#local-status[data-error=true]').waitFor();
