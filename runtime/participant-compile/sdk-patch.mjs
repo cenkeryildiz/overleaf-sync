@@ -19,7 +19,15 @@ export function patchSdk(source) {
   once('    terminate() {\n        if (this.worker)', '    terminate() {\n        this.cancelCompilation?.();\n        this.cancelCompilation = null;\n        if (this.worker)');
   return source;
 }
+// TikZ and other styles need not declare themselves with plain \\ProvidesPackage.
+export function patchPackageCatalog(source) {
+  const before = 'new Set(Array.from(data_package_js_script.matchAll(this.regex_providespackage)).map(groups => groups[1].toLowerCase().trim()))';
+  const after = 'new Set([...Array.from(data_package_js_script.matchAll(this.regex_providespackage)), ...Array.from(data_package_js_script.matchAll(/"filename":\\s*"[^"\\n]*\\/([^/"\\\\]+)\\.sty"/g))].map(groups => groups[1].toLowerCase().trim()))';
+  assert.equal(source.split(before).length - 1, 1, 'Pinned package catalog anchor changed');
+  return source.replace(before, after);
+}
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-  const [input, output] = process.argv.slice(2); assert(input && output && input !== output);
-  writeFileSync(output, patchSdk(readFileSync(input, 'utf8')), { flag: 'wx' });
+  const [input, output, kind = 'sdk'] = process.argv.slice(2); assert(input && output && input !== output);
+  assert(['sdk', 'catalog'].includes(kind));
+  writeFileSync(output, (kind === 'catalog' ? patchPackageCatalog : patchSdk)(readFileSync(input, 'utf8')), { flag: 'wx' });
 }

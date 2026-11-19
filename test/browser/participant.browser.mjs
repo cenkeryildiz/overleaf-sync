@@ -32,7 +32,7 @@ try { await withSyntheticAccounts(async users => {
   const hardStop = setTimeout(() => browser.close(), 240000);
   try {
     const context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, serviceWorkers: 'block' });
-    const external = [], nativeCompiles = [], errors = []; let publicBytes = 0;
+    const external = [], nativeCompiles = [], errors = [], packageDownloads = new Set(); let publicBytes = 0;
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
       if (url.origin !== base) { external.push(url.origin); return route.abort(); }
@@ -43,6 +43,7 @@ try { await withSyntheticAccounts(async users => {
     page.on('pageerror', error => errors.push(error.message.slice(0, 200)));
     page.on('response', response => {
       if (new URL(response.url()).pathname.startsWith('/participant/')) publicBytes += Number(response.headers()['content-length'] || 0);
+      if (/\/texlive-[^/]+\.data$/.test(new URL(response.url()).pathname)) packageDownloads.add(new URL(response.url()).pathname.split('/').pop());
     });
     await page.addInitScript(() => { globalThis.participantResults = []; document.addEventListener('overleaf:participant-result', e => participantResults.push(e.detail)); });
     await page.goto(base + '/login'); await page.locator('input[name=email]').fill(users[0].email);
@@ -104,6 +105,10 @@ try { await withSyntheticAccounts(async users => {
     await page.reload(); await editor.waitFor();
     await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, expected);
     assert.equal(nativeCompiles.length, 0);
+    if (process.env.PARTICIPANT_CATALOG_CHECK === '1') {
+      assert(packageDownloads.has('texlive-recommended.data'), 'TikZ uses the recommended segment');
+      assert(!packageDownloads.has('texlive-extra.data'), 'This fixture must not load extra');
+    }
     if (process.env.PARTICIPANT_POOL === '1') {
       const { checkPool } = await import('./participant-pool.mjs');
       await checkPool({ browser, alice: page, users, projectUrl, base });
@@ -112,7 +117,7 @@ try { await withSyntheticAccounts(async users => {
       const { checkEdges } = await import('./participant-edges.mjs'); await checkEdges(page);
     }
     assert.equal(nativeCompiles.length, 0);
-    console.log(JSON.stringify({ passed: true, firstVisibleMs, warmVisibleMs, publicResponseBytes: publicBytes,
+    console.log(JSON.stringify({ passed: true, firstVisibleMs, warmVisibleMs, publicResponseBytes: publicBytes, packageDownloads: [...packageDownloads],
       workerLinearMemoryBytes: memory, exactSourceAfterReload: true, bibliography: true, inverseNavigation: true,
       nativeCompiles: nativeCompiles.length, externalRequestsBlocked: external.length, pageErrors: errors }));
   } finally { clearTimeout(hardStop); await browser.close(); }
