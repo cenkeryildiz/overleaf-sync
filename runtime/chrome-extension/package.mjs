@@ -2,7 +2,7 @@
 // Package public runtime assets only. No application data, environment, account, server configuration or credentials.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, unlinkSync, lstatSync, existsSync, chmodSync } from 'node:fs';
+import { mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, unlinkSync, lstatSync, existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assetName, patchEditorUnicode } from '../browser-recovery/apply.mjs';
@@ -48,6 +48,9 @@ for (const name of ['native-workspace.html', 'project-workspace.html']) {
   const path = join(destination, 'recovery', name);
   writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>'));
 }
+const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+writeFileSync(join(destination, 'SOURCE.txt'), `LaTeX Local corresponding-source references\n\nApplication source and modifications: https://github.com/cenkeryildiz/overleaf-sync/tree/${sourceCommit}\nPackaging and SDK/editor patches: runtime/chrome-extension/package.mjs, runtime/browser-recovery/apply.mjs, runtime/participant-compile/sdk-patch.mjs at that revision.\nAsset extraction image: ${image}\nBase CE+ image and compiler build recipes: runtime/participant-compile/hosting/Dockerfile and fetch-busytex.mjs at that revision.\nCE+ upstream: https://github.com/yu-i-i/overleaf-cep\nOverleaf core revision from asset image metadata: https://github.com/overleaf/overleaf/tree/738bebb743e6ea8f579a1860e1de1fbfc292f505\nBusyTeX SDK 1.4.1: https://github.com/TeXlyre/texlyre-busytex/tree/f3c8780e85939ced63133501d66b6386d89f69e4\nPinned compiler asset checksums and rebuild inputs are in fetch-busytex.mjs. TeX Live package manifests/profiles are in recovery/busytex/.\n\nThird-party terms remain applicable; see THIRD_PARTY_NOTICES.md, recovery/LICENSE, recovery/BUSYTEX-LICENSE.txt, recovery/PDFJS-LICENSE.txt, recovery/CODEMIRROR-LICENSES.txt, extension/ZIPJS-LICENSE.txt and the individual bundled .LICENSE.txt files. The root proprietary notice does not restrict these components.\n`);
+for (const required of ['LICENSE', 'BUSYTEX-LICENSE.txt', 'PDFJS-LICENSE.txt', 'CODEMIRROR-LICENSES.txt']) assert(existsSync(join(destination, 'recovery', required)), 'Required dependency license missing: ' + required);
 let bytes = 0, files = 0;
 function inspect(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

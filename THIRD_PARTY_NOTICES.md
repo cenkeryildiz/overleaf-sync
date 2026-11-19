@@ -2,7 +2,7 @@
 
 The proprietary license applies only to original materials whose rights are held by Cenker YILDIZ. It does not relicense dependencies or upstream server software.
 
-This repository contains documentation, release tooling, and modified CE+ source in `integrations/ce-plus-oidc/`, `runtime/fast-preview/` `runtime/browser-recovery/` and `runtime/synctex-selection/`. Those directories and their modifications are licensed under AGPL-3.0-only with their included license and provenance; the proprietary notice does not apply to them. No compiler or full Overleaf distribution is bundled.
+This repository contains documentation, release tooling, and modified CE+ source in `integrations/ce-plus-oidc/`, `runtime/fast-preview/` `runtime/browser-recovery/` and `runtime/synctex-selection/`. Those directories and their modifications are licensed under AGPL-3.0-only with their included license and provenance; the proprietary notice does not apply to them. This Git repository does not contain compiler binaries or a full Overleaf distribution. The standalone offline artifact separately includes the pinned browser compiler and CE+ UI, their bundled licenses, upstream source references and exact build/patch recipes in SOURCE.txt.
 
 The release pattern was inspected in [data-file-viewer](https://github.com/cenkeryildiz/data-file-viewer/blob/48510a0aa3ef762101d6db53267ca6843cd6dc16/.github/workflows/build.yml). Its application code has not been copied. GitHub Actions used by CI retain their respective upstream licenses.
 

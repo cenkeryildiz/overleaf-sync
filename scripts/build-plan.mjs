@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { validateRepository, sha256 } from './validate.mjs';
 
 const state = validateRepository();
-if (state.releaseStage !== 'planning') throw new Error('Planning builder cannot publish application candidates; implement the required native pipeline first.');
+if (!['planning', 'development'].includes(state.releaseStage)) throw new Error('Source-archive builder cannot publish application candidates; use the standalone offline packager for the actual browser application.');
 const git = args => execFileSync('git', args, { encoding: 'utf8' }).trim();
 if (git(['status', '--porcelain'])) throw new Error('Commit intended inputs before building the exact source artifact.');
 const sourceCommit = git(['rev-parse', 'HEAD']);
