@@ -239,6 +239,15 @@ try {
     editor = page.getByRole('textbox', { name: /^Source Editor/ }); await editor.waitFor();
     assert.equal(await editor.evaluate(node => node.cmView.view.state.doc.toString()), latest);
     await visible('Latest settled input.');
+    stage = 'review-and-restore-recovery-copy';
+    await page.getByRole('button', { name: 'Local only options', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Recovery copies', exact: true }).click();
+    const recovery = page.getByRole('dialog', { name: 'Review offline recovery copy', exact: true });
+    await recovery.waitFor();
+    assert.equal(await recovery.getByRole('textbox', { name: 'Recovered text', exact: true }).inputValue(), heldText);
+    assert.equal(await editor.evaluate(node => node.cmView.view.state.doc.toString()), latest, 'Recovery must require explicit application');
+    await recovery.getByRole('button', { name: 'Save recovered text locally', exact: true }).click();
+    await page.waitForFunction(async expected => (await overleafLocalProjects.read(location.hash.slice(1))).files.find(file => file.path === 'main.tex').content === expected, heldText);
     stage = 'theme-keyboard-and-repeat';
     const colors = [];
     for (const overallTheme of ['light-', '']) {
@@ -269,7 +278,7 @@ try {
       metrics.repeatedHeap.push(await page.evaluate(() => performance.memory?.usedJSHeapSize));
       metrics.repeatedResidentMiB.push(residentMiB());
     }
-    metrics.robustness = { startupFailureRecovered: await page.evaluate(() => fixtureStartupFailed), workerLossRetry: true, quotaRetainsAcceptedDataAndExportsUnsavedText: true, crashReopen: true, nativeLightDarkKeyboard: colors };
+    metrics.robustness = { startupFailureRecovered: await page.evaluate(() => fixtureStartupFailed), workerLossRetry: true, quotaRetainsAcceptedDataAndExportsUnsavedText: true, crashReopen: true, explicitUnicodeRecoveryRestore: true, nativeLightDarkKeyboard: colors };
   }
   assert.equal(await page.evaluate(() => nativeCalls), 0);
   assert.deepEqual(external, []); assert.deepEqual(errors, []);
