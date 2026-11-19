@@ -1,24 +1,24 @@
 {
   "schemaVersion": 3,
-  "releaseStage": "planning",
+  "releaseStage": "development",
   "phases": [
     {
       "id": "R0",
       "name": "Stage 1 offline foundation",
-      "status": "in_progress",
-      "evidence": null
+      "status": "passed",
+      "evidence": "docs/validation/phase-R0/report.json"
     },
     {
       "id": "R1",
       "name": "Stage 1 local project integrity",
-      "status": "not_started",
-      "evidence": null
+      "status": "passed",
+      "evidence": "docs/validation/phase-R1/report.json"
     },
     {
       "id": "R2",
       "name": "Stage 1 offline publication checks",
-      "status": "not_started",
-      "evidence": null
+      "status": "passed",
+      "evidence": "docs/validation/phase-R2/report.json"
     },
     {
       "id": "R3",

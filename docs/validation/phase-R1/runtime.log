@@ -1,0 +1,6 @@
+{"blankVisibleMs":1029.244917,"importedVisibleMs":852.1739170000001,"pdfVisibleMs":832.1186250000001,"exactSourcePdfAndBinary":true,"nativeFileOperations":true,"storageGuards":{"duplicate":true,"cycle":true,"mainDelete":true,"staleSource":true,"staleSettings":true,"atomicRollback":true,"restoreConflict":true,"stalePdf":true},"noHelper":true,"compilerBundled":true,"noCompiler":false}
+
+Actual browser source/test checks; controlled disposable profiles, no native registration, HTTP/WS denied. R2 also includes native fault recovery and source/package readback. Physical keyboard/VoiceOver and other browsers/OS are not qualified.
+
+Archive verification: {"archive": "LaTeX_Local_Phase1_20261120.zip", "bytes": 552116256, "exactReadback": true, "files": 873, "forbiddenPathsAbsent": true, "sha256": "7a63835301c7494f4de6fcb970a88fa385c6425d8e80898ca98c60cb340a48e9", "unpackedBytes": 755300944}
+Source provenance: standalone runtime matches application source 09ede63; test source 97a437e; editing fixture unchanged from independently executed eb3872b input. Full ZIP payload readback and forbidden-path/symlink checks passed. All original/compiler assets match the previously scanned package; only reviewed SOURCE.txt/third-party inventory changed. Source history/exact local key scans passed; public URL templates/compressed upstream docs are identified false positives.

@@ -1,0 +1,52 @@
+{
+  "sourceCommit": "97a437e426a42d86bb9e154197bb902272fdb490",
+  "testedAt": "2026-11-20T00:22:25+01:00",
+  "blockingDefects": 0,
+  "artifact": {
+    "archive": "LaTeX_Local_Phase1_20261120.zip",
+    "sha256": "7a63835301c7494f4de6fcb970a88fa385c6425d8e80898ca98c60cb340a48e9",
+    "bytes": 552116256,
+    "unpackedBytes": 755300944,
+    "files": 873,
+    "exactReadback": true,
+    "forbiddenPathsAbsent": true
+  },
+  "applicationSourceCommit": "09ede636e87cfb197f039f18305956da61d84d2c",
+  "limitations": [
+    "Qualified runtime target is the declared Chrome/macOS arm64 setup.",
+    "Physical keyboard/trackpad, VoiceOver, other browsers and Windows runtime are not tested; CI OS checks do not qualify browser runtimes.",
+    "No hosted service, native helper, real-profile installation or public binary release was performed.",
+    "Short repeated-use observations are not a global memory/performance guarantee."
+  ],
+  "phase": "R0",
+  "result": "passed",
+  "checks": [
+    {
+      "id": "R0-FEASIBILITY",
+      "result": "passed",
+      "skipped": false,
+      "command": "EXTENSION_FAULT_CHECK=1 LATEX_EXTENSION_PATH=/Users/macc/Downloads/LaTeX_Local_Chrome_Extension node test/browser/chrome-extension-compile.browser.mjs",
+      "environment": "macOS 15.8.3 arm64; Google Chrome for Testing 153.0.8010.12; Playwright persistent disposable profile, headless; extension native CE+ editor, pinned image f2f69f3528aacbbd83c77093e1efec31f363e4447c4d2e87b76862b982d83a66; all HTTP/WS denied, no native registration. PLAYWRIGHT_MODULE and EXTENSION_CHROME_PATH use the existing installed tooling recorded in the plan.",
+      "log": "docs/validation/phase-R0/runtime.log",
+      "sha256": "35469b6bce9e8fef2014c8d173e6af6fb9a2092dab0cd9d206f40a5bede2721b"
+    },
+    {
+      "id": "R0-LOCAL",
+      "result": "passed",
+      "skipped": false,
+      "command": "EXTENSION_FAULT_CHECK=1 LATEX_EXTENSION_PATH=/Users/macc/Downloads/LaTeX_Local_Chrome_Extension node test/browser/chrome-extension-compile.browser.mjs",
+      "environment": "macOS 15.8.3 arm64; Google Chrome for Testing 153.0.8010.12; Playwright persistent disposable profile, headless; extension native CE+ editor, pinned image f2f69f3528aacbbd83c77093e1efec31f363e4447c4d2e87b76862b982d83a66; all HTTP/WS denied, no native registration. PLAYWRIGHT_MODULE and EXTENSION_CHROME_PATH use the existing installed tooling recorded in the plan.",
+      "log": "docs/validation/phase-R0/runtime.log",
+      "sha256": "35469b6bce9e8fef2014c8d173e6af6fb9a2092dab0cd9d206f40a5bede2721b"
+    },
+    {
+      "id": "RELEASE-CHECK",
+      "result": "passed",
+      "skipped": false,
+      "command": "node runtime/chrome-extension/package.mjs <fresh-output>; /usr/bin/zip -q -r -1 <archive> LaTeX_Local_Chrome_Extension; Python zipfile readback/SHA256 against every unpacked file; npm ci/typecheck/test/validate/build/test:package; source-history/actual-artifact security review",
+      "environment": "macOS 15.8.3 arm64; Google Chrome for Testing 153.0.8010.12; Playwright persistent disposable profile, headless; extension native CE+ editor, pinned image f2f69f3528aacbbd83c77093e1efec31f363e4447c4d2e87b76862b982d83a66; all HTTP/WS denied, no native registration. PLAYWRIGHT_MODULE and EXTENSION_CHROME_PATH use the existing installed tooling recorded in the plan.",
+      "log": "docs/validation/phase-R0/runtime.log",
+      "sha256": "35469b6bce9e8fef2014c8d173e6af6fb9a2092dab0cd9d206f40a5bede2721b"
+    }
+  ]
+}

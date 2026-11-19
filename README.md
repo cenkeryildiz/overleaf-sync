@@ -32,7 +32,7 @@ This is a mixed-language integration. It preserves the upstream application's ho
 
 ## Implementation status and development
 
-The current first-version direction shares compilation among authorized participants' browsers, while CE+ retains authentication, storage and live collaboration. The [self-hosting candidate](runtime/participant-compile/hosting/README.md) builds from pinned public images/resources and includes the selected editor/recovery/navigation overlays. The [encrypted cold-backup procedure](runtime/participant-compile/BACKUP.md) has passed an isolated source/assets/accounts/invitation restore drill. This is preparation for independent hosting; no public host or application release is active. The work-order checkpoint in the plan supersedes the older server-compilation roadmap below.
+The first version is the standalone offline Chrome application: native CE+ editing, local autocompile/current PDF, files/preferences, exact exports and recoverable failures, with no server/account/helper/system-TeX requirement. R0–R2 are agent-verified for Chrome153/macOS15.8.3 arm64; see the plan and actual phase reports. LAN, optional research/compilation distribution and internet hosting are later stages, not prerequisites of this offline version.
 
 - [Authoritative plan and capability contract](docs/COLLABORATIVE_LATEX_PLAN.md)
 - [Upstream capability inventory and early discovery](docs/COLLABORATIVE_LATEX_PLAN.md#3-capability-baseline-and-discovery)
@@ -57,9 +57,9 @@ Reuse reduces implementation effort, not product scope. No feature is silently r
 | R6 / 0.7 | Shared server compilation, administration and backup/restore |
 | R7 / 0.8 | Required multi-user job distribution, fairness and worker recovery |
 
-Earlier accurately labelled partial releases need their own gates and prerequisites; later required phases remain part of complete-project acceptance. Local only must avoid remote-server contact. A possible loopback helper for local files/compilation is unresolved and must be justified by browser feasibility checks. Rust and JavaScript are used where they fit the integration; reused browser/editor code retains its existing language.
+Earlier accurately labelled partial releases need their own gates and prerequisites; later required phases remain part of complete-project acceptance. Local only must avoid remote-server contact. Stage1 uses the bundled browser compiler and needs no helper. Any later LAN/native-tool helper follows its own explicit permission and confinement gates. Rust and JavaScript are used where they fit the integration; reused browser/editor code retains its existing language.
 
-The existing builder produces **planning assets only**, not a web application or VSIX. No application phase has passed; R0 is in progress. The archived extension-based experiment is historical evidence, not the delivery architecture or browser acceptance. R0 must implement actual web/service packaging, browser smoke checks and rollback. No deployment or release is authorized by this documentation revision.
+The repository builder produces planning/development **source infrastructure assets**, not the installable application. The actual standalone Chrome packager is `runtime/chrome-extension/package.mjs`; its complete offline artifact and browser workflows passed R0–R2. The earlier VS Code experiment remains historical. Phase state is development; no public binary release, deployment or untested-browser/device acceptance is implied.
 
 Repository checks (Node 22; committed tests can be retrieved into a temporary checkout outside Kod):
 
@@ -95,4 +95,4 @@ Live insertion carets use the existing presence path with the qualified scheduli
 
 The stage1 Chrome candidate keeps the native editor, file tree and PDF viewer on this device. Create/import a project and write LaTeX: the bundled compiler updates the real PDF automatically. The native compile menu provides On/Off, Stop and Recompile; Off persists across reloads. Unsupported packages and compile errors retain the source and previous PDF. Download source ZIPs and PDFs before removing the extension or clearing its data. No account, server, separate TeX installation or native registration is required.
 
-This remains a development candidate, not a published release. Packaging uses `node runtime/chrome-extension/package.mjs <fresh-output-directory>` with the immutable local image pinned in that file; it creates only a stopped extraction container. Load the unpacked folder through Chrome's extension developer controls for isolated testing. The compiler resources add substantial disk space; final distribution/licensing, physical-device/accessibility checks and other browsers remain separate gates in the plan.
+This is the agent-verified phase1 development delivery for Chrome153 on macOS15.8.3 arm64, not a published binary release. Packaging uses `node runtime/chrome-extension/package.mjs <fresh-output-directory>` with the immutable local image pinned in that file; it creates only a stopped extraction container. Load the unpacked folder through Chrome's extension developer controls for isolated testing. The compiler resources add substantial disk space; source/build references and bundled licenses are included in SOURCE.txt. Physical-device/accessibility checks and other browsers/OS remain unqualified; see the phase reports for explicit limits.
