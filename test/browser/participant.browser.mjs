@@ -106,8 +106,15 @@ try { await withSyntheticAccounts(async users => {
     });
     console.log(JSON.stringify({ participantCompileTimeline: { navigationStartsAt: Math.round(await page.evaluate(() => performance.timeOrigin) - origin),
       firstVisible: Math.round(firstVisible), warmVisible: Math.round(warmVisible), warmStartsAt: Math.round(warmOrigin - await page.evaluate(() => performance.timeOrigin)), timeline } }));
-    await page.reload(); await editor.waitFor();
+    const reloadStart = performance.now(); await page.reload(); await editor.waitFor();
     await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, expected);
+    // Repeat visit (OPT-02/06): same browser profile, so compiler packages may come from the browser's stores, not the network.
+    await page.waitForFunction(() => globalThis.participantResults?.length >= 1, null, { timeout: 180000 });
+    await page.locator('.textLayer span').filter({ hasText: /^Repeated compilation fixture\./ }).first().waitFor();
+    const reloadVisibleMs = performance.now() - reloadStart;
+    const reloadWorker = page.workers().find(worker => new URL(worker.url()).pathname.endsWith('/busytex_worker.js'));
+    console.log(JSON.stringify({ participantReloadTimeline: { reloadVisible: Math.round(reloadVisibleMs),
+      timeline: await compileTimeline(page, reloadWorker, await page.evaluate(() => performance.timeOrigin)) } }));
     assert.equal(nativeCompiles.length, 0);
     if (process.env.PARTICIPANT_CATALOG_CHECK === '1') {
       assert(packageDownloads.has('texlive-recommended.data'), 'TikZ uses the recommended segment');

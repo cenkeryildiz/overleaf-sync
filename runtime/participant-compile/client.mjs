@@ -2,7 +2,7 @@
 import { BusyTexRunner, PdfLatex, XeLatex, LuaLatex } from './busytex-sdk.mjs?v=1.4.1-cancel1';
 const original = globalThis.overleafParticipantFetch;
 const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1];
-let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0;
+let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0, queueing;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 let pendingWork = false, wakeClaim;
 function notifyWork() { pendingWork = true; wakeClaim?.(); }
@@ -27,11 +27,11 @@ function csrf() {
   const value = document.querySelector('meta[name="ol-csrfToken"]')?.content;
   try { return JSON.parse(value); } catch { return value; }
 }
-async function request(body, binary) {
+async function request(body, binary, keepalive = false) {
   const headers = { 'X-CSRF-Token': csrf(), 'Content-Type': binary ? 'application/octet-stream' : 'application/json' };
   if (binary) headers['X-Participant-Job'] = JSON.stringify(body);
   const response = await original(`/project/${project}/participant-compile`, {
-    method: 'POST', credentials: 'same-origin', headers, body: binary || JSON.stringify(body),
+    method: 'POST', credentials: 'same-origin', headers, body: binary || JSON.stringify(body), keepalive,
   });
   if (!response.ok) throw Error('Participant request refused');
   return response.json();
@@ -53,6 +53,9 @@ async function initialize() {
 async function contribute() {
   try {
     while (!stopped) {
+      // Claim after this page's own queue lands: it supersedes an older job of ours (e.g. one queued just before a reload) that would otherwise be compiled first and refused.
+      // shortcut: bounded 1 s so a page whose editor never appears cannot stall other users' jobs; a slower first queue may still lose this race.
+      if (queueing) await Promise.race([queueing, pause(1000)]);
       const job = await request({ op: 'claim', worker });
       if (stopped) break;
       if (!job.job) { await waitForWork(); continue; }
@@ -99,16 +102,20 @@ ready.catch(() => { stopped = true; show('Device compilation unavailable; reload
 
 export async function compile(signal) {
   const sequence = generation;
-  await ready;
-  if (sequence !== generation) throw Error('Compilation canceled');
+  let settle; const pending = queueing = new Promise(resolve => { settle = resolve; });
   const deadline = Date.now() + 180000;
-  while (!globalThis.overleafParticipantEditor && Date.now() < deadline && !signal?.aborted) await pause(100);
-  const editor = globalThis.overleafParticipantEditor;
-  if (!editor || stopped || signal?.aborted) throw Error('Compilation unavailable');
-  const text = editor.facade.getValue(), docId = String(editor.docId);
-  if (lastJob) await request({ op: 'cancel', job: lastJob }).catch(() => {});
-  performance.mark('participant:queue');
-  const queued = await request({ op: 'queue', docId, text });
+  let editor, text, queued;
+  try {
+    await ready;
+    if (sequence !== generation) throw Error('Compilation canceled');
+    while (!globalThis.overleafParticipantEditor && Date.now() < deadline && !signal?.aborted) await pause(100);
+    editor = globalThis.overleafParticipantEditor;
+    if (!editor || stopped || signal?.aborted) throw Error('Compilation unavailable');
+    text = editor.facade.getValue(); const docId = String(editor.docId);
+    if (lastJob) await request({ op: 'cancel', job: lastJob }).catch(() => {});
+    performance.mark('participant:queue');
+    queued = await request({ op: 'queue', docId, text });
+  } finally { settle(); if (queueing === pending) queueing = undefined; }
   if (sequence !== generation) {
     await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw Error('Compilation canceled');
   }
@@ -140,5 +147,7 @@ export async function cancel() {
 }
 addEventListener('pagehide', () => {
   stopped = true; clearInterval(timer); wakeClaim?.(); runner?.terminate();
-  if (worker) request({ op: 'leave', worker }).catch(() => {});
+  // Nobody will wait for this page's queued job; left queued, the next page load or another device would compile it first.
+  if (lastJob) request({ op: 'cancel', job: lastJob }, undefined, true).catch(() => {});
+  if (worker) request({ op: 'leave', worker }, undefined, true).catch(() => {});
 });

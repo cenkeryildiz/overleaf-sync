@@ -240,3 +240,50 @@ test('queued work interrupts an idle claim timer and pagehide settles the next w
   client.pagehide(); await claimTurn();
   assert(closed); assert.equal(client.timers.size, 0);
 });
+
+test('pagehide cancels only this page\'s queued job with keepalive so no device compiles an abandoned job', async () => {
+  for (const queued of ['job-1', null]) {
+    const listeners = new Map(), calls = [];
+    const context = vm.createContext({ location: { pathname: '/project/' + 'a'.repeat(24) },
+      document: { createElement: () => ({ style: {}, setAttribute() {} }), querySelector: () => null },
+      addEventListener: (name, callback) => listeners.set(name, callback), setTimeout, clearTimeout, clearInterval, performance,
+      overleafParticipantFetch: async (url, init) => { calls.push({ url, body: JSON.parse(init.body), keepalive: init.keepalive }); return { ok: true, json: async () => ({}) }; } });
+    const source = readFileSync(new URL('../runtime/participant-compile/client.mjs', import.meta.url), 'utf8');
+    const subject = new vm.SourceTextModule(source + '\nexport function queue(job) { lastJob = job; }', { context });
+    await subject.link(() => new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+      this.setExport('BusyTexRunner', class { initialize() { return new Promise(() => {}); } terminate() {} });
+      for (const key of ['PdfLatex', 'XeLatex', 'LuaLatex']) this.setExport(key, class {});
+    }, { context }));
+    await subject.evaluate();
+    subject.namespace.queue(queued); listeners.get('pagehide')(); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.map(call => [call.body.op, call.body.job, call.keepalive]), queued ? [['cancel', 'job-1', true]] : []);
+    assert(calls.every(call => call.url === '/project/' + 'a'.repeat(24) + '/participant-compile'));
+  }
+});
+
+test('a page\'s first claim waits for its own in-flight queue so an older job of the same user is superseded first', async () => {
+  const listeners = new Map(), events = [];
+  const reply = value => ({ ok: true, json: async () => value });
+  const context = vm.createContext({ location: { pathname: '/project/' + 'b'.repeat(24) },
+    document: { createElement: () => ({ style: {}, setAttribute() {} }), querySelector: () => null, dispatchEvent() {} }, CustomEvent: class {},
+    Response, addEventListener: (name, callback) => listeners.set(name, callback), setTimeout, clearTimeout, setInterval, clearInterval, performance,
+    overleafParticipantEditor: { facade: { getValue: () => 'text' }, docId: 'd'.repeat(24) },
+    overleafParticipantFetch: async (url, init) => {
+      const { op } = JSON.parse(init.body); events.push(op);
+      if (op === 'join') return reply({ worker: 'w' });
+      if (op === 'queue') { await new Promise(resolve => setTimeout(resolve, 30)); events.push('queued'); return reply({ job: 'j2', digest: 'x' }); }
+      if (op === 'status') return reply({ state: 'complete', result: {} });
+      return reply({ job: null });
+    } });
+  const source = readFileSync(new URL('../runtime/participant-compile/client.mjs', import.meta.url), 'utf8');
+  const subject = new vm.SourceTextModule(source, { context });
+  await subject.link(() => new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+    this.setExport('BusyTexRunner', class { async initialize() {} terminate() {} });
+    for (const key of ['PdfLatex', 'XeLatex', 'LuaLatex']) this.setExport(key, class {});
+  }, { context }));
+  await subject.evaluate();
+  const compiled = subject.namespace.compile(); // the editor asks for its open-time compile while the compiler is still starting
+  await compiled;
+  listeners.get('pagehide')();
+  assert(events.indexOf('claim') > events.indexOf('queued'), JSON.stringify(events));
+});
