@@ -112,7 +112,7 @@ export async function participantCompile(req, res) {
       const next = await ask({ ...body, ...identity });
       const job = jobs.get(next.job);
       if (!job) return res.json({ job: null });
-      return res.json({ ...next, source: job.source });
+      return res.json({ ...next, source: job.source, own: job.user === user });
     }
     if (['heartbeat', 'leave'].includes(body.op)) return res.json(await ask({ ...body, ...identity }));
     const job = jobs.get(body.job);

@@ -2,7 +2,7 @@
 import { BusyTexRunner, PdfLatex, XeLatex, LuaLatex } from './busytex-sdk.mjs?v=1.4.1-cancel1';
 const original = globalThis.overleafParticipantFetch;
 const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1];
-let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0, queueing;
+let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0, queueing, carry;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 // A latched wake: notify() ends the current wait (or the next one) early; otherwise wait() ends after `ms`.
 function latch(ms) {
@@ -78,11 +78,18 @@ async function contribute() {
         if (!root || typeof root.content !== 'string') throw Error('Root source unavailable');
         const Tool = { pdflatex: PdfLatex, xelatex: XeLatex, lualatex: LuaLatex }[job.source.compiler];
         if (!Tool) throw Error('Unsupported compiler');
-        const result = await new Tool(runner).compile({ input: root.content, mainTexPath: job.source.main,
-          additionalFiles: files.filter(f => f !== root), rerun: true, shellEscape: false,
+        // Only this user's own jobs reuse auxiliary files from its previous compile (never another member's); sources win.
+        const key = job.own ? [job.source.main, job.source.compiler].join('\n') : null;
+        const carried = key && carry?.key === key ? carry.files.filter(file => !files.some(source => source.path === file.path)) : [];
+        const run = extra => new Tool(runner).compile({ input: root.content, mainTexPath: job.source.main,
+          additionalFiles: [...files.filter(f => f !== root), ...extra], rerun: true, shellEscape: false,
           // No source-derived public lookup endpoint: only pinned same-origin package catalogs.
           remoteEndpoint: '', shellHandlerScripts: [],
         }).catch(error => { lost = true; throw error; });
+        let result = await run(carried);
+        if (carried.length && !lost && !(result.success && result.pdf && result.synctex)) { carry = undefined; result = await run([]); }
+        const next = key && result.success ? result.logs?.at(-1)?.carry : null;
+        if (key) carry = next ? { key, files: Object.entries(next).map(([path, content]) => ({ path, content })) } : undefined;
         performance.mark('participant:compiled');
         if (lost || stopped || !result.success || !result.pdf || !result.synctex) throw Error('Compilation failed');
         await request({ op: 'finish', worker, job: job.job, lease: job.lease, digest: job.digest, pdfLength: result.pdf.length },

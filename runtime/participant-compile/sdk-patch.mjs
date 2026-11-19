@@ -37,12 +37,26 @@ export function patchPasses(source) {
                 if (name === '.' || name === '..') continue;
                 const path = PATH.join(dir, name), stat = FS.stat(path);
                 if (FS.isDir(stat.mode)) walk(path);
-                else if (!skip.has(path) && !/\\.synctex(?:\\.gz)?(?:\\(busy\\))?$/.test(name))
+                else if (!skip.has(path) && !/\\.(?:log|blg|ilg)$|\\.synctex(?:\\.gz)?(?:\\(busy\\))?$/.test(name))
                     files.set(path, stat.size <= 4194304 ? FS.readFile(path) : stat.size + ':' + (+stat.mtime));
             }
         };
         walk(this.project_dir);
         return files;
+    }
+
+    _carry_files(FS, PATH) {
+        const carry = {}; let size = 0;
+        const walk = dir => {
+            for (const name of FS.readdir(dir)) {
+                if (name === '.' || name === '..') continue;
+                const path = PATH.join(dir, name), stat = FS.stat(path);
+                if (FS.isDir(stat.mode)) walk(path);
+                else if (/\\.(?:aux|bbl|toc|lof|lot|out)$/.test(name)) { size += stat.size; carry[path.slice(this.project_dir.length + 1)] = FS.readFile(path); }
+            }
+        };
+        walk(this.project_dir);
+        return size <= 4194304 ? carry : null;
     }
 
     _reread_unchanged(before, after) {
@@ -75,6 +89,21 @@ export function patchPasses(source) {
                             !this.error_messages_all.some(err => last_log.includes(err)) && this._reread_unchanged(reread_before, this._reread_snapshot(FS, PATH, reread_skip));
                         if (fixed_point) this.print('$ # no rerun needed and nothing TeX reads changed; this pass is final');
                         if (cmd !== final_cmd && !fixed_point) {`);
+  // With .aux/.bbl carried from the caller's previous compile, a first pass that changed nothing TeX reads is final too.
+  once('        ({ exit_code, log: last_log } = run(initial, this.error_messages_fatal));', `        const initial_skip = new Set([pdf_path, log_path].map(path => PATH.join(source_dir, path)));
+        const initial_before = driver === 'pdftex_bibtex8' ? this._reread_snapshot(FS, PATH, initial_skip) : null;
+        const initial_started = Date.now();
+        ({ exit_code, log: last_log } = run(initial, this.error_messages_fatal));
+        const initial_log = last_log;`);
+  once(`        const rerun_enabled = rerun === null ? true : rerun;
+        if (exit_code == 0) {`, `        const rerun_enabled = rerun === null ? true : rerun;
+        const initial_final = initial_before !== null && exit_code == 0 && !this._needs_rerun(initial_log) && FS.analyzePath(pdf_path).exists &&
+            +FS.stat(pdf_path).mtime >= initial_started && !this.error_messages_all.some(err => initial_log.includes(err)) &&
+            this._reread_unchanged(initial_before, this._reread_snapshot(FS, PATH, initial_skip));
+        if (initial_final) this.print('$ # carried auxiliary files were already final; this first pass is final');
+        if (exit_code == 0 && !initial_final) {`);
+  once('        return { pdf: pdf, synctex: synctex, log: logcat, exit_code: exit_code, logs: logs };', `        if (exit_code == 0 && logs.length) logs[logs.length - 1].carry = this._carry_files(FS, PATH);
+        return { pdf: pdf, synctex: synctex, log: logcat, exit_code: exit_code, logs: logs };`);
   return source;
 }
 if (process.argv[1] === new URL(import.meta.url).pathname) {

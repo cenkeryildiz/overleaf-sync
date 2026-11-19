@@ -297,7 +297,12 @@ test('pdflatex pass fixed point compares every file TeX reads back and refuses a
 
                     if (!this._needs_rerun(last_log)) {
                         if (cmd !== final_cmd) {`;
-  const pinned = `class BusytexPipeline {\n    _needs_rerun(log_text) {\n        return false;\n    }\n    loop() {\n        for (;;) {\n${loop}\n        }}}\n    }\n}\nself.BusytexPipeline = BusytexPipeline;`;
+  const first = `        ({ exit_code, log: last_log } = run(initial, this.error_messages_fatal));
+        const rerun_enabled = rerun === null ? true : rerun;
+        if (exit_code == 0) {
+        }
+        return { pdf: pdf, synctex: synctex, log: logcat, exit_code: exit_code, logs: logs };`;
+  const pinned = `class BusytexPipeline {\n    _reread_unchanged(before, after) {}\n    _needs_rerun(log_text) {\n        return false;\n    }\n    loop() {\n        for (;;) {\n${loop}\n        }}}\n    }\n    first() {\n${first}\n    }\n}\nself.BusytexPipeline = BusytexPipeline;`;
   assert.throws(() => patchPasses(pinned.replace('_needs_rerun(log_text) {', '_needs_rerun(text) {')), /anchor changed/);
   const context = vm.createContext({ self: {} }); vm.runInContext(patchPasses(pinned), context);
   const { prototype } = context.self.BusytexPipeline, root = '/home/web_user/project_dir', files = new Map([
@@ -308,10 +313,12 @@ test('pdflatex pass fixed point compares every file TeX reads back and refuses a
   const PATH = { join: (...parts) => parts.join('/').replace(/\/+/g, '/') }, self = { project_dir: root }, skip = new Set([root + '/main.pdf', root + '/main.log']);
   const snapshot = () => prototype._reread_snapshot.call(self, FS, PATH, skip), before = snapshot();
   assert.deepEqual([...before.keys()].sort(), [root + '/main.aux', root + '/main.tex', root + '/sub/c.toc']);
-  files.set(root + '/main.pdf', 'new pdf'); files.set(root + '/main.log', 'new log'); files.set(root + '/main.synctex.gz', 'new');
+  files.set(root + '/main.pdf', 'new pdf'); files.set(root + '/main.log', 'new log'); files.set(root + '/main.synctex.gz', 'new'); files.set(root + '/main.blg', 'bibtex log');
   assert.equal(prototype._reread_unchanged(before, snapshot()), true, 'Outputs TeX does not read back must not force another pass');
   files.set(root + '/sub/c.toc', 'T'); assert.equal(prototype._reread_unchanged(before, snapshot()), false, 'A changed TOC needs the final pass');
   files.set(root + '/sub/c.toc', 't'); files.set(root + '/main.out', 'o'); assert.equal(prototype._reread_unchanged(before, snapshot()), false, 'A new auxiliary file needs the final pass');
+  files.set(root + '/main.bbl', 'b');
+  assert.deepEqual(Object.keys(prototype._carry_files.call(self, FS, PATH)).sort(), ['main.aux', 'main.bbl', 'main.out', 'sub/c.toc'], 'Only auxiliary files are carried, project-relative');
   files.delete(root + '/main.out'); files.delete(root + '/main.aux'); assert.equal(prototype._reread_unchanged(before, snapshot()), false);
 });
 

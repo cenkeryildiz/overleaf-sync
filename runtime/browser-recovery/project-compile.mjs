@@ -6,7 +6,7 @@ export async function fingerprint(project, files) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(source))))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 export class LocalCompiler {
-  runner; ready; progress = () => {};
+  runner; ready; carry; progress = () => {};
   stop() { this.runner?.terminate(); this.runner = this.ready = undefined; }
   // Starts the one shared initialize (the SDK is unsafe to initialize concurrently); a failed start is retried by the next compile.
   warm() {
@@ -32,8 +32,15 @@ export class LocalCompiler {
         if (typeof root?.content !== 'string') throw Error('Main source is missing');
         const Tool = { pdflatex: PdfLatex, xelatex: XeLatex, lualatex: LuaLatex }[project.compiler];
         if (!Tool) throw Error('Unsupported compiler');
-        const result = await new Tool(runner).compile({ input: root.content, mainTexPath: project.main,
-          additionalFiles: files.filter(file => file !== root), rerun: true, shellEscape: false, remoteEndpoint: '', shellHandlerScripts: [] });
+        // Auxiliary files from this project's previous compile let an unchanged structure finish in one pass; sources win.
+        const key = [project.id, project.main, project.compiler].join('\n');
+        const carried = this.carry?.key === key ? this.carry.files.filter(file => !files.some(source => source.path === file.path)) : [];
+        const run = extra => new Tool(runner).compile({ input: root.content, mainTexPath: project.main,
+          additionalFiles: [...files.filter(file => file !== root), ...extra], rerun: true, shellEscape: false, remoteEndpoint: '', shellHandlerScripts: [] });
+        let result = await run(carried);
+        if (carried.length && !(result.success && result.pdf && result.synctex)) { this.carry = undefined; result = await run([]); }
+        const carry = result.success ? result.logs?.at(-1)?.carry : null;
+        this.carry = carry ? { key, files: Object.entries(carry).map(([path, content]) => ({ path, content })) } : undefined;
         performance.mark('compile:result');
         if (!result.success || !result.pdf || !result.synctex) throw Error('Compilation failed. A package, font or source may be unsupported. Your files and previous PDF are retained.');
         return result;
