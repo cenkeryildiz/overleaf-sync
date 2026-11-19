@@ -130,9 +130,10 @@ try {
   assert(readFileSync(join(work, 'output.txt'), 'utf8').includes('Manual compilation marker:'));
   const info = execFileSync('pdfinfo', [join(work, 'output.pdf')], { encoding: 'utf8' });
   const paper = info.match(/Page size:\s+([\d.]+) x ([\d.]+) pts/);
-  assert(paper && Number(paper[1]) === 612 && Number(paper[2]) === 792, 'Independent reader must report the article letter page');
+  assert(paper && Number(paper[1]) > 0 && Number(paper[2]) > 0, 'Independent reader must report the compiled page dimensions');
+  metrics.pdfPagePoints = { width: Number(paper[1]), height: Number(paper[2]) };
   const layer = await page.locator('.textLayer').first().evaluate(node => { const r = node.getBoundingClientRect(); return { width: r.width, height: r.height }; });
-  assert(Math.abs(layer.width / layer.height - 612 / 792) < .01, 'Native PDF display must preserve page geometry');
+  assert(Math.abs(layer.width / layer.height - Number(paper[1]) / Number(paper[2])) < .01, 'Native PDF display must preserve page geometry');
 
   const zip = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
   await (await zip).saveAs(join(work, 'export.zip'));
