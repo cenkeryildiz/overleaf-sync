@@ -1289,3 +1289,9 @@ OPT-07-B delivered — 2026-11-19 05:30 CET: commit 1a81ac45 pushed on work/simu
 - Next: OPT-04/06/09; repeat-visit IDB unpack (~1.7 s) still open — a headless IDB-vs-CacheStorage read probe hung in its setup step and was abandoned without a result. Physical-device/host/off-host gates unchanged.
 
 OPT-02-B delivered — 2026-11-19 05:58 CET: commit 563a0898 pushed on work/simultaneous-recovery-20261115; 6/6 changed blobs equal local; CI 44460103045 SUCCESS (Linux/macOS/Windows + package, release skipped). Scratch logs/PDF summaries/SDK copies removed. Staging 6658eb7f7cce accepted; rollback bf5ca680e9ce retained.
+
+### Current checkpoint — 2026-11-19 06:15 CET (Europe/Madrid) — OPT-07-C own result without status-poll wait verified on staging
+
+- What the user can now do: when this browser compiles its own connected job, the PDF is shown as soon as the result is accepted instead of at the next 250 ms status poll. client.mjs: the claim wake is now a small reusable latch (same 750 ms behaviour and tests); a second latch replaces the 250 ms status pause and is notified after this page's own finish or fail. Jobs compiled by other devices keep the 250 ms poll. No server change.
+- Evidence: VM unit test (own job reaches compile() <100 ms after finish) and existing claim-wake tests pass; npm typecheck/test 148/148/validate PASS. Image ceeab235aaa8 (latex-participant:status-wake) on staging only. Browser timelines finished→complete: previous images 87/154/168/209/226 ms, candidate 11/14/15 ms. Candidate POOL/EDGES/CATALOG PASSED (5 users, worker fault recovery, missing-package refusal + previous PDF, cancel/retry); warmVisible 1346 ms in this run.
+- Rollback: latex-participant:pass-fixed-point 6658eb7f7cce. LAN app, volumes, demo untouched.

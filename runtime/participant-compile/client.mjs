@@ -4,17 +4,24 @@ const original = globalThis.overleafParticipantFetch;
 const project = location.pathname.match(/^\/project\/([a-f0-9]{24})/)?.[1];
 let runner, worker, stopped = false, timer, active, lastJob, ready, generation = 0, queueing;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-let pendingWork = false, wakeClaim;
-function notifyWork() { pendingWork = true; wakeClaim?.(); }
-async function waitForWork() {
-  if (pendingWork) { pendingWork = false; return; }
-  await new Promise(resolve => {
-    const deadline = setTimeout(done, 750);
-    function done() { clearTimeout(deadline); wakeClaim = undefined; resolve(); }
-    wakeClaim = done;
-  });
-  pendingWork = false;
+// A latched wake: notify() ends the current wait (or the next one) early; otherwise wait() ends after `ms`.
+function latch(ms) {
+  let pending = false, wake;
+  return {
+    notify() { pending = true; wake?.(); },
+    async wait() {
+      if (pending) { pending = false; return; }
+      await new Promise(resolve => {
+        const deadline = setTimeout(done, ms);
+        function done() { clearTimeout(deadline); wake = undefined; resolve(); }
+        wake = done;
+      });
+      pending = false;
+    },
+  };
 }
+// Claims poll every 750 ms and status every 250 ms; this page's own queue or result ends the wait at once.
+const work = latch(750), finished = latch(250), notifyWork = work.notify, waitForWork = work.wait;
 const status = document.createElement('span');
 status.setAttribute('role', 'status'); status.style.cssText = 'padding:4px 8px;font:12px system-ui';
 status.textContent = 'Preparing device compilation…';
@@ -81,9 +88,11 @@ async function contribute() {
         await request({ op: 'finish', worker, job: job.job, lease: job.lease, digest: job.digest, pdfLength: result.pdf.length },
           new Blob([result.pdf, result.synctex], { type: 'application/octet-stream' }));
         performance.mark('participant:finished'); show('Device compilation complete');
+        if (job.job === lastJob) finished.notify();
       } catch {
         clearInterval(timer); clearTimeout(deadline);
         if (!lost && !stopped) await request({ op: 'fail', worker, job: job.job, lease: job.lease, digest: job.digest }).catch(() => {});
+        if (job.job === lastJob) finished.notify();
         show(lost ? 'Compilation interrupted; reconnecting device' : 'Compilation failed; source remains saved');
         if (lost && !stopped) {
           runner.terminate();
@@ -132,7 +141,7 @@ export async function compile(signal) {
         return Response.json(result.result);
       }
       if (['failed', 'missing', 'superseded'].includes(result.state)) throw Error('Compilation unavailable');
-      await pause(250);
+      await finished.wait();
     }
     throw Error('Compilation canceled');
   } catch (error) { await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw error; }
@@ -146,7 +155,7 @@ export async function cancel() {
   return Response.json({ stopped: true });
 }
 addEventListener('pagehide', () => {
-  stopped = true; clearInterval(timer); wakeClaim?.(); runner?.terminate();
+  stopped = true; clearInterval(timer); work.notify(); runner?.terminate();
   // Nobody will wait for this page's queued job; left queued, the next page load or another device would compile it first.
   if (lastJob) request({ op: 'cancel', job: lastJob }, undefined, true).catch(() => {});
   if (worker) request({ op: 'leave', worker }, undefined, true).catch(() => {});

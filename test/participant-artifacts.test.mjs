@@ -314,3 +314,33 @@ test('pdflatex pass fixed point compares every file TeX reads back and refuses a
   files.set(root + '/sub/c.toc', 't'); files.set(root + '/main.out', 'o'); assert.equal(prototype._reread_unchanged(before, snapshot()), false, 'A new auxiliary file needs the final pass');
   files.delete(root + '/main.out'); files.delete(root + '/main.aux'); assert.equal(prototype._reread_unchanged(before, snapshot()), false);
 });
+
+test('this page\'s own finished job reaches the editor without waiting for the next status poll', async () => {
+  const listeners = new Map(); let finishedAt, state = 'queued', claimed = false;
+  const reply = value => ({ ok: true, json: async () => value });
+  const context = vm.createContext({ location: { pathname: '/project/' + 'c'.repeat(24) },
+    document: { createElement: () => ({ style: {}, setAttribute() {} }), querySelector: () => null, dispatchEvent() {} }, CustomEvent: class {}, Blob,
+    Response, addEventListener: (name, callback) => listeners.set(name, callback), setTimeout, clearTimeout, setInterval, clearInterval, performance, atob,
+    overleafParticipantEditor: { facade: { getValue: () => 'text' }, docId: 'd'.repeat(24) },
+    overleafParticipantFetch: async (url, init) => {
+      const { op } = JSON.parse(init.headers['X-Participant-Job'] || init.body);
+      if (op === 'join') return reply({ worker: 'w' });
+      if (op === 'queue') return reply({ job: 'j1', digest: 'x' });
+      if (op === 'claim') { if (claimed || state !== 'queued') return reply({ job: null }); claimed = true; state = 'leased';
+        return reply({ job: 'j1', lease: 1, digest: 'x', source: { main: 'main.tex', compiler: 'pdflatex', resources: [{ path: 'main.tex', content: 'x' }] } }); }
+      if (op === 'finish') { await new Promise(resolve => setTimeout(resolve, 40)); state = 'complete'; finishedAt = performance.now(); return reply({ accepted: true }); }
+      if (op === 'status') return reply({ state, result: {} });
+      return reply({});
+    } });
+  const source = readFileSync(new URL('../runtime/participant-compile/client.mjs', import.meta.url), 'utf8');
+  const subject = new vm.SourceTextModule(source, { context });
+  await subject.link(() => new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+    this.setExport('BusyTexRunner', class { async initialize() {} terminate() {} });
+    this.setExport('PdfLatex', class { async compile() { return { success: true, pdf: new Uint8Array([1]), synctex: new Uint8Array([2]) }; } });
+    for (const key of ['XeLatex', 'LuaLatex']) this.setExport(key, class {});
+  }, { context }));
+  await subject.evaluate();
+  await subject.namespace.compile();
+  const delay = performance.now() - finishedAt; listeners.get('pagehide')();
+  assert(delay < 100, `Result reached the editor ${Math.round(delay)} ms after finish`);
+});
