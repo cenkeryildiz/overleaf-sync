@@ -6,19 +6,26 @@ export async function fingerprint(project, files) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(source))))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 export class LocalCompiler {
-  runner;
-  stop() { this.runner?.terminate(); this.runner = undefined; }
-  async compile(project, resources, progress, signal) {
-    if (signal.aborted) throw Error('Compilation canceled. Source files are retained.');
-    performance.mark('compile:start'); // measurement only (OPT-01)
+  runner; ready; progress = () => {};
+  stop() { this.runner?.terminate(); this.runner = this.ready = undefined; }
+  // Starts the one shared initialize (the SDK is unsafe to initialize concurrently); a failed start is retried by the next compile.
+  warm() {
     const runner = this.runner ||= new BusyTexRunner({ busytexBasePath: '/recovery/busytex', engineMode: 'combined', initRetries: 0,
       preloadDataPackages: ['/recovery/busytex/texlive-basic.js'],
       catalogDataPackages: ['/recovery/busytex/texlive-recommended.js', '/recovery/busytex/texlive-extra.js'],
-      onDownloadProgress: p => progress(`Loading local compiler: ${Math.floor(p.percent)}%`) });
+      onDownloadProgress: p => this.progress(`Loading local compiler: ${Math.floor(p.percent)}%`) });
+    const ready = this.ready ||= runner.initialize(true).then(() => performance.mark('compile:initialized'));
+    ready.catch(() => { if (this.ready === ready) this.stop(); });
+    return ready;
+  }
+  async compile(project, resources, progress, signal) {
+    if (signal.aborted) throw Error('Compilation canceled. Source files are retained.');
+    performance.mark('compile:start'); // measurement only (OPT-01)
+    this.progress = progress;
     let deadline, abort;
     try {
       return await Promise.race([(async () => {
-        if (!runner.initialized) { await runner.initialize(true); performance.mark('compile:initialized'); }
+        await this.warm(); const runner = this.runner;
         if (signal.aborted) throw Error('Compilation canceled');
         const files = resources.map(file => ({ path: file.path, content: file.content ?? Uint8Array.from(atob(file.data), c => c.charCodeAt(0)) }));
         const root = files.find(file => file.path === project.main);

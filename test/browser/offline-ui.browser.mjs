@@ -69,6 +69,8 @@ try {
       if ((await page.locator('#local-status').textContent()).startsWith('Native editor')) await page.getByRole('button', { name: /^Recompile/ }).first().click();
       await page.waitForFunction(() => { const n = document.querySelector('#local-status'); return n.dataset.error === 'true' || n.textContent === 'Compiled and saved in this browser.'; }, null, { timeout: 120000 });
       console.log('Compile:', await page.locator('#local-status').textContent());
+      // OPT-02: first native compile marks in ms since the native workspace navigation started.
+      console.log(JSON.stringify({ nativeFirstCompile: theme || 'dark', marks: await page.evaluate(() => Object.fromEntries(performance.getEntriesByType('mark').filter(e => e.name.startsWith('compile:')).map(e => [e.name, Math.round(e.startTime)]))) }));
       await page.locator('.textLayer span').filter({ hasText: 'Native UI fixture.' }).first().waitFor();
       await page.screenshot({ path: join(output, 'compiled-' + label + '.png') });
       await page.getByRole('treeitem', { name: 'main.tex', exact: true }).click();

@@ -280,6 +280,7 @@ try {
   document.querySelector('#local-projects').onclick = () => location.assign('/recovery/project-workspace.html');
   addEventListener('beforeunload', event => { if ([...editors.values()].some(editor => editor.container.doc?.hasBufferedOps())) { event.preventDefault(); event.returnValue = ''; } });
   addEventListener('pagehide', () => compiler.stop());
+  compiler.warm().catch(() => {}); // OPT-02: compiler start overlaps native editor script loading; failures resurface on compile
   for (const href of project.native.styles) {
     const url = new URL(href, location.origin); if (url.origin !== location.origin || !url.pathname.startsWith('/stylesheets/')) throw Error('Invalid native stylesheet');
     const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '/recovery' + url.pathname; document.head.append(link);

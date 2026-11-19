@@ -207,3 +207,26 @@ test('offline updates wait for existing editing windows and retain reusable comp
   assert.equal(claimed, 0, 'Existing pages must keep their own runtime until navigation');
   assert.deepEqual(removed, ['overleaf-local-old'], 'Only obsolete UI cache is recycled; compiler and unrelated storage stay available');
 });
+
+test('offline compiler warm-up shares one initialize with the first compile and retries a failed start', async () => {
+  const runners = []; let failNext = true;
+  const context = vm.createContext({ TextEncoder, Blob, Uint8Array, crypto: webcrypto, atob, performance, setTimeout, clearTimeout });
+  const parser = new vm.SyntheticModule(['parseSyncTex'], function () { this.setExport('parseSyncTex', () => undefined); }, { context });
+  const sdk = new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+    this.setExport('BusyTexRunner', class { constructor() { this.inits = 0; this.terminated = false; runners.push(this); }
+      async initialize() { this.inits++; await new Promise(resolve => setTimeout(resolve, 5)); if (failNext) { failNext = false; throw Error('injected start failure'); } }
+      terminate() { this.terminated = true; } });
+    this.setExport('PdfLatex', class { constructor(runner) { this.runner = runner; } async compile() { return { success: true, pdf: new Uint8Array([1]), synctex: new Uint8Array([2]), runner: this.runner }; } });
+    for (const name of ['XeLatex', 'LuaLatex']) this.setExport(name, class {});
+  }, { context });
+  const module = new vm.SourceTextModule(readFileSync(new URL('../runtime/browser-recovery/project-compile.mjs', import.meta.url), 'utf8'), { context });
+  await module.link(name => name.includes('synctex') ? parser : sdk); await module.evaluate();
+  const compiler = new module.namespace.LocalCompiler(), project = { main: 'main.tex', compiler: 'pdflatex' }, files = [{ path: 'main.tex', content: 'x' }];
+  await assert.rejects(compiler.warm(), /injected start failure/);
+  assert.equal(runners[0].terminated, true); assert.equal(compiler.runner, undefined);
+  const warm = compiler.warm(), result = await compiler.compile(project, files, () => {}, new AbortController().signal); await warm;
+  assert.equal(runners.length, 2); assert.equal(runners[1].inits, 1); assert.equal(result.runner, runners[1]);
+  await compiler.compile(project, files, () => {}, new AbortController().signal); assert.equal(runners[1].inits, 1);
+  compiler.stop(); assert.equal(runners[1].terminated, true);
+  await compiler.compile(project, files, () => {}, new AbortController().signal); assert.equal(runners.length, 3);
+});
