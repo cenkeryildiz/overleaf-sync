@@ -109,13 +109,14 @@ ready = project ? initialize() : Promise.reject(Error('Project unavailable'));
 // The compile request reports initialization failure; keep an early failure from being unhandled.
 ready.catch(() => { stopped = true; show('Device compilation unavailable; reload to retry'); });
 
-export async function compile(signal) {
+export async function compile(signal, automatic = false) {
   const sequence = generation;
   let settle; const pending = queueing = new Promise(resolve => { settle = resolve; });
   const deadline = Date.now() + 180000;
   let editor, text, queued;
   try {
-    await ready;
+    // An automatic compile may be answered with a stored result, which needs no local compiler; ask before waiting for it.
+    if (!automatic) await ready;
     if (sequence !== generation) throw Error('Compilation canceled');
     while (!globalThis.overleafParticipantEditor && Date.now() < deadline && !signal?.aborted) await pause(100);
     editor = globalThis.overleafParticipantEditor;
@@ -123,8 +124,15 @@ export async function compile(signal) {
     text = editor.facade.getValue(); const docId = String(editor.docId);
     if (lastJob) await request({ op: 'cancel', job: lastJob }).catch(() => {});
     performance.mark('participant:queue');
-    queued = await request({ op: 'queue', docId, text });
+    queued = await request({ op: 'queue', docId, text, ...(automatic ? { reuse: true } : {}) });
   } finally { settle(); if (queueing === pending) queueing = undefined; }
+  if (queued.result && sequence === generation) {
+    // The host already holds this exact snapshot's PDF; no device needs to compile it again.
+    lastJob = null; performance.mark('participant:complete');
+    document.dispatchEvent(new CustomEvent('overleaf:participant-result', { detail: { job: null, digest: queued.digest } }));
+    return Response.json(queued.result);
+  }
+  if (automatic) { try { await ready; } catch (error) { await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw error; } }
   if (sequence !== generation) {
     await request({ op: 'cancel', job: queued.job }).catch(() => {}); throw Error('Compilation canceled');
   }

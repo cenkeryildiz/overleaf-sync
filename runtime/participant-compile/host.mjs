@@ -10,6 +10,8 @@ import { prepareSnapshot, prepareResult } from './ParticipantArtifacts.mjs';
 import { checkpoint } from './SessionCheckpoint.mjs';
 
 const jobs = new Map(), pending = new Map(), artifacts = new Map(), preparing = new Set();
+// Latest committed result per project and user: an identical snapshot digest means identical compiler input.
+const latestResults = new Map();
 let child, serial = 0, retainedBytes = 0, stopping = false;
 addOptionalCleanupHandlerBeforeStoppingTraffic('participant coordinator', () => {
   stopping = true;
@@ -89,6 +91,13 @@ export async function participantCompile(req, res) {
     if (body.op === 'queue') {
       if (jobs.size >= 32 || [...jobs.values()].filter(j => j.user === user).length >= 2) return res.sendStatus(429);
       const source = prepareSnapshot(await snapshot(project, user, body));
+      const reuse = latestResults.get(project + ':' + user);
+      // Keep one minute of margin so the editor can still fetch the reused output before cleanup removes it.
+      if (body.reuse === true && reuse?.digest === source.digest && (artifacts.get(reuse.destination) ?? 0) > Date.now() + 60000) {
+        for (const [id, job] of jobs) if (job.project === project && job.user === user) await discard(id);
+        artifacts.set(reuse.destination, Date.now() + 60 * 60 * 1000);
+        return res.json({ job: null, digest: source.digest, result: reuse.result });
+      }
       const bytes = Buffer.byteLength(JSON.stringify(source));
       if (retainedBytes + bytes > 128 * 1024 * 1024) return res.sendStatus(429);
       const job = token();
@@ -139,6 +148,7 @@ export async function participantCompile(req, res) {
         ...(path === 'output.pdf' ? { size: result.pdf.length, ranges: [], createdAt: new Date() } : {}),
       })), compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null };
       artifacts.set(destination, Date.now() + 60 * 60 * 1000);
+      latestResults.set(project + ':' + job.user, { digest: job.source.digest, result: job.result, destination });
       return res.json({ accepted: true });
     } finally { await rm(stage, { recursive: true, force: true }); }
   } catch {

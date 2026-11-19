@@ -344,3 +344,34 @@ test('this page\'s own finished job reaches the editor without waiting for the n
   const delay = performance.now() - finishedAt; listeners.get('pagehide')();
   assert(delay < 100, `Result reached the editor ${Math.round(delay)} ms after finish`);
 });
+
+test('only automatic compiles ask to reuse an identical result, and a reused result returns without polling', async () => {
+  for (const automatic of [true, false]) {
+    const listeners = new Map(), ops = [];
+    const reply = value => ({ ok: true, json: async () => value });
+    const context = vm.createContext({ location: { pathname: '/project/' + 'f'.repeat(24) },
+      document: { createElement: () => ({ style: {}, setAttribute() {} }), querySelector: () => null, dispatchEvent() {} }, CustomEvent: class {},
+      Response, addEventListener: (name, callback) => listeners.set(name, callback), setTimeout, clearTimeout, setInterval, clearInterval, performance,
+      overleafParticipantEditor: { facade: { getValue: () => 'text' }, docId: 'd'.repeat(24) },
+      overleafParticipantFetch: async (url, init) => {
+        const body = JSON.parse(init.body); ops.push(body);
+        if (body.op === 'join') return reply({ worker: 'w' });
+        if (body.op === 'queue') return reply(body.reuse ? { job: null, digest: 'x', result: { status: 'success', reused: true } } : { job: 'j1', digest: 'x' });
+        if (body.op === 'status') return reply({ state: 'complete', result: { status: 'success', reused: false } });
+        return reply({ job: null });
+      } });
+    const source = readFileSync(new URL('../runtime/participant-compile/client.mjs', import.meta.url), 'utf8');
+    const subject = new vm.SourceTextModule(source, { context });
+    await subject.link(() => new vm.SyntheticModule(['BusyTexRunner', 'PdfLatex', 'XeLatex', 'LuaLatex'], function () {
+      // A reused automatic result must not wait for the local compiler, which here never finishes starting.
+      this.setExport('BusyTexRunner', class { initialize() { return automatic ? new Promise(() => {}) : Promise.resolve(); } terminate() {} });
+      for (const key of ['PdfLatex', 'XeLatex', 'LuaLatex']) this.setExport(key, class {});
+    }, { context }));
+    await subject.evaluate();
+    const response = await (await subject.namespace.compile(undefined, automatic)).json(); listeners.get('pagehide')();
+    const queue = ops.find(op => op.op === 'queue');
+    assert.equal(queue.reuse, automatic ? true : undefined);
+    assert.equal(response.reused, automatic);
+    assert.equal(ops.some(op => op.op === 'status'), !automatic, 'A reused result needs no status polling');
+  }
+});

@@ -10,7 +10,8 @@
       return (await client).cancel();
     }
     if (url.origin === location.origin && /^\/project\/[a-f0-9]{24}\/compile$/.test(url.pathname) && init?.method === 'POST') {
-      try { return await (await client).compile(init.signal); }
+      // Only the editor's automatic compiles (on load, on change) may reuse an identical earlier result; Recompile always compiles.
+      try { return await (await client).compile(init.signal, url.searchParams.get('auto_compile') === 'true'); }
       catch { return Response.json({ error: 'Participant compilation unavailable.' }, { status: 503 }); }
     }
     return original(input, init);
