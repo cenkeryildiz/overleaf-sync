@@ -31,7 +31,13 @@ function client({ storage = new Storage(), manager = lockManager(), owner = Symb
   const listeners = new Map(), timers = new Map(), requests = [], events = [];
   const identity = { user }, location = { pathname: path, href: 'https://latex.example' + path };
   let serial = 0;
-  const crypto = digest ? { randomUUID: () => webcrypto.randomUUID(), subtle: { digest } } : webcrypto;
+  const digests = [];
+  const crypto = { randomUUID: () => webcrypto.randomUUID(), subtle: { digest(...args) {
+    const pending = digest ? digest(...args) : webcrypto.subtle.digest(...args);
+    digests.push(pending); return pending;
+  } } };
+  // WebCrypto completion is not guaranteed after any fixed number of setImmediate turns.
+  const hashesReady = async () => { await Promise.all(digests); await tick(); };
   const context = vm.createContext({ crypto, TextEncoder, URL, AbortController: abortController, location, localStorage: storage,
     navigator: locks ? { locks: manager.forOwner(owner) } : {},
     document: {
@@ -55,10 +61,17 @@ function client({ storage = new Storage(), manager = lockManager(), owner = Symb
     name: 'main.tex', base: { version: 0, text: '' }, candidate, updatedAt: Date.now(), ...fields });
   const save = record => { const key = context.overleafRecovery.save(record); api.track(key, record); return key; };
   api.start({ account: user, project });
-  return { api, context, storage, requests, events, identity, location, listeners, timers, make, save, manager, close: () => manager.close(owner) };
+  return { api, context, storage, requests, events, identity, location, listeners, timers, make, save, hashesReady, manager, close: () => manager.close(owner) };
 }
 const markers = storage => [...storage.values.keys()].filter(key => key.startsWith('overleaf.checkpoint.v1.'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+async function waitFor(predicate, description) {
+  const deadline = performance.now() + 5000;
+  while (!predicate()) {
+    assert(performance.now() < deadline, 'Timed out waiting for ' + description);
+    await tick();
+  }
+}
 
 test('exact durable receipt removes only owned unchanged recovery and leaves caches/workspaces alone', async () => {
   const c = client(), own = c.make(), key = c.save(own);
@@ -96,7 +109,7 @@ test('edit or account change during proof cannot delete the newer candidate', as
     let release;
     const c = client({ respond: request => new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ checkpoint: { user: account, project, durable: true, version: 9, documents: request.data.docs.map(d => ({ ...d, version: 12 })) } }) }); }) });
     const original = c.make(), key = c.save(original), running = c.api.flush();
-    while (!release) await tick();
+    await waitFor(() => release, 'controlled digest or response');
     if (kind === 'edit') c.save({ ...original, revision: 2, candidate: 'New unsaved source' });
     else c.identity.user = 'd'.repeat(24);
     release(); await running; assert.notEqual(c.storage.getItem(key), null, kind); c.close();
@@ -138,7 +151,7 @@ test('native/offline documents are retained and never sent for server finalizati
 
 test('idle checkpoints use a 30-second debounce and close uses only prepared keepalive proofs', async () => {
   const c = client(), record = c.make(), key = c.save(record);
-  await tick(); await tick();
+  await c.hashesReady();
   assert([...c.timers.values()].every(timer => timer.delay === 30000));
   c.listeners.get('pagehide')();
   await c.api.flush(); assert.equal(c.requests[0].keepalive, true); assert.equal(c.storage.getItem(key), null);
@@ -149,7 +162,7 @@ test('request is bounded to32 unique hashes and only one proof can be in flight'
   const c = client({ respond: request => new Promise(resolve => { release = () => resolve({ ok: false }); }) });
   for (let n = 0; n < 35; n++) c.save(c.make('Source' + n, { doc: n.toString(16).padStart(24, '0') }));
   const a = c.api.flush(), b = c.api.flush(); assert.equal(a, b);
-  while (!release) await tick();
+  await waitFor(() => release, 'controlled digest or response');
   assert.equal(c.requests.length, 1); assert.equal(c.requests[0].data.docs.length, 32); assert(new TextEncoder().encode(c.requests[0].body).length <= 8192);
   release(); await a; c.close();
 });
@@ -158,7 +171,7 @@ test('close before hashing retains source and marker for a later authenticated r
   let release;
   const storage = new Storage(), manager = lockManager();
   const c = client({ storage, manager, digest: (...args) => new Promise(resolve => { release = () => webcrypto.subtle.digest(...args).then(resolve); }) });
-  const key = c.save(c.make()); while (!release) await tick();
+  const key = c.save(c.make()); await waitFor(() => release, 'controlled digest or response');
   c.listeners.get('pagehide')(); await c.api.flush();
   assert.equal(c.requests.length, 0); assert.notEqual(storage.getItem(key), null); assert.equal(markers(storage).length, 1);
   c.close(); release();
@@ -202,9 +215,9 @@ test('hung normal and keepalive requests abort after15s, retain recovery and per
       return { ok: true, json: async () => ({ checkpoint: { user: account, project, durable: true, version: 9,
         documents: request.data.docs.map(d => ({ ...d, version: 12 })) } }) };
     } });
-    const key = c.save(c.make()); await tick(); await tick();
+    const key = c.save(c.make()); await c.hashesReady();
     const running = c.api.flush({ keepalive });
-    while (!c.requests.length) await tick();
+    await waitFor(() => c.requests.length, 'checkpoint request');
     const timeout = [...c.timers.values()].find(timer => timer.delay === 15000); assert(timeout);
     timeout.callback(); await running;
     assert.equal(c.requests[0].signal.aborted, true); assert.equal(c.requests[0].keepalive, keepalive);
@@ -265,13 +278,13 @@ test('receipt reports server-durable only after every tracked edit is proven; 40
   const refused = client({ respond: async () => ({ ok: false, status: 409 }) }), key = refused.save(refused.make()); await refused.api.flush();
   assert.deepEqual(refused.events, []); assert.notEqual(refused.storage.getItem(key), null);
   const hung = client({ respond: request => new Promise((resolve, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })) });
-  const hungKey = hung.save(hung.make()); await tick(); await tick();
-  const running = hung.api.flush(); while (!hung.requests.length) await tick();
+  const hungKey = hung.save(hung.make()); await hung.hashesReady();
+  const running = hung.api.flush(); await waitFor(() => hung.requests.length, 'hanging checkpoint request');
   [...hung.timers.values()].find(timer => timer.delay === 15000).callback(); await running;
   assert.deepEqual(hung.events, []); assert.notEqual(hung.storage.getItem(hungKey), null);
   let release;
   const racing = client({ respond: request => new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ checkpoint: { user: account, project, durable: true, version: 9, documents: request.data.docs.map(d => ({ ...d, version: 12 })) } }) }); }) });
-  const original = racing.make(); racing.save(original); const flushing = racing.api.flush(); while (!release) await tick();
+  const original = racing.make(); racing.save(original); const flushing = racing.api.flush(); await waitFor(() => release, 'controlled digest or response');
   racing.save({ ...original, revision: 2, candidate: 'Newer unsaved source' }); release(); await flushing;
   assert.deepEqual(racing.events, [], 'a newer edit during proof is not server-durable');
   const partial = client(); partial.save(partial.make());
