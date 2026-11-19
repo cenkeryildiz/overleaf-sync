@@ -1315,3 +1315,4 @@ OPT-07-D delivered — 2026-11-19 06:32 CET: commit d1c9d31f pushed; 7/7 blobs e
 - Rollback: latex-participant:result-reuse 10895a3da8d3. LAN app, volumes, demo untouched.
 
 OPT-07-E delivered — 2026-11-19 07:02 CET: commit 44f2fa22 pushed; 5/5 blobs equal local; CI 44465600214 SUCCESS. Scratch logs/screenshots removed. Staging 3c38d56bfc4e accepted; rollback 10895a3da8d3 retained.
+Image cleanup — 2026-11-19 07:05 CET: removed this session's superseded candidate tags warm-start cfbd1b1b, orphan-cancel bf5ca680, pass-fixed-point 6658eb7f, status-wake ceeab235 (rebuildable from commits 35d72d37/1a81ac45/563a0898/5be80f9e; shared layers, so no measurable disk change). Kept: current 3c38d56bfc4e (local/offline-reuse), rollback 10895a3da8d3 (result-reuse), Codex's keyboard-menu 0cfd8238 and older tags.
