@@ -34,7 +34,7 @@ for (const name of readdirSync(resolve(repository, 'runtime/browser-recovery')))
     cpSync(resolve(repository, 'runtime/browser-recovery', name), join(destination, 'recovery', name));
 }
 const extension = join(destination, 'extension'); mkdirSync(extension);
-for (const name of ['background.js', 'bootstrap.js', 'index.html', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt']) cpSync(join(source, name), join(extension, name));
+for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs']) cpSync(join(source, name), join(extension, name));
 const templatePath = join(extension, 'native-template.json'), template = JSON.parse(readFileSync(templatePath, 'utf8'));
 const languages = template.meta.find(item => item.name === 'ol-languages');
 if (languages) languages.content = JSON.stringify(JSON.parse(languages.content).filter(item => ['en', 'en_US', 'en_GB'].includes(item.code)));

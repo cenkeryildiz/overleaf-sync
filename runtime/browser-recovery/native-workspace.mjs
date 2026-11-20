@@ -2,7 +2,10 @@
 // Local data adapter: the existing CE+ UI and OT document remain the editor.
 import { projectZip } from './project-zip.mjs';
 import { LocalCompiler, fingerprint, navigation, forward, backward } from './project-compile.mjs';
-const api = globalThis.overleafLocalProjects;
+// LAN sharing (standalone only): `lan` is the owner's running room or the participant's session; both offer join/edit/cursor.
+const lanEvents = {}, joined = globalThis.overleafStandalone && location.hash.startsWith('#join=') ? await (await import('/extension/lan-ui.mjs')).joinForm(location.hash.slice(1), lanEvents) : null;
+const api = joined?.api ?? globalThis.overleafLocalProjects;
+let lan = joined?.shared ?? null;
 const report = state => dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } }));
 const status = (text, error = false) => { const node = document.querySelector('#local-status'); node.textContent = text; node.title = text; node.dataset.error = error; };
 {
@@ -12,7 +15,7 @@ const status = (text, error = false) => { const node = document.querySelector('#
   const chip = ui.button({ className: 'olx-chip', iconName: 'cloud_off', label: 'Local only', ariaLabel: 'Local only options' }); chip.dataset.tone = 'local';
   const head = document.createElement('div'); head.className = 'olx-menu-head';
   const dot = document.createElement('span'); dot.className = 'olx-dot'; dot.dataset.state = 'disconnected';
-  const text = document.createElement('div'); text.innerHTML = globalThis.overleafStandalone ? '<strong>Working on this device</strong><small>Source and compiled PDFs stay in this extension. Export a ZIP to transfer your project.</small>' : '<strong>Working in this browser</strong><small>Edits and compiled PDFs are saved on this device. Collaboration, history and sharing need a connection.</small>';
+  const text = document.createElement('div'); text.innerHTML = joined ? '<strong>Shared session</strong><small>This project exists only in this tab and ends when the owner stops sharing.</small>' : globalThis.overleafStandalone ? '<strong>Working on this device</strong><small>Source and compiled PDFs stay in this extension. Export a ZIP to transfer your project.</small>' : '<strong>Working in this browser</strong><small>Edits and compiled PDFs are saved on this device. Collaboration, history and sharing need a connection.</small>';
   head.append(dot, text);
   const { list } = ui.menu(chip, [
     { header: head }, 'divider',
@@ -20,12 +23,13 @@ const status = (text, error = false) => { const node = document.querySelector('#
     { id: 'local-copies', icon: 'history', label: 'Recovery copies', description: 'Compare this file with an earlier recovery copy' },
     ...(globalThis.overleafStandalone ? [{ id: 'local-deleted', icon: 'restore', label: 'Deleted files', description: 'Restore files deleted from this local project' }] : []),
     { id: 'local-export', icon: 'data_object', label: 'Recovery copy (.json)', description: 'Download every file with its saved versions' },
+    ...(joined ? [{ id: 'local-savecopy', icon: 'save', label: 'Save a copy on this device', description: 'Only when the owner allows copies' }] : []),
   ]);
   const wrap = document.createElement('div'); wrap.className = 'olx-menu-wrap'; wrap.append(chip, list);
   const separator = document.createElement('span'); separator.className = 'olx-separator';
   if (globalThis.overleafStandalone) bar.append(ui.button({ id: 'local-open-pdf', label: 'Open PDF', ariaLabel: 'Open an existing PDF', iconName: 'picture_as_pdf' }));
   bar.append(iconButton('local-zip', 'Download project (.zip)', 'folder_zip'), iconButton('local-pdf', 'Download PDF', 'picture_as_pdf'),
-    ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), separator, wrap);
+    ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), ...(globalThis.overleafStandalone && !joined ? [ui.button({ id: 'local-share', label: 'Share', ariaLabel: 'Share on this network', iconName: 'share' })] : []), separator, wrap);
   bar.querySelector('#local-status').after(ui.durability());
   ui.mount(bar, { hideLabels: ['Share', 'History'] });
   if (globalThis.overleafStandalone) document.querySelector('#local-review').hidden = true;
@@ -91,6 +95,7 @@ try {
     if (file.doc) parent.docs.push({ _id: file.doc, name });
     else { const id = crypto.randomUUID().replaceAll('-', '').slice(0, 24); parent.fileRefs.push({ _id: id, name, hash: '' }); assets.set(id, file); }
   }
+  const cursors = new Map(); // session-name -> last caret, for getConnectedUsers
   const events = new Map(), broadcast = (name, ...args) => { for (const listener of [...(events.get(name) || [])]) listener(...args); };
   const socket = { connected: false, connecting: false, sessionid: crypto.randomUUID(), transports: [],
     connect() { this.connected = true; setTimeout(() => {
@@ -108,28 +113,88 @@ try {
       if (name === 'joinDoc') {
         const file = [...files.values()].find(file => file.doc === args[0]);
         if (!file) { callback(Error('Local source is missing')); return; }
-        callback(null, file.content.split('\n').map(line => unescape(encodeURIComponent(line))), file.revision, [], { changes: [], comments: [] }, 'sharejs-text-ot', { canSkipLeaveDoc: false });
+        const reply = (text, version) => callback(null, text.split('\n').map(line => unescape(encodeURIComponent(line))), version, [], { changes: [], comments: [] }, 'sharejs-text-ot', { canSkipLeaveDoc: false });
+        if (lan) Promise.resolve(lan.join(file.path)).then(state => state ? reply(state.text, state.v) : reply(file.content, file.revision), error => callback(error));
+        else reply(file.content, file.revision);
       } else if (name === 'applyOtUpdate') {
         const [doc, update] = args;
         const editor = editors.get(doc), version = editor?.container.doc?.getVersion(), text = textOf(editor);
         pending = pending.then(async () => {
           if (failure) throw failure;
           const file = [...files.values()].find(file => file.doc === doc);
-          if (!editor || !file || update.v !== version || typeof text !== 'string') throw Error('Local source version changed');
-          const next = await api.save(file, text); files.set(next.path, next); nav = undefined;
-          callback(null); broadcast('otUpdateApplied', { doc, v: update.v });
+          if (!editor || !file || (!lan && update.v !== version) || typeof text !== 'string') throw Error('Local source version changed');
+          // Shared: the owner's log orders and transforms the edit; the acknowledgement carries the version it was applied at.
+          const applied = lan ? await lan.edit(file.path, update) : update.v;
+          if (lan) persist(file.path, joined ? textOf(editors.get(doc)) : lan.text(file.path)); // saved after the acknowledgement; shared text is authoritative
+          else { const next = await api.save(file, text); files.set(next.path, next); }
+          nav = undefined; callback(null); broadcast('otUpdateApplied', { doc, v: applied });
           status('Saved in this browser. PDF may be from an earlier compilation.'); report('device');
         }).catch(error => {
-          failure = error; status(error.message + ' Export your work before closing.', true); report('visible');
+          failure = error; if (lan) console.warn('[lan] edit failed:', error.message); status(error.message + ' Export your work before closing.', true); report('visible');
           // Keep the unsaved OT operation pending; an error acknowledgement opens a modal that blocks export.
           socket.disconnect();
         });
       } else if (name === 'leaveDoc') void pending.then(() => callback(failure || null));
-      else if (['clientTracking.setCursor', 'clientTracking.updatePosition', 'clientTracking.getConnectedUsers', 'getConnectedUsers'].includes(name)) callback(null, []);
+      else if (name === 'clientTracking.updatePosition') { const file = [...files.values()].find(file => file.doc === args[0]?.doc_id); if (lan && file && Number.isSafeInteger(args[0].row) && Number.isSafeInteger(args[0].column)) lan.cursor({ path: file.path, row: args[0].row, column: args[0].column }); callback(null, []); }
+      else if (name === 'clientTracking.getConnectedUsers') callback(null, [...cursors.values()].map(c => ({ client_id: c.id, user_id: c.user_id, email: '', first_name: c.name, last_name: '', cursorData: { doc_id: c.doc_id, row: c.row, column: c.column } })));
+      else if (['clientTracking.setCursor', 'getConnectedUsers'].includes(name)) callback(null, []);
       else callback(Error('This action requires a connection. Local files are retained.'));
       return this;
     } };
   globalThis.io = { version: '0.9-local', connect: () => transport };
+  // ---- LAN sharing glue: the native editor's own client transforms; the owner's log (lan-host.mjs) orders every edit.
+  const hue = name => [...new TextEncoder().encode('lan:' + name)].reduce((h, b) => (h * 31 + b) >>> 0, 7).toString(16).padStart(8, '0').repeat(3);
+  const persist = (path, text) => { // keep the local copy equal to the shared text (the owner's copy is the real one; a participant's is memory only)
+    pending = pending.then(async () => {
+      const file = files.get(path); if (!file || failure || file.content === text) return;
+      const next = await api.save(file, text); files.set(next.path, next); nav = undefined;
+    }).catch(error => { failure = error; status(error.message + ' Export your work before closing.', true); report('visible'); socket.disconnect(); });
+  };
+  lanEvents.onRemote = (path, { op, v, by }) => {
+    const doc = files.get(path)?.doc; if (!doc) return;
+    broadcast('otUpdateApplied', { doc, op, v, meta: { source: 'lan:' + by, user_id: hue(by), ts: Date.now() } });
+    if (joined) setTimeout(() => { const text = textOf(editors.get(doc)); if (typeof text === 'string') persist(path, text); }, 0); else persist(path, lan?.text(path));
+  };
+  lanEvents.onCursor = ({ name, path, row, column }) => {
+    const doc = files.get(path)?.doc; if (!doc) return;
+    const entry = { id: 'lan:' + name, user_id: hue(name), name, doc_id: doc, row, column }; cursors.set(name, entry);
+    broadcast('clientTracking.clientUpdated', { ...entry, email: '' });
+  };
+  lanEvents.onPeers = names => {
+    for (const name of [...cursors.keys()]) if (!names.includes(name)) { broadcast('clientTracking.clientDisconnected', 'lan:' + name); cursors.delete(name); }
+    // A known peer makes the editor publish its caret at once; until then it only does so every five minutes.
+    for (const name of names) if (!cursors.has(name)) lanEvents.onCursor({ name, path: project.main, row: 0, column: 0 });
+  };
+  lanEvents.onEnd = reason => {
+    lan = null; socket.disconnect(); status(reason, true);
+    const done = document.createElement('div'); done.setAttribute('role', 'alert'); done.className = 'lan-join';
+    const box = document.createElement('p'); box.textContent = reason + '. Editing is locked. Open the join link again to rejoin; unsent edits in this tab are not merged.';
+    done.append(box); document.body.append(done);
+  };
+  lanEvents.onStopped = () => { lan = null; cursors.clear(); status('Sharing stopped. Your project is unchanged on this device.'); };
+  document.querySelector('#local-share')?.addEventListener('click', async () => {
+    const button = document.querySelector('#local-share');
+    if (lan?.panel) { lan.panel.hidden = !lan.panel.hidden; return; }
+    button.disabled = true;
+    try {
+      await flush();
+      if ([...editors.values()].some(editor => editor.container.doc?.hasBufferedOps())) throw Error('Finish typing, then share again');
+      const source = {
+        tree: () => ({ main: project.main, docs: [...files.values()].filter(file => file.doc).map(file => file.path),
+          files: [...files.values()].map(file => ({ path: file.path, bytes: file.doc ? new TextEncoder().encode(file.content) : Uint8Array.from(atob(file.data), char => char.charCodeAt(0)) })) }),
+        text(path) { // the owner's open editor is the truth for its document; others come from the saved file
+          const file = files.get(path); if (!file?.doc) return null;
+          const doc = editors.get(file.doc)?.container.doc;
+          return doc ? { text: doc.getSnapshot(), version: doc.getVersion() } : { text: file.content, version: file.revision };
+        },
+        persist,
+      };
+      const host = await (await import('/extension/lan-ui.mjs')).shareFlow({ source, events: lanEvents });
+      for (const file of files.values()) if (file.doc && editors.get(file.doc)?.container.doc) host.join(file.path); // freeze open documents' state before any edit
+      lan = host; status('Sharing on this network.');
+    } catch (error) { status(error.message, true); }
+    finally { button.disabled = false; }
+  });
   globalThis.WebSocket = class {
     static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
     constructor() { throw Error('Live connections require Connected mode'); }
@@ -416,7 +481,7 @@ try {
     input.oncancel = () => input.remove(); input.hidden = true; document.body.append(input); input.click();
   };
   async function exportZip() {
-    try { download(await projectZip(resources()), project.project + '.zip', 'application/zip'); }
+    try { if (joined) await joined.shared.exportCopy('export'); download(await projectZip(resources()), project.project + '.zip', 'application/zip'); }
     catch (error) { status(error.message + '. Your source files are retained.', true); }
   }
   document.querySelector('#local-zip').onclick = exportZip;
@@ -430,7 +495,8 @@ try {
       event.preventDefault(); event.stopImmediatePropagation(); void exportZip();
     }
   }, true);
-  document.querySelector('#local-export').onclick = () => {
+  document.querySelector('#local-export').onclick = async () => {
+    try { if (joined) await joined.shared.exportCopy('export'); } catch (error) { status(error.message, true); return; }
     download(JSON.stringify({ schema: 1, project: { ...project, pdf: undefined, synctex: undefined, native: undefined }, files: resources() }), project.project + '.offline.json', 'application/json');
   };
   document.querySelector('#local-copies').onclick = async () => {
@@ -490,6 +556,12 @@ try {
       const record = { schema: 1, account: project.account, project: project.project, doc: file.doc, writer: crypto.randomUUID(), revision: file.revision,
         base: file.base, candidate: active.facade.getValue(), name: file.path, updatedAt: Date.now() };
       const key = globalThis.overleafRecovery.save(record); location.assign('/project/' + project.project + '#recovery=' + encodeURIComponent(key));
+    } catch (error) { status(error.message, true); }
+  };
+  if (joined) document.querySelector('#local-savecopy').onclick = async () => {
+    try {
+      await joined.shared.saveCopy(({ main, resources }) => globalThis.overleafLocalProjects.local(joined.project.native, 'Copy of shared project', resources, main));
+      status('A standalone copy was saved in Saved projects.');
     } catch (error) { status(error.message, true); }
   };
   document.querySelector('#local-projects').onclick = () => location.assign('/recovery/project-workspace.html');

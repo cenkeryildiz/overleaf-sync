@@ -94,6 +94,7 @@
     return entry;
   }
   function extension(State, Transaction, container, name) {
+    if (globalThis.overleafLanGate) return []; // a LAN participant's source stays in session memory: no recovery copy in browser storage
     return State.transactionFilter.of(tr => {
       if (!tr.docChanged || tr.annotation(Transaction.remote)) return tr;
       try {
