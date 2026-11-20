@@ -1,0 +1,17 @@
+[package]
+name = "latex-local-lan"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "LAN room relay for LaTeX Local: forwards browser-encrypted frames; never sees project plaintext"
+
+[dependencies]
+base64 = "=0.22.1"
+serde_json = "=1.0.154"
+sha1 = "=0.10.7"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
