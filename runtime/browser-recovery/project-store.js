@@ -28,6 +28,8 @@
     });
   }
   async function create(payload, account, project, pdf, native, options = {}) {
+    // A LAN session installs this guard: nothing may be persisted without the owner's one-shot, verified copy permit (lan-grants.mjs).
+    if (globalThis.overleafLanGate && !globalThis.overleafLanGate.consume()) throw Error('The project owner has not allowed saving a copy of this project');
     if (!id(account) || !id(project) || payload.user !== account || payload.project !== project) throw Error('Offline preparation identity changed');
     const source = payload.source;
     if (!source || !path(source.main) || !['pdflatex', 'xelatex', 'lualatex'].includes(source.compiler) ||
