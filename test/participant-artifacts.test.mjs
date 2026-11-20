@@ -112,10 +112,10 @@ test('navigation is restricted to exact snapshot files and decompression is boun
 });
 
 test('browser compiler can request only fixed public assets with no private credentials', async () => {
-  const requests = [];
+  const requests = [], logged = [];
   class XHR { open(method, url) { requests.push([method, url]); } }
   const load = path => {
-    const context = { URL, location: new URL('https://fixture.test' + path), XMLHttpRequest: XHR, indexedDB: {}, postMessage() {},
+    const context = { URL, location: new URL('https://fixture.test' + path), XMLHttpRequest: XHR, indexedDB: {}, console: { error: (...args) => logged.push(args) }, postMessage() {},
       performance: { mark() {} }, WebAssembly: { instantiate: async () => {} },
       fetch: (url, options) => { requests.push([url, options]); return Promise.resolve(); }, importScripts: (...urls) => requests.push(urls) };
     context.self = context; vm.createContext(context);
@@ -123,7 +123,12 @@ test('browser compiler can request only fixed public assets with no private cred
     return context;
   };
   // Offline workers read packages from the verified Cache Storage copy; only connected workers keep Emscripten's IDB cache.
-  assert.equal(load('/recovery/busytex/busytex_worker.js').indexedDB, undefined);
+  const offline = load('/recovery/busytex/busytex_worker.js');
+  assert.equal(offline.indexedDB, undefined);
+  // Only the two known Emscripten fallback lines are dropped offline; other errors keep logging.
+  for (const known of [Error('using IndexedDB to cache data can only be done on a web page or in a web worker'), 'falling back to default preload behavior']) offline.console.error(known);
+  offline.console.error(Error('other failure')); offline.console.error('falling back to default preload behavior', 'extra');
+  assert.deepEqual(logged.map(args => String(args[0].message ?? args[0])), ['other failure', 'falling back to default preload behavior']);
   const context = load('/participant/busytex/busytex_worker.js');
   assert.deepEqual(context.indexedDB, {});
   await context.fetch('texlive-basic.data', { credentials: 'include' });

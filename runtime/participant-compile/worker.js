@@ -22,7 +22,12 @@ XMLHttpRequest.prototype.open = function(method, url, ...rest) {
 self.WebSocket = class { constructor() { throw Error('Worker sockets disabled'); } };
 // Offline pages are served these pinned packages from the verified Cache Storage copy; Emscripten's IndexedDB package
 // cache would duplicate ~635 MB there, and writing it dominated the first offline compile (OPT-02). Connected pages keep it.
-if (location.pathname.startsWith('/recovery/busytex/')) Object.defineProperty(self, 'indexedDB', { value: undefined });
+if (location.pathname.startsWith('/recovery/busytex/')) {
+  Object.defineProperty(self, 'indexedDB', { value: undefined });
+  // The generated package loaders console.error exactly these two lines before their normal fetch fallback; Chrome lists them as extension errors.
+  const nativeError = console.error.bind(console), expected = ['using IndexedDB to cache data can only be done on a web page or in a web worker', 'falling back to default preload behavior'];
+  console.error = (...args) => { if (!(args.length === 1 && expected.includes(args[0]?.message ?? args[0]))) nativeError(...args); };
+}
 // Measurement only (OPT-01): stage marks that browser checks read with performance.getEntriesByType('mark').
 const nativePost = self.postMessage.bind(self), compileStreaming = WebAssembly.compileStreaming, instantiate = WebAssembly.instantiate;
 self.postMessage = (data, ...rest) => {

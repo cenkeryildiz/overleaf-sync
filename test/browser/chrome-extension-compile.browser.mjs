@@ -29,6 +29,8 @@ const context = await chromium.launchPersistentContext(join(work, 'profile'), { 
   viewport: { width: 1600, height: 1000 }, acceptDownloads: true, args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension] });
 const faultCheck = process.env.EXTENSION_FAULT_CHECK === '1';
 const external = [], errors = [], missing = [], metrics = {};
+// Chrome lists console.error calls from extension contexts on its Errors page; the offline worker must not emit the known preload fallback lines.
+const consoleErrors = []; context.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 const pageError = error => { if (!faultCheck || error.message !== 'Synthetic quota failure') errors.push(error.message.slice(0, 200)); };
 const deadline = setTimeout(() => context.close(), 240000);
 let stage = 'startup';
@@ -282,6 +284,7 @@ try {
   }
   assert.equal(await page.evaluate(() => nativeCalls), 0);
   assert.deepEqual(external, []); assert.deepEqual(errors, []);
+  assert.deepEqual(consoleErrors.filter(text => /using IndexedDB to cache data|falling back to default preload behavior/.test(text)).map(text => text.slice(0, 120)), []);
   const cdp = await context.newCDPSession(page); await cdp.send('Performance.enable');
   metrics.resources = (await cdp.send('Performance.getMetrics')).metrics.filter(item => ['JSHeapUsedSize', 'JSHeapTotalSize', 'Nodes'].includes(item.name));
   console.log(JSON.stringify({ ...metrics, actualPdf: true, autoCompile: true, storedOff: true, missingPackageRetainsSourceAndPdf: true, retry: true, exactExportAndReload: true, stopRetry: true, importedToGenerated: true, multifileBibliographyAndNavigation: mapping, typingDuringCompile: true, staleOutputRefused: true, noHelper: true, noExternal: true }));
