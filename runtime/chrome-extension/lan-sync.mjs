@@ -7,7 +7,7 @@
 //   {t:'update',k:'op',cid,n,base,ops}   one op at a time; id = cid.n; the owner transforms it against the log after `base`
 //   {t:'update',k:'sync',cid,base}       rejoin: owner replies {t:'sync',entries,done,head} with every log entry after `base`
 //   {t:'snapshot'}                       owner replies {t:'snapshot',v,text}; adopting one is always an explicit step
-//   owner: {t:'ack',id,v,len} | {t:'remote',v,id,by,ops,len} | {t:'refused',reason,id?}
+//   owner: {t:'ack',id,v,len} | {t:'remote',v,id,by,ops,len} | {t:'refused',reason,id?} (a refused sync adds hi: the sender's last applied n)
 // A rejoining participant replays the missed entries exactly like live ones (own entries acknowledge its pending head, others
 // transform its pending ops), then resumes sending, so no owner-side chain transform is needed and a replayed id never applies twice.
 export const LIMITS = Object.freeze({ pendingOps: 200, pendingBytes: 256 * 1024, opBytes: 128 * 1024, logEntries: 5000, logBytes: 4 * 1024 * 1024, pageBytes: 200 * 1024, snapshotBytes: 300 * 1024 });
@@ -77,9 +77,9 @@ export class OwnerSync {
   }
   #sync(peer, name, m) {
     if (!isInt(m.base)) throw Error('Malformed sync');
-    this.#bind(m.cid, name);
-    const since = this.#since(m.base);
-    if (typeof since === 'string') return this.#refuse(peer, since);
+    const client = this.#bind(m.cid, name), since = this.#since(m.base);
+    // hi: this client's last applied op number, so a participant the log no longer covers knows whether its in-flight edit landed
+    if (typeof since === 'string') return this.#send(peer, { t: 'refused', reason: since, hi: client.hi });
     const entries = since.map(e => e.id.startsWith(m.cid + '.') ? { v: e.v, id: e.id, len: e.len } : e); // own ops are already known to the sender
     let page = [], bytes = 0;
     for (const entry of entries) {

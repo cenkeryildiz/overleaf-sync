@@ -62,7 +62,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   };
   const release = (path, f) => { const held = f.hold ?? []; f.hold = null; for (const e of held) entry(path, e); for (const o of f.out) transmit(o); };
   const resumed = () => { if (--syncs > 0) return; syncs = 0; state = 'live'; onResumed(conflicts.splice(0)); };
-  const conflict = path => { const f = files.get(path); Object.assign(f, { syncing: false, stale: true, hold: null }); conflicts.push(path); resumed(); };
+  const conflict = (path, hi) => { const f = files.get(path); Object.assign(f, { syncing: false, stale: true, hold: null, hi: Number.isSafeInteger(hi) ? hi : undefined }); conflicts.push(path); resumed(); };
   function sync(path) {
     const f = files.get(path); f.syncing = true; f.hold ??= []; f.replay = Promise.resolve(); syncs++;
     conn.session.send({ t: 'update', k: 'sync', path, cid, base: f.known }).catch(() => {});
@@ -131,7 +131,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       case 'refused': {
         const o = m.id && byKey.get(`${m.path}\0${m.id}`);
         if (o) finish(o, null, Error(`Refused by the owner (${m.reason})`));
-        else if (!m.id && files.get(m.path)?.syncing) conflict(m.path); // the log no longer covers us
+        else if (!m.id && files.get(m.path)?.syncing) conflict(m.path, m.hi); // the log no longer covers us; hi says which of our edits it applied
         else settle(`${m.path}\0join`, false, Error(`Refused by the owner (${m.reason})`));
         break;
       }
@@ -275,7 +275,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       async adopt(path) {
         const s = await request(path), f = files.get(path) ?? { off: 0, out: [], syncing: false };
         files.set(path, Object.assign(f, { known: s.v, hold: [], overflow: false, stale: false, floor: undefined, expect: undefined }));
-        return s;
+        return { ...s, applied: f.hi !== undefined && f.out[0]?.n <= f.hi }; // applied: the owner's text already holds our in-flight edit
       },
       /** Keep a conflicted file aside (no remote edits) until the participant chooses. */
       park(path) { const f = files.get(path); if (f) Object.assign(f, { hold: null, stale: true }); },
@@ -284,7 +284,10 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
         const f = files.get(path);
         if (!f?.hold || f.overflow) throw Error('The owner changed this file meanwhile; choose again');
         f.off = f.known - v; f.floor = v;
-        const [first, ...rest] = f.out;
+        const out = [...f.out];
+        if (f.hi !== undefined) { counters.set(path, f.hi); if (out[0]?.n <= f.hi) finish(out.shift(), null); } // applied before the loss: reconcile acknowledged it in the editor; the next id follows the owner's
+        f.hi = undefined;
+        const [first, ...rest] = out;
         for (const o of rest) finish(o, null); // shortcut: the native client has one edit in flight; extra ones would be dropped here
         if (first && op) { name_(first, (counters.get(path) ?? 0) + 1); counters.set(path, first.n); Object.assign(first, { base: f.known, ops: op }); }
         else if (first) finish(first, null);
@@ -327,17 +330,19 @@ export function treeChanges(before, after) {
 /**
  * Explicit reconciliation of one open document after an unsafe rejoin (a new room, or a log that no longer reaches back).
  * doc is the editor's ShareJS document (getSnapshot/getVersion/getInflightOp/getPendingOp/clearInflightAndPendingOps);
- * deliver(op, v) hands it an owner op. The owner's text is never replaced: its changes since our base reach the editor as one
+ * deliver(op, v) hands it an owner op; deliver(null, v) acknowledges its in-flight op (the owner had applied it). The owner's text is never replaced: its changes since our base reach the editor as one
  * op that the editor's own OT applies under the unsent edits ('keep'), or the unsent edits are dropped ('discard').
  * 'auto' succeeds only when nothing can be lost (the owner's text is unchanged, or there is nothing unsent); otherwise false.
  */
 export async function reconcile(ctl, path, doc, deliver, choice = 'auto') {
-  const mine = doc.getSnapshot(), base = [doc.getPendingOp(), doc.getInflightOp()].reduce((text, op) => op?.length ? apply(text, invert(op)) : text, mine);
-  const host = await ctl.adopt(path);
+  const mine = doc.getSnapshot(), pendingOp = doc.getPendingOp(), inflight = doc.getInflightOp(), host = await ctl.adopt(path);
+  // An in-flight edit the owner applied (its acknowledgement was lost) is in host.text already: it is not unsent, and resending it would apply it twice.
+  const base = [pendingOp, host.applied ? null : inflight].reduce((text, op) => op?.length ? apply(text, invert(op)) : text, mine);
   if (choice === 'auto' && mine !== base && host.text !== base) { ctl.park(path); return false; }
-  if (choice === 'discard') doc.clearInflightAndPendingOps();
-  const op = diff(choice === 'discard' ? mine : base, host.text);
   let v = doc.getVersion();
+  if (choice === 'discard') doc.clearInflightAndPendingOps();
+  else if (host.applied && inflight) { deliver(null, v); v++; } // acknowledge it in the editor; its pending edit becomes the in-flight one
+  const op = diff(choice === 'discard' ? mine : base, host.text);
   if (op.length) { deliver(op, v); v++; }
   ctl.rebase(path, { v, op: choice === 'discard' ? null : doc.getInflightOp() ?? null });
   return true;

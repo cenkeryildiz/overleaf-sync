@@ -44,6 +44,7 @@ class Editor {
   submit(op) { this.text = apply(this.text, op); this.pending.push(op); this.#pump(); }
   remote(op, v) {
     assert.equal(v, this.version, 'remote update out of order');
+    if (op === null) { this.inflight = null; this.version++; this.acks++; this.#pump(); return; } // an acknowledgement (reconcile: the owner had applied it)
     if (this.inflight) [this.inflight, op] = transformX(this.inflight, op);
     this.pending = this.pending.map(p => { let q; [q, op] = transformX(p, op); return q; });
     this.text = apply(this.text, op); this.version++;
@@ -219,6 +220,50 @@ test('S2-05 rejoin into a new room: unsafe files wait for an explicit choice; ke
   assert.equal(b.text, 'ALPHA'); assert.equal(host2.text('sec/a.tex'), 'ALPHA');
   b.submit([{ p: 5, i: '!' }]); await until(() => b.idle && host2.text('sec/a.tex') === 'ALPHA!'); // versions line up after the choice
   await host2.stop();
+});
+
+test('S2-05 a resumed participant keeps the owner grant (owner-signed copies still work); a downgrade made while it was away applies on resume', async () => {
+  const { r, host, join } = await room();
+  const ada = await join('Ada', undefined, undefined, { retries: [] }), a = await ada.open('main.tex');
+  await host.setGrant(host.participants()[0].peer, 'copy'); await until(() => ada.grant === 'copy');
+  live(r).cut(); await until(() => ada.state === 'lost');
+  await ada.rejoin(); assert.equal(ada.grant, 'copy'); assert.equal(host.participants()[0].grant, 'copy');
+  assert.ok(await ada.exportCopy('export'), 'a ticket signed by the owner still releases a copy after resume');
+  const stale = host.participants()[0].peer; live(r).deliverClose(); await until(() => ada.state === 'lost'); // only Ada notices the loss
+  await host.setGrant(stale, 'online'); // the owner downgrades the connection it still sees
+  await ada.rejoin(); assert.equal(ada.grant, 'online'); assert.equal(ada.gate.locked, true);
+  await assert.rejects(ada.exportCopy('export'), { code: 'denied' });
+  assert.equal(ada.session.can('edit'), true); a.submit([{ p: 0, i: 'EDIT:' }]); await until(() => a.idle && host.text('main.tex').startsWith('EDIT:')); // "online" still edits
+  await host.stop();
+});
+
+/** Owner edits that push the participant's base out of the owner log (LIMITS.logBytes), leaving the text unchanged. */
+const churn = async (host, path) => {
+  const big = 'x'.repeat(100_000); let { v } = host.join(path);
+  for (let i = 0; i < 24; i++) { v = await host.edit(path, { op: [{ p: 0, i: big }], v }) + 1; v = await host.edit(path, { op: [{ p: 0, d: big }], v }) + 1; }
+  return v;
+};
+test('S2-05 log truncation: an edit the owner applied but never acknowledged is not duplicated by keep or auto; the unsent one is kept once', async () => {
+  const { r, host, join } = await room(); const resumed = [];
+  const ada = await join('Ada', undefined, undefined, { retries: [], onResumed: c => resumed.push(c) });
+  const a = await ada.open('main.tex'), b = await ada.open('sec/a.tex');
+  live(r).mute = true; a.submit([{ p: 0, i: 'A1:' }]); b.submit([{ p: 0, i: 'B1:' }]); // applied by the owner, acknowledgements lost
+  await until(() => host.text('main.tex').startsWith('A1:') && host.text('sec/a.tex').startsWith('B1:')); live(r).cut();
+  await until(() => ada.state === 'lost');
+  a.submit([{ p: 0, i: 'A2:' }]); // unsent, waits behind the applied one
+  for (const path of ['main.tex', 'sec/a.tex']) { const v = await churn(host, path); await host.edit(path, { op: [{ p: host.text(path).length, i: '|OWNER' }], v }); }
+  await ada.rejoin(); await until(() => resumed.length); assert.deepEqual(resumed, [['main.tex', 'sec/a.tex']], 'the log no longer covers either file');
+  const deliver = editor => (op, v) => editor.remote(op, v);
+  assert.equal(await reconcile(ada, 'sec/a.tex', b, deliver(b)), true, 'auto: the only in-flight edit was already applied, nothing is unsent');
+  assert.equal(await reconcile(ada, 'main.tex', a, deliver(a)), false, 'auto still asks when an unsent edit and owner changes meet');
+  assert.equal(await reconcile(ada, 'main.tex', a, deliver(a), 'keep'), true);
+  await until(() => a.idle && b.idle && host.text('main.tex').includes('A2:'));
+  assert.equal(a.text, host.text('main.tex')); assert.equal(b.text, host.text('sec/a.tex'));
+  assert.equal(count(a.text, 'A1:'), 1); assert.equal(count(a.text, 'A2:'), 1); assert.equal(count(a.text, '|OWNER'), 1);
+  assert.equal(b.text, 'B1:alpha|OWNER');
+  a.submit([{ p: a.text.length, i: '!' }]); b.submit([{ p: 0, i: '>' }]); // ids and versions line up after the choice: the owner accepts the next edits
+  await until(() => a.idle && b.idle && host.text('main.tex').endsWith('!') && host.text('sec/a.tex') === '>B1:alpha|OWNER');
+  assert.equal(ada.state, 'live'); await host.stop();
 });
 
 // ---- S2-03: exact project transfer and file-tree changes during a session ------------------------------------------------------

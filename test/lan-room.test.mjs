@@ -189,3 +189,18 @@ test('removing a participant rotates the passcode: others still resume with the 
   assert.deepEqual(room.participants.map(p => p.name).sort(), ['Ada', 'Eve']);
   const wrong = connect({ passcode: newRoomSecrets().passcode, username: 'Mallory', resume: next.resume }); await assert.rejects(wrong.session.joined); // never-valid code fails even with a token
 });
+
+test('S2-05 resume keeps the owner\'s per-participant grant; a downgrade made while the participant was away applies on resume', async () => {
+  const { room, connect } = harness();
+  const ada = connect(); let { resume } = await ada.session.joined; await settle();
+  await room.setGrant(ada.peer, 'copy'); await settle();
+  const back = connect({ resume }), welcome = await back.session.joined; await settle();         // same participant, new connection
+  assert.equal(welcome.grant, 'copy'); assert.equal(room.authorize(back.peer, 'copy'), true); assert.equal(back.session.can('copy'), true);
+  ({ resume } = welcome);
+  await room.setGrant(back.peer, 'online'); await settle();                                       // the owner downgrades while the link is already dead on Ada's side
+  const later = connect({ resume }), downgraded = await later.session.joined; await settle();
+  assert.equal(downgraded.grant, 'online'); assert.equal(room.authorize(later.peer, 'copy'), false); assert.equal(room.authorize(later.peer, 'edit'), true);
+  const eve = connect({ username: 'Eve' }); assert.equal((await eve.session.joined).grant, 'online'); // a new participant still starts with the default
+  await room.revoke(later.peer); await settle();
+  await assert.rejects(connect({ resume: downgraded.resume }).session.joined, error => error.code === 'resume'); // revoked while away: no resume
+});
