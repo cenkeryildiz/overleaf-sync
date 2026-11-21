@@ -150,3 +150,11 @@ test('the module uses no storage, cache, network or logging API', () => {
   const code = readFileSync(new URL('../runtime/chrome-extension/lan-grants.mjs', import.meta.url), 'utf8').split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
   assert.doesNotMatch(code, /\b(indexedDB|localStorage|sessionStorage|caches|cookieStore|console|fetch|XMLHttpRequest|WebSocket|BroadcastChannel|postMessage|eval)\b|new Function/);
 });
+
+test('copyResources keeps a multi-megabyte binary exact (no call-stack overflow) and text as text', () => {
+  const big = new Uint8Array(3_000_000).map((_, i) => (i * 7919) & 0xff);
+  const { main, resources } = copyResources({ main: 'main.tex', files: [{ path: 'main.tex', bytes: new TextEncoder().encode('Türkçe 😀') }, { path: 'fig.bin', bytes: big }] });
+  assert.equal(main, 'main.tex');
+  assert.deepEqual(resources[0], { path: 'main.tex', content: 'Türkçe 😀' });
+  assert.deepEqual(Buffer.from(resources[1].data, 'base64'), Buffer.from(big));
+});

@@ -10,6 +10,7 @@
 // ticket, so a ticket works once, a replay or an older ticket fails, and a downgrade locks the gate until a new copy grant.
 // Honest limit: these are application permissions. The owner's room check (OwnerRoom.authorize) is the authority; the gate and the
 // storage guard stop this client's own save/export paths, not a participant who copies visible source by hand or patches the client.
+import { encode } from './lan-transfer.mjs';
 const subtle = globalThis.crypto.subtle, encoder = new TextEncoder();
 export const KINDS = Object.freeze(['copy', 'export', 'download', 'persist']);
 export const LIMITS = Object.freeze({ request: 512, window: 120_000, ttl: 120_000, skew: 60_000, permit: 30_000, seen: 256, wait: 10_000 });
@@ -120,7 +121,7 @@ export class GrantGate {
 /** Project files for IndexedDB creation: text sources as `content`, everything else as base64 `data`. */
 export function copyResources(copy) {
   const text = new TextDecoder('utf-8', { fatal: true });
-  const resources = copy.files.map(({ path, bytes }) => { try { return { path, content: text.decode(bytes) }; } catch { return { path, data: btoa(String.fromCharCode(...bytes)) }; } });
+  const resources = copy.files.map(({ path, bytes }) => { try { return { path, content: text.decode(bytes) }; } catch { return { path, data: encode(bytes) }; } }); // chunked: spreading a whole binary overflows the call stack
   return { main: copy.main, resources };
 }
 /**
