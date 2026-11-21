@@ -19,7 +19,7 @@ cpSync(base, extension, { recursive: true });
 for (const name of readdirSync(join(repository, 'runtime/browser-recovery'))) if (/\.(?:js|mjs|html|css)$/.test(name) && !['apply.mjs', 'provision-offline.mjs', 'recovery-sw.template.js'].includes(name)) cpSync(join(repository, 'runtime/browser-recovery', name), join(extension, 'recovery', name));
 for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^(lan-.*\.mjs|join\.js|index\.html)$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
 for (const name of ['native-workspace.html', 'project-workspace.html']) { const path = join(extension, 'recovery', name); writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>')); }
-import { assetName, patchEditorUnicode } from '../../runtime/browser-recovery/apply.mjs';
+import { assetName, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../../runtime/browser-recovery/apply.mjs';
 const editorPath = join(extension, 'js', assetName); { // as package.mjs does; the base asset embeds an older recovery-core.js, so carry this repository's LAN guard into it as provisioning would
   const raw = readFileSync(editorPath, 'utf8'), patched = String.raw`/[\0\uD800-\uDFFF]/gu`;
   let editor = raw.includes(patched) ? raw : patchEditorUnicode(raw); // a packaged base (with the compiler) is already patched
@@ -29,6 +29,7 @@ const editorPath = join(extension, 'js', assetName); { // as package.mjs does; t
   writeFileSync(editorPath, editor.replace(header, 'function extension(State, Transaction, container, name) {\n    if (globalThis.overleafLanGate) return [];\n    return State.transactionFilter.of('));
 }
 cpSync(join(repository, 'runtime/participant-compile/worker.js'), join(extension, 'recovery/busytex/busytex_worker.js')); // as package.mjs does
+for (const name of Object.keys(pathnameAssets)) { const path = join(extension, 'js', name), raw = readFileSync(path, 'utf8'); if (!raw.includes(pathnameAssets[name][1])) writeFileSync(path, patchPathnameUnicode(name, raw)); } // as package.mjs does; emoji path names
 const manifest = JSON.parse(readFileSync(join(repository, 'runtime/chrome-extension/manifest.json'), 'utf8'));
 writeFileSync(join(extension, 'manifest.json'), JSON.stringify(manifest));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
@@ -86,7 +87,6 @@ try {
   await editorOf(owner).waitFor({ timeout: 60000 });
   const projectUrl = owner.url();
   assert((await docOf(owner)).includes('Hello world.'));
-  // Paths stay in the BMP: the native editor's history model refuses surrogates in path names (BadPathnameError); content carries supplementary characters.
   // ---- S2-03 fixture: nested Unicode folders, a CRLF/supplementary text file, a multi-chunk binary and a PDF (all synthetic)
   const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1'), noise(420_000, 9), Buffer.from('\n%%EOF\n')]);
   const fixture = { 'figures/Ünï ğ/plot.bin': noise(900_000, 3), 'out/paper.pdf': pdf, 'notes Ω.tex': Buffer.from('Bölüm 𝔛 😀\r\nikinci satır\r\n') };
@@ -174,6 +174,19 @@ try {
   assert.match(await call(guest, `/doc/${await entityId(guest, 'main.tex')}/rename`, 'POST', { name: '../escape.tex' }), /^409/);   // refused by the owner
   assert.match(await call(guest, `/doc/${await entityId(guest, 'notları Ω.tex')}/rename`, 'POST', { name: 'MAIN.TEX' }), /^409 .*already exists/);
   await same('refusals change nothing');
+  // ---- S2-03 emoji (supplementary-plane) path names through the patched native pathname checks, both directions (unrun as of 2026-11-21)
+  const pic = noise(5_000, 44);
+  assert.match(await upload(guest, 'pic 😀.png', pic), /^200 /); now = await same('emoji upload reaches the owner'); assert.equal(now['pic 😀.png'], sha(pic));
+  await until(() => inTree(owner, 'pic 😀.png'), 'owner tree shows the emoji file');
+  assert.match(await call(owner, `/file/${await entityId(owner, 'pic 😀.png')}/rename`, 'POST', { name: 'pic 🚀.png' }), /^204/);
+  now = await same('owner emoji rename reaches the participant'); assert.equal(now['pic 🚀.png'], sha(pic)); await until(() => inTree(guest, 'pic 🚀.png'), 'participant tree shows the emoji rename');
+  await owner.getByRole('button', { name: 'New folder' }).click(); await owner.getByRole('dialog').getByRole('textbox').fill('figs 🎉');
+  await owner.getByRole('dialog').getByRole('button', { name: 'Create' }).click(); await until(() => inTree(guest, 'figs 🎉'), 'emoji folder reaches the participant tree');
+  assert.match(await call(guest, `/file/${await entityId(guest, 'pic 🚀.png')}/move`, 'POST', { folder_id: await entityId(guest, 'figs 🎉') }), /^204/);
+  now = await same('participant moves the emoji file'); assert.equal(now['figs 🎉/pic 🚀.png'], sha(pic));
+  assert.match(await call(guest, `/folder/${await entityId(guest, 'figs 🎉')}`, 'DELETE'), /^204/);
+  now = await same('participant deletes the emoji folder'); assert.equal(now['figs 🎉/pic 🚀.png'], undefined); await until(async () => !(await inTree(owner, 'figs 🎉')), 'owner tree removed the emoji folder');
+  note('S2-03 emoji path names: upload, rename, folder, move and delete reach both sides exactly');
   note('S2-03 live tree: participant upload/move/set-main/delete and owner folder/rename/set-main reach both sides exactly; escape and case duplicate refused', `upload ${png.length} bytes -> owner tree ${uploadMs.toFixed(0)} ms`);
   // ---- the owner's saved project already holds the merged text (reload from IndexedDB)
   await owner.waitForTimeout(500); const ownerText = await docOf(owner);
