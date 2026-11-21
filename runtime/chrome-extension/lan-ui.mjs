@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Share panel (owner) and join form (participant) for the native workspace. Text only: names and messages are set with
 // textContent, never as HTML; the passcode exists only in this panel and is never written to a URL, storage or log.
-import { nativeHelper, startHost } from './lan-host.mjs';
+import { helperSocket, nativeHelper, startHost } from './lan-host.mjs';
 import { joinSession, memoryProjects } from './lan-guest.mjs';
 
 const GRANT_LABELS = [['online', 'Edit while host is online'], ['copy', 'Keep a copy and continue elsewhere']];
@@ -66,7 +66,7 @@ export function joinForm(hash, events) {
       try {
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
           onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
-          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c) });
+          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), WebSocketImpl: helperSocket() }); // the helper connects: Chrome blocks extension pages
         const template = await (await fetch('/extension/native-template.json')).json();
         const { api, project, docIds } = await memoryProjects(shared, template);
         screen.remove(); resolve({ api, shared, project, docIds });

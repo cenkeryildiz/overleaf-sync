@@ -148,7 +148,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     const transfer = new Promise((resolve, reject) => { c.project = { resolve, reject }; }); transfer.catch(() => {});
     const socket = new WebSocketImpl(t.url); socket.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => { // a dropped SYN (firewall, isolated Wi-Fi) never fires onerror: bound the wait
-      const unreachable = () => { clearTimeout(clock); socket.close(); reject(Error('Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
+      const unreachable = error => { clearTimeout(clock); socket.close(); reject(Error(error?.message?.includes('helper') ? error.message : 'Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
       const clock = setTimeout(unreachable, TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;
     });
     Object.assign(c, connectStore({

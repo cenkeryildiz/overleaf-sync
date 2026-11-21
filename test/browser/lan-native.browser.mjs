@@ -72,7 +72,7 @@ const entityId = (page, name) => page.evaluate(name => document.querySelector(`l
 const inTree = (page, name) => page.locator(`li[role=treeitem][aria-label="${name}"]`).count();
 let ownerContext, guestContext; const errors = [];
 try {
-  ownerContext = await profile('owner', { registerHelper: true }); guestContext = await profile('guest');
+  ownerContext = await profile('owner', { registerHelper: true }); guestContext = await profile('guest', { registerHelper: true });
   const guestLogs = []; // every console line of the participant profile, pages and workers (the compiler runs in a worker)
   guestContext.on('console', m => guestLogs.push(m.text())); if (process.env.LAN_DEBUG) guestContext.on('requestfailed', r => guestLogs.push('failed ' + r.url().slice(0, 160))); if (process.env.LAN_DEBUG) guestContext.on('response', r => { if (r.status() >= 400) guestLogs.push(r.status() + ' ' + r.url().slice(0, 160)); }); guestContext.on('page', p => p.on('worker', w => w.on('console', m => guestLogs.push(m.text()))));
   const owner = await ownerContext.newPage(); owner.on('pageerror', error => errors.push('owner: ' + error.message.slice(0, 200)));

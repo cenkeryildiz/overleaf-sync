@@ -2,10 +2,12 @@
 //! LAN room relay. The owner's extension drives it over native messaging; participants connect over
 //! WebSocket. It binds one private or loopback IPv4 address, forwards opaque frames that the browsers
 //! encrypt and authenticate (runtime/chrome-extension/lan-room.mjs), and never sees project plaintext.
+//! A participant's extension can also drive it (op "connect"): it opens that WebSocket itself, because Chrome's
+//! local-network rules block extension pages from connecting to another computer on the LAN.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::{collections::{HashMap, VecDeque}, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, Shutdown, TcpListener, TcpStream, UdpSocket},
+use std::{collections::{HashMap, VecDeque}, fs::File, io::{self, Read, Write}, net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket},
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 
 const ORIGIN: &str = "chrome-extension://oekjjadnainlmdbgbdjokegaikafafke/";
@@ -90,18 +92,20 @@ pub fn parse_upgrade(request: &[u8], room: &str) -> Option<String> {
 pub enum Frame { Binary(Vec<u8>), Ping(Vec<u8>), Pong, Close }
 /// Reads one masked client message: a whole binary frame, or binary + continuation fragments (Chrome splits large messages),
 /// bounded by MAX_FRAME in total; or one control frame. Anything else is a protocol violation.
-pub fn read_frame(reader: &mut impl Read) -> Result<Frame, ()> {
+pub fn read_frame(reader: &mut impl Read) -> Result<Frame, ()> { read_frame_masked(reader, true) }
+/// As read_frame; `masked` is false when reading the owner's (server) frames as a participant.
+pub fn read_frame_masked(reader: &mut impl Read, masked_expected: bool) -> Result<Frame, ()> {
     let mut message: Option<Vec<u8>> = None;
     loop {
         let mut head = [0u8; 2]; reader.read_exact(&mut head).map_err(|_| ())?;
         let (fin, reserved, op, masked) = (head[0] & 0x80 != 0, head[0] & 0x70, head[0] & 0x0f, head[1] & 0x80 != 0);
-        if reserved != 0 || !masked || (op >= 8 && !fin) { return Err(()); }
+        if reserved != 0 || masked != masked_expected || (op >= 8 && !fin) { return Err(()); }
         let mut length = u64::from(head[1] & 0x7f);
         if length == 126 { let mut b = [0u8; 2]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from(u16::from_be_bytes(b)); }
         else if length == 127 { let mut b = [0u8; 8]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from_be_bytes(b); }
         let held = if op < 8 { message.as_ref().map_or(0, Vec::len) as u64 } else { 0 };
         if held + length > MAX_FRAME as u64 || (op >= 8 && length > 125) { return Err(()); }
-        let mut mask = [0u8; 4]; reader.read_exact(&mut mask).map_err(|_| ())?;
+        let mut mask = [0u8; 4]; if masked { reader.read_exact(&mut mask).map_err(|_| ())?; }
         let mut payload = vec![0u8; length as usize]; reader.read_exact(&mut payload).map_err(|_| ())?;
         for (index, byte) in payload.iter_mut().enumerate() { *byte ^= mask[index % 4]; }
         match (op, message.as_mut()) {
@@ -186,9 +190,54 @@ fn open(value: &Value, output: &Output) -> Result<(Room, u16), String> {
     let thread = thread::spawn(move || accept_loop(listener, room, map, out, flag));
     Ok((Room { closed, thread: Some(thread), peers }, port))
 }
+fn random<const N: usize>() -> Result<[u8; N], String> {
+    let mut bytes = [0u8; N]; File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).map_err(|_| "No random source")?; Ok(bytes)
+}
+/// A masked client frame, as RFC 6455 requires of a participant.
+fn client_frame(op: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
+    let mask: [u8; 4] = random()?;
+    let mut bytes = frame(op, &[]); bytes.truncate(1); // header byte only; the length is rewritten with the mask bit
+    match payload.len() {
+        n if n < 126 => bytes.push(0x80 | n as u8),
+        n if n <= 0xffff => { bytes.push(0x80 | 126); bytes.extend((n as u16).to_be_bytes()); },
+        n => { bytes.push(0x80 | 127); bytes.extend((n as u64).to_be_bytes()); },
+    }
+    bytes.extend(mask); bytes.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4])); Ok(bytes)
+}
+/// "ws://<private IPv4>:<port>/r/<room>" only; the same shape lan-room.mjs's parseJoinLink produces.
+pub fn parse_target(url: &str) -> Option<(SocketAddr, String)> {
+    let rest = url.strip_prefix("ws://")?; let (authority, path) = rest.split_once('/')?;
+    let (host, port) = authority.split_once(':')?; let room = path.strip_prefix("r/")?;
+    let ip: Ipv4Addr = host.parse().ok().filter(|ip| private(*ip))?; let port: u16 = port.parse().ok().filter(|port| *port >= 1024)?;
+    valid_room(room).then(|| (SocketAddr::from((ip, port)), room.to_string()))
+}
+/// Participant: connect, upgrade with the extension's Origin, check the owner's accept key; then relay the owner's frames.
+fn connect(value: &Value, output: &Output) -> Result<TcpStream, String> {
+    let (address, room) = parse_target(text(value, "url")?).ok_or("This is not a valid join link")?;
+    let mut stream = TcpStream::connect_timeout(&address, IO_TIMEOUT).map_err(|_| "Cannot reach the owner at this link")?;
+    stream.set_read_timeout(Some(IO_TIMEOUT)).and_then(|_| stream.set_write_timeout(Some(IO_TIMEOUT))).map_err(|_| "Connection setup failed")?;
+    let key = STANDARD.encode(random::<16>()?);
+    write!(stream, "GET /r/{room} HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nOrigin: {WS_ORIGIN}\r\n\r\n")
+        .map_err(|_| "Cannot reach the owner at this link")?;
+    let mut response = Vec::with_capacity(256); let mut byte = [0u8; 1];
+    while !response.ends_with(b"\r\n\r\n") {
+        if response.len() >= 8192 || stream.read(&mut byte).map_err(|_| "The owner did not answer")? == 0 { return Err("The owner refused the connection".into()); }
+        response.push(byte[0]);
+    }
+    let response = String::from_utf8_lossy(&response); let expected = accept_key(&key);
+    let accepted = response.starts_with("HTTP/1.1 101 ") && response.split("\r\n").any(|line| line.split_once(':').is_some_and(|(name, value)| name.trim().eq_ignore_ascii_case("sec-websocket-accept") && value.trim() == expected));
+    if !accepted { return Err("The owner refused the connection".into()); }
+    stream.set_read_timeout(Some(IDLE_TIMEOUT)).map_err(|_| "Connection setup failed")?;
+    let mut reader = stream.try_clone().map_err(|_| "Connection setup failed")?; let out = Arc::clone(output);
+    thread::spawn(move || {
+        while let Ok(Frame::Binary(bytes)) = read_frame_masked(&mut reader, false) { if send(&out, json!({"ev": "data", "data": STANDARD.encode(bytes)})).is_err() { break; } }
+        let _ = reader.shutdown(Shutdown::Both); let _ = send(&out, json!({"ev": "closed"}));
+    });
+    Ok(stream)
+}
 fn serve() -> Result<(), String> {
     let output: Output = Arc::new(Mutex::new(io::stdout()));
-    let mut input = io::stdin().lock(); let mut room: Option<Room> = None;
+    let mut input = io::stdin().lock(); let mut room: Option<Room> = None; let mut client: Option<TcpStream> = None;
     loop {
         let mut header = [0; 4];
         match input.read_exact(&mut header) { Ok(()) => (), Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break, Err(_) => return Err("Input closed".into()) }
@@ -197,6 +246,12 @@ fn serve() -> Result<(), String> {
         let mut bytes = vec![0; length]; input.read_exact(&mut bytes).map_err(|_| "Incomplete frame")?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid message")?;
         let op = text(&value, "op")?;
+        if op == "send" && value.get("peer").is_none() { // participant: to the owner; a failure closes the reader, which reports "closed"
+            if let (Some(stream), Some(data)) = (client.as_mut(), value["data"].as_str()) {
+                if let Ok(bytes) = STANDARD.decode(data) { if !bytes.is_empty() && bytes.len() <= MAX_FRAME { if let Ok(f) = client_frame(2, &bytes) { if stream.write_all(&f).is_err() { let _ = stream.shutdown(Shutdown::Both); } } } }
+            }
+            continue;
+        }
         if op == "send" { // fire-and-forget; a failed peer produces a "gone" event from its reader
             let (Some(open), Ok(id), Some(data)) = (&room, peer_id(&value), value["data"].as_str()) else { continue };
             if let Ok(bytes) = STANDARD.decode(data) { if !bytes.is_empty() && bytes.len() <= MAX_FRAME { let _ = write_to(&open.peers, id, &frame(2, &bytes)); } }
@@ -216,7 +271,11 @@ fn serve() -> Result<(), String> {
                 if op == "admit" { entry.admitted = true; } else { let _ = entry.writer.shutdown(Shutdown::Both); }
                 Ok(json!({"peer": peer}))
             },
-            "close" => { room = None; Ok(json!({"closed": true})) },
+            "connect" => {
+                if room.is_some() || client.is_some() { return Err("Already connected".into()); }
+                client = Some(connect(&value, &output)?); Ok(json!({"connected": true}))
+            },
+            "close" => { room = None; if let Some(stream) = client.take() { if let Ok(f) = client_frame(8, &[]) { let _ = (&stream).write_all(&f); } let _ = stream.shutdown(Shutdown::Both); } Ok(json!({"closed": true})) },
             _ => Err("Unknown sharing operation".into()),
         })();
         match result {
@@ -225,6 +284,7 @@ fn serve() -> Result<(), String> {
         }.map_err(|_| "Output closed")?;
     }
     drop(room); // closing the extension page stops sharing
+    if let Some(stream) = client { let _ = stream.shutdown(Shutdown::Both); }
     Ok(())
 }
 fn main() {
@@ -269,5 +329,15 @@ fn main() {
         assert!(read_frame(&mut &masked(1, true, b"text")[..]).is_err());
         assert!(read_frame(&mut &masked(2, true, &vec![0; MAX_FRAME + 1])[..]).is_err());
         assert!(read_frame(&mut &masked(9, true, &[0; 126])[..]).is_err());
+        assert_eq!(read_frame_masked(&mut &frame(2, b"owner")[..], false), Ok(Frame::Binary(b"owner".to_vec()))); // a participant reads unmasked owner frames
+        assert!(read_frame_masked(&mut &masked(2, true, b"x")[..], false).is_err());
+        for n in [3usize, 200, 70_000] { let payload = vec![9u8; n]; assert_eq!(read_frame(&mut &client_frame(2, &payload).unwrap()[..]), Ok(Frame::Binary(payload))); }
+    }
+    #[test] fn join_target_is_private_ws_room_only() {
+        let room = "A".repeat(22);
+        assert_eq!(parse_target(&format!("ws://192.168.1.9:50000/r/{room}")).map(|(a, r)| (a.to_string(), r)), Some(("192.168.1.9:50000".into(), room.clone())));
+        for bad in [format!("ws://8.8.8.8:50000/r/{room}"), format!("wss://10.0.0.1:50000/r/{room}"), format!("ws://10.0.0.1:80/r/{room}"), "ws://10.0.0.1:50000/r/short".into(), format!("ws://example.com:50000/r/{room}")] {
+            assert!(parse_target(&bad).is_none(), "{bad}");
+        }
     }
 }

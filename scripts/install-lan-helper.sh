@@ -1,6 +1,6 @@
 #!/bin/sh
-# Registers the "Share on this network" relay helper with Google Chrome on macOS (owner computer only;
-# participants need no helper). Run from the repository root:  sh scripts/install-lan-helper.sh   [--uninstall]
+# Registers the "Share on this network" helper with Google Chrome on macOS. Every computer that shares or joins needs it.
+# From the extension package:  sh sharing-helper/install.sh   (from the repository root: sh scripts/install-lan-helper.sh)   [--uninstall]
 set -eu
 NAME=com.cenker.latex_lan
 EXTENSION_ID=oekjjadnainlmdbgbdjokegaikafafke
@@ -17,15 +17,20 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 [ "$(uname -s)" = Darwin ] || { echo "This installer is for macOS." >&2; exit 1; }
-[ -f runtime/chrome-extension/lan/Cargo.toml ] || { echo "Run this from the repository root." >&2; exit 1; }
-BUILD_DIR=$(mktemp -d)
-trap 'rm -rf -- "$BUILD_DIR"' EXIT
-CARGO_TARGET_DIR="$BUILD_DIR" cargo build --offline --release --quiet --manifest-path runtime/chrome-extension/lan/Cargo.toml
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$HERE/latex-local-lan" ]; then SOURCE="$HERE/latex-local-lan"   # ready-built copy shipped with the extension
+else
+  [ -f runtime/chrome-extension/lan/Cargo.toml ] || { echo "Run this from the extension's sharing-helper folder or the repository root." >&2; exit 1; }
+  BUILD_DIR=$(mktemp -d); trap 'rm -rf -- "$BUILD_DIR"' EXIT
+  CARGO_TARGET_DIR="$BUILD_DIR" cargo build --offline --release --quiet --manifest-path runtime/chrome-extension/lan/Cargo.toml
+  SOURCE="$BUILD_DIR/release/latex-local-lan"
+fi
 mkdir -p -- "$APP_DIR" "$HOSTS_DIR"
-cp -- "$BUILD_DIR/release/latex-local-lan" "$BINARY"
+cp -- "$SOURCE" "$BINARY"
 chmod 755 "$BINARY"
+xattr -d com.apple.quarantine "$BINARY" 2>/dev/null || true   # copied via AirDrop/ZIP: macOS would refuse to start it
 cat > "$MANIFEST" <<EOF
 {"name":"$NAME","description":"LaTeX Local: Share on this network","path":"$BINARY","type":"stdio","allowed_origins":["chrome-extension://$EXTENSION_ID/"]}
 EOF
 chmod 644 "$MANIFEST"
-echo "Installed. Restart Chrome, then use Share in the editor. Remove with: sh scripts/install-lan-helper.sh --uninstall"
+echo "Installed. Quit and reopen Chrome, then use Share or Join. Remove with: sh \"$0\" --uninstall"

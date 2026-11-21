@@ -31,6 +31,24 @@ export function nativeHelper(connectNative = chrome.runtime.connectNative.bind(c
     close: () => { closed ??= Error('Sharing stopped'); port.disconnect(); },
   };
 }
+/**
+ * WebSocket-shaped participant connection that the helper opens (op "connect"). Chrome's local-network rules stop extension
+ * pages from opening a WebSocket to another computer; the helper is a normal program, so it can. It relays sealed bytes only.
+ */
+export function helperSocket(connectNative = chrome.runtime.connectNative.bind(chrome.runtime)) {
+  return class HelperSocket {
+    #helper; #state = 0;
+    constructor(url) {
+      this.binaryType = 'arraybuffer'; const helper = this.#helper = nativeHelper(connectNative);
+      helper.subscribe(e => { if (e.ev === 'data' && typeof e.data === 'string' && this.#state === 1) this.onmessage?.({ data: unb64(e.data).buffer }); else if (e.ev === 'closed' || e.ev === 'helper-lost') this.#end(); });
+      helper.call('connect', { url }).then(() => { if (this.#state !== 0) return; this.#state = 1; this.onopen?.(); }, error => { if (this.#state === 3) return; this.onerror?.(error); this.#end(); });
+    }
+    get readyState() { return this.#state; }
+    send(bytes) { if (this.#state === 1) this.#helper.send({ op: 'send', data: b64(bytes) }); }
+    close() { this.#end(); }
+    #end() { if (this.#state === 3) return; const open = this.#state === 1; this.#state = 3; this.#helper.call('close').catch(() => {}).finally(() => this.#helper.close()); if (open) this.onclose?.(); }
+  };
+}
 const b64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
 const unb64 = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
 const ACTION = { update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view' };
