@@ -450,28 +450,32 @@ try {
       if (controller) return Response.json({ error: 'Compilation already running' }, { status: 409 });
       controller = new AbortController();
       try {
-        await flush();
-        const saved = await api.read(project.id);
-        if ([...files.values()].some(file => saved.files.find(other => other.path === file.path)?.revision !== file.revision)) throw Error('Another tab changed this project. Reload before compiling.');
-        const digest = await fingerprint(project, saved.files);
-        // The editor's automatic compile on open: the saved PDF was compiled from exactly these sources, so show it.
-        if (url.searchParams.get('auto_compile') === 'true' && project.pdf && project.synctex && project.outputDigest === digest) {
-          const savedNav = await navigation(project.synctex, project, [...files.values()]).catch(() => undefined);
-          if (savedNav) {
-            nav = savedNav; outputDigest = digest; status('Compiled and saved in this browser.');
-            return Response.json({ status: 'success', outputFiles: outputFiles(), compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
+        for (let attempt = 0; ; attempt++) {
+          await flush();
+          const saved = await api.read(project.id);
+          if ([...files.values()].some(file => saved.files.find(other => other.path === file.path)?.revision !== file.revision)) throw Error('Another tab changed this project. Reload before compiling.');
+          const digest = await fingerprint(project, saved.files);
+          // The editor's automatic compile on open: the saved PDF was compiled from exactly these sources, so show it.
+          if (attempt === 0 && url.searchParams.get('auto_compile') === 'true' && project.pdf && project.synctex && project.outputDigest === digest) {
+            const savedNav = await navigation(project.synctex, project, [...files.values()]).catch(() => undefined);
+            if (savedNav) {
+              nav = savedNav; outputDigest = digest; status('Compiled and saved in this browser.');
+              return Response.json({ status: 'success', outputFiles: outputFiles(), compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
+            }
           }
+          status('Compiling on this device…');
+          const result = await compiler.compile(project, saved.files, text => status(text), controller.signal);
+          compileLog = result.log || 'Compiled locally.\n';
+          await flush();
+          if (controller.signal.aborted) throw Error('Source changed during compilation. Compile again.');
+          // Typing (or a participant's edit while sharing) during the compile: compile the latest source instead of reporting an error.
+          if (digest !== await fingerprint(project, [...files.values()])) { if (attempt < 3) { status('Source changed; compiling the latest version…'); continue; } throw Error('Source changed during compilation. Compile again.'); }
+          project = await api.output(project, saved.files, new Blob([result.pdf], { type: 'application/pdf' }), result.synctex, digest);
+          nav = await navigation(project.synctex, project, [...files.values()]); outputDigest = digest;
+          status('Compiled and saved in this browser.');
+          return Response.json({ status: 'success', outputFiles: outputFiles(),
+            compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
         }
-        status('Compiling on this device…');
-        const result = await compiler.compile(project, saved.files, text => status(text), controller.signal);
-        compileLog = result.log || 'Compiled locally.\n';
-        await flush();
-        if (controller.signal.aborted || digest !== await fingerprint(project, [...files.values()])) throw Error('Source changed during compilation. Compile again.');
-        project = await api.output(project, saved.files, new Blob([result.pdf], { type: 'application/pdf' }), result.synctex, digest);
-        nav = await navigation(project.synctex, project, [...files.values()]); outputDigest = digest;
-        status('Compiled and saved in this browser.');
-        return Response.json({ status: 'success', outputFiles: outputFiles(),
-          compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
       } catch (error) { compileLog = error.log || error.message; status(error.message + ' Previous PDF retained.', true); return Response.json({ status: 'error', outputFiles: outputFiles() }); }
       finally { controller = undefined; }
     }
