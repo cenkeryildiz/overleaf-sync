@@ -667,4 +667,6 @@ try {
   }
 
   status('Native editor — Local only. Compile and export on this device.');
+  // MATH-CHECK-01 / ANALYSIS-01: only when a research transport (the native research host bridge) is present; nothing runs on open.
+  if (globalThis.overleafStandalone && typeof globalThis.overleafResearchRun === 'function') import('/extension/research-ui.mjs').then(ui => ui.registerResearch({ run: globalThis.overleafResearchRun, trusted: () => globalThis.overleafResearchTrusted?.(project.id) === true })).catch(() => {});
 } catch (error) { status(error.message + '. Existing local files are retained.', true); }

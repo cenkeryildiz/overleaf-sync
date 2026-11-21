@@ -21,7 +21,7 @@ FUNCS = {r"\sin": sp.sin, r"\cos": sp.cos, r"\tan": sp.tan, r"\cot": sp.cot, r"\
          r"\arccos": sp.acos, r"\arctan": sp.atan, r"\sinh": sp.sinh, r"\cosh": sp.cosh, r"\tanh": sp.tanh}
 RELATIONS = {"=": "eq", "<": "lt", ">": "gt", r"\le": "le", r"\leq": "le", r"\ge": "ge", r"\geq": "ge", r"\neq": "ne", r"\ne": "ne"}
 SPACING = {r"\,", r"\;", r"\:", r"\!", r"\ ", r"\quad", r"\qquad"}
-FACTOR_MACROS = {r"\frac", r"\sqrt", r"\pi", *GREEK, *FUNCS}
+FACTOR_MACROS = {r"\frac", r"\sqrt", r"\pi", r"\sum", r"\int", *GREEK, *FUNCS}
 TOKEN = re.compile(r"\s+|(?P<num>\d+(?:\.\d+)?)|(?P<mac>\\(?:[A-Za-z]+|[,;:! ]))|(?P<ch>[A-Za-z+\-*/^_(){}=<>|\[\]])")
 
 
@@ -67,6 +67,7 @@ class Parser:
         context = context or {}
         self.decl, self.exclusions, self.used = context.get("symbols", {}), context.get("exclusions", {}), {}
         self.denoms, self.part_denoms = [], []   # denominators as written: SymPy cancels x/x, which would hide the exclusion
+        self.scope, self.bound, self.sum_limits, self.stop_d = {}, {}, set(), 0   # bound variables of \sum and \int
         for name, flags in self.decl.items():
             bad = set(flags) - ASSUMPTIONS
             if bad: raise Unsupported(f"Unknown assumption {sorted(bad)} for {name}")
@@ -84,6 +85,7 @@ class Parser:
         self.depth += 1
         if self.depth > MAX_DEPTH: raise Unsupported("Expression is nested too deeply", *self.peek()[2:4])
     def starts_factor(self, t):
+        if self.stop_d and t is not None and t[1] == "d" and self.differential_at(self.i): return False   # the dx that closes an integrand
         return t is not None and (t[0] in ("num",) or t[1] == "(" or t[1] in FACTOR_MACROS or (t[0] == "ch" and t[1].isalpha()) or (self.allow_infinity and t[1] == r"\infty"))
 
     # -- grammar
@@ -148,6 +150,7 @@ class Parser:
         self.expect("{"); value = self.expr(); self.expect("}"); return value
 
     def symbol(self, name, token):
+        if name in self.scope: return self.scope[name]
         flags = self.decl.get(name)
         sym = sp.Symbol(name, **{f: True for f in (flags or ())})
         self.used.setdefault(name, (token[2], token[3], flags is not None)); return sym
@@ -172,6 +175,8 @@ class Parser:
             if self.at("["): raise Unsupported("Root index form is not supported", s, e)
             return sp.sqrt(self.group())
         if value in FUNCS: return self.function(t)
+        if value == r"\sum": return self.big_sum(t)
+        if value == r"\int": return self.integral(t)
         if value in (r"\log",): raise Unsupported(r"\log has an ambiguous base; use \ln or state the base", s, e)
         if kind == "mac" and value not in GREEK: raise Unsupported(f"Unsupported macro {value}", s, e)
         if kind == "ch" and not value.isalpha() or kind not in ("ch", "mac"): raise Unsupported(f"Unexpected {value!r}", s, e)
@@ -206,6 +211,73 @@ class Parser:
         if after and (self.starts_factor(after) or after[1] in ("*", r"\cdot", r"\times", "/", "^")):
             raise Unsupported("The scope of d/dx is ambiguous; put the expression in parentheses", s, after[3])
         return sp.diff(operand, var)
+
+    # -- bound variables: \sum_{i=a}^{b} term and \int_a^b expr \,dx. The bound name is local: it is not a free symbol,
+    # gets no declared assumptions and is never sampled. The body is kept unevaluated so the interpretation shows it.
+    def differential_at(self, k):
+        nxt = self.peek(k - self.i + 1)
+        return nxt is not None and ((nxt[0] == "ch" and nxt[1].isalpha()) or nxt[1] in GREEK)
+
+    def bound_name(self, t, what):
+        if not t or not ((t[0] == "ch" and t[1].isalpha()) or t[1] in GREEK): raise Unsupported(f"The {what} must be a single letter", *(t[2:4] if t else (self.end_pos(), self.end_pos())))
+        return GREEK.get(t[1], t[1])
+
+    def limit(self):
+        if self.at(r"\infty"): self.take(); return sp.oo
+        old, self.allow_infinity = self.allow_infinity, True
+        try: return self.group() if self.at("{") else self.script()
+        finally: self.allow_infinity = old
+
+    def scoped(self, name, sym, parse_body, s, e):
+        if name in self.scope: raise Unsupported(f"{name} is already bound by an enclosing sum or integral", s, e)
+        mark = len(self.denoms); self.scope[name] = sym; self.bound.setdefault(name, (s, e))
+        try: body = parse_body()
+        finally: del self.scope[name]
+        self.denoms[mark:] = [d for d in self.denoms[mark:] if sym not in d.free_symbols]   # an exclusion on the bound name is not a domain of the result
+        return body
+
+    def big_sum(self, token):
+        _, _, s, e = token; self.take()
+        if not self.at("_"): raise Unsupported(r"\sum needs its range written as _{i=a}^{b}", s, e)
+        self.take()
+        if not self.at("{"): raise Unsupported(r"\sum needs its range written as _{i=a}^{b}", s, e)
+        self.take(); name = self.bound_name(self.take() if self.peek() else None, "summation index")
+        self.expect("="); lo = self.expr(); self.expect("}")
+        if not self.at("^"): raise Unsupported(r"\sum needs an upper limit ^{b}", s, e)
+        self.take(); hi = self.limit()
+        for bound in (lo, hi):
+            if bound.is_number and not (bound.is_integer or bound in (sp.oo, -sp.oo)): raise Unsupported("Summation limits must be integers", s, e)
+        if lo.is_number and hi.is_number and lo > hi: raise Unsupported("An empty or reversed summation range is not checked", s, e)
+        self.sum_limits |= {x.name for x in (lo.free_symbols | hi.free_symbols)}
+        i = sp.Symbol(name, integer=True)
+        if not self.starts_factor(self.peek()): raise Unsupported(r"\sum needs a term to add up", s, e)
+        body = self.scoped(name, i, self.term, s, e)   # the summand is the following product: \sum_i a_i + b adds b once
+        return sp.Sum(body, (i, lo, hi))
+
+    def integral(self, token):
+        _, _, s, e = token; self.take()
+        if not self.at("_"): raise Unsupported("An indefinite integral is only defined up to a constant; select the integrand and compute its integral instead", s, e)
+        self.take(); lo = self.limit()
+        if not self.at("^"): raise Unsupported(r"\int needs an upper limit ^{b}", s, e)
+        self.take(); hi = self.limit()
+        if "d" in self.decl: raise Unsupported("d is declared as a symbol, so the differential is ambiguous", s, e)
+        depth, k = 0, self.i     # find the closing d<var> at this nesting level before parsing, so the integrand knows its bound name
+        while k < len(self.tokens):
+            v = self.tokens[k][1]
+            if v in "{(": depth += 1
+            elif v in "})": depth -= 1
+            if depth < 0: break
+            if depth == 0 and v == "d" and self.differential_at(k): break
+            k += 1
+        else: k = len(self.tokens)
+        if k >= len(self.tokens) or self.tokens[k][1] != "d": raise Unsupported(r"\int needs its differential, such as \,dx", s, e)
+        name = self.bound_name(self.tokens[k + 1], "integration variable"); x = sp.Symbol(name, real=True)
+        def body():
+            self.stop_d += 1
+            try: value = self.expr()
+            finally: self.stop_d -= 1
+            self.expect("d"); self.take(); return value
+        return sp.Integral(self.scoped(name, x, body, s, e), (x, lo, hi))
 
     def function(self, token):
         _, name, s, e = token; self.take(); power = None
@@ -276,9 +348,23 @@ def denominator_candidates(denoms, symbols, exclusions):
     return found[:5]
 
 
-def check_pair(lhs, rhs, parser, rng, dl, dr):
+def closed_form(expr):
+    """Evaluate sums/integrals; None when no closed form was found, False when divergent or undefined."""
+    if not expr.has(sp.Sum, sp.Integral): return expr
+    value = expr.doit()
+    if value.has(sp.Sum, sp.Integral): return None
+    return False if value.has(sp.oo, -sp.oo, sp.zoo, sp.nan) else value
+
+
+def check_pair(lhs, rhs, parser, rng, dl, dr, decl=None):
+    try:
+        with budget(): lhs, rhs = closed_form(lhs), closed_form(rhs)
+    except Timeout: return "inconclusive", "Evaluating the sum or integral took too long", {}
+    except Exception: return "inconclusive", "The sum or integral could not be evaluated", {}
+    if lhs is False or rhs is False: return "inconclusive", "A sum or integral diverges or is undefined; nothing was compared", {}
+    if lhs is None or rhs is None: return "inconclusive", "No closed form was found for a sum or integral; nothing was compared", {}
     symbols = sorted(set().union(lhs.free_symbols, rhs.free_symbols, *(d.free_symbols for d in dl + dr)), key=lambda s: s.name)
-    exclusions, decl = parser.exclusions, parser.decl
+    exclusions, decl = parser.exclusions, decl if decl is not None else parser.decl
     if len(symbols) > 6: return "inconclusive", "More than six variables: only symbolic comparison is attempted", {}
     domain_hit = None
     for _ in range(SAMPLES):
@@ -311,8 +397,11 @@ def check(text, context=None, base=0):
         s, e = next((s, e) for kind, s, e in rels if kind != "eq")
         return {"status": "unsupported", "reason": "Only equalities are compared here; use constraints for inequalities", "range": [base + s, base + e]}
     rng, steps = random.Random(20261119), []
+    # A free summation limit (the n in \sum_{i=1}^{n}) is only meaningful at integers: sample it there unless declared.
+    loose = sorted(n for n in parser.sum_limits if "integer" not in parser.decl.get(n, ()))
+    decl = {**parser.decl, **{n: ["integer", "nonnegative"] for n in loose}}
     for k, ((left, ls, _), (right, _, re_)) in enumerate(zip(parts, parts[1:])):
-        status, reason, extra = check_pair(left, right, parser, rng, parser.part_denoms[k], parser.part_denoms[k + 1])
+        status, reason, extra = check_pair(left, right, parser, rng, parser.part_denoms[k], parser.part_denoms[k + 1], decl)
         steps.append({"status": status, "reason": reason, "range": [base + ls, base + re_], "left": latex(left), "right": latex(right), **extra})
     order = ["issue_found", "inconclusive", "no_issue_found"]
     status = next((s for s in order if any(step["status"] == s for step in steps)), "inconclusive")
@@ -320,8 +409,13 @@ def check(text, context=None, base=0):
     suggestions = [{"kind": "undeclared_symbol", "symbol": n, "range": [base + s, base + e],
                     "reason": f"{n} is not declared; it is treated as an unrestricted complex variable"}
                    for n, (s, e, declared) in parser.used.items() if not declared]
+    suggestions += [{"kind": "summation_limit", "symbol": n, "range": [base + parser.used[n][0], base + parser.used[n][1]] if n in parser.used else first["range"],
+                     "reason": f"{n} is a summation limit; it was sampled at whole numbers only. Declare it as an integer to make that explicit"} for n in loose]
+    suggestions += [{"kind": "bound_and_free", "symbol": n, "range": [base + parser.used[n][0], base + parser.used[n][1]],
+                     "reason": f"{n} is bound by a sum or integral and also used outside it; these are different quantities"} for n in parser.bound if n in parser.used]
     assumptions = {n: sorted(parser.decl.get(n, [])) for n in parser.used}
-    return {"status": status, "reason": first["reason"], "range": first["range"], "steps": steps, "assumptions": assumptions, "suggestions": suggestions}
+    bound = {n: [base + s, base + e] for n, (s, e) in parser.bound.items()}
+    return {"status": status, "reason": first["reason"], "range": first["range"], "steps": steps, "assumptions": assumptions, "bound": bound, "suggestions": suggestions}
 
 
 # ---------------------------------------------------------------- constraints and computations
@@ -457,6 +551,7 @@ def optimize(text, var="x", interval=None):
         parts, rels, parser = parse(text, {"symbols": {var: ["real"]}})
         if len(parts) != 1: return {"status": "unsupported", "reason": "Expected a single expression"}
         x = sp.Symbol(var, real=True); f = parts[0][0]
+        if f.has(sp.Sum, sp.Integral): return {"status": "unsupported", "reason": "Optimization of sums and integrals is not supported"}
         if f.free_symbols != {x}: return {"status": "inconclusive", "reason": f"Only functions of {var} alone are optimized; other symbols: {sorted(n.name for n in f.free_symbols - {x})}" if f.free_symbols - {x} else f"{var} does not appear in the expression"}
         if any(p.exp.is_Rational and not p.exp.is_Integer and p.exp.q != 2 for p in f.atoms(sp.Pow)): return {"status": "inconclusive", "reason": "Fractional powers other than square roots are branch-sensitive for negative values; no real-root convention is assumed"}
         region, bounds = sp.S.Reals, None
@@ -507,6 +602,8 @@ def compute(op, text, var="x", context=None, point=None, direction="+"):
         expr = parts[0][0] if len(parts) == 1 else parts[0][0] - parts[1][0]
         if var not in {s.name for s in expr.free_symbols} and op != "solve": return {"status": "inconclusive", "reason": f"{var} does not appear in the expression"}
         with budget():
+            expr = closed_form(expr)
+            if expr is None or expr is False: return {"status": "inconclusive", "reason": "A sum or integral has no closed form or diverges"}
             if op == "diff": out = sp.diff(expr, x)
             elif op == "integrate": out = sp.integrate(expr, x)
             elif op == "limit":
@@ -523,6 +620,8 @@ def compute(op, text, var="x", context=None, point=None, direction="+"):
 
 def handle(request):
     op = request.get("op")
+    if op == "version": return {"status": "ready", "sympy": sp.__version__}   # readiness probe: imports SymPy, parses nothing
+    if op == "batch": return {"status": "batch", "results": [handle(r) if isinstance(r, dict) and r.get("op") != "batch" else {"status": "unsupported", "reason": "Malformed request"} for r in list(request.get("requests", []))[:5]]}
     if op == "check": return check(str(request.get("text", "")), request.get("context"), int(request.get("base", 0)))
     if op == "constraints": return constraints([str(t) for t in request.get("texts", [])][:50], request.get("context"))
     if op == "compute": return compute(str(request.get("name", "")), str(request.get("text", "")), str(request.get("var", "x")), request.get("context"), request.get("point"), request.get("direction", "+"))

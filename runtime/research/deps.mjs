@@ -48,6 +48,8 @@ export class DependencyGraph {
   /** Record that `id` was computed from the current inputs and digest. */
   markFresh(id) { if (this.cycle()) throw Error('Dependency cycle'); this.#done.set(id, this.#key(id)); }
   isStale(id) { return this.#done.get(id) !== this.#key(id); }
+  /** The input key of `id` (its digest and, recursively, its inputs'): stored beside an inserted result so staleness survives reload. */
+  key(id) { if (this.cycle()) throw Error('Dependency cycle'); return this.#key(id); }
   /** Recompute order for everything stale (or only what `targets` need), dependencies first; refuses cycles and missing inputs. */
   plan(targets = [...this.#nodes.keys()]) {
     const cycle = this.cycle(); if (cycle) return { ok: false, reason: 'cycle', cycle };
@@ -67,7 +69,7 @@ export class DependencyGraph {
  * Debounced, non-overlapping recompute: touches inside the window collapse into one run; a touch during a run
  * schedules exactly one follow-up after it. `run(ids)` receives the union of touched ids.
  */
-export function coalescer(run, delayMs = 300, timers = { set: setTimeout, clear: clearTimeout }) {
+export function coalescer(run, delayMs = 300, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) }) {   // bound: a browser's setTimeout throws when called as a method of another object
   let pending = new Set(), timer = null, running = null;
   const fire = async () => {
     timer = null;

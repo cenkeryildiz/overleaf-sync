@@ -65,6 +65,37 @@ class Identities(unittest.TestCase):
         self.assertEqual(r["assumptions"], {"x": ["real"], "y": []})
 
 
+class BoundVariables(unittest.TestCase):
+    def test_closed_form_sums_and_integrals_compare_with_the_bound_name_local(self):
+        # expected values fixed by hand: sum_{i=1}^n i = n(n+1)/2, int_0^1 x dx = 1/2, int_0^t 2x dx = t^2
+        for text in [r"\sum_{i=1}^{n} i = \frac{n(n+1)}{2}", r"\int_0^1 x \, dx = \frac{1}{2}", r"\int_{0}^{t} 2x \,dx = t^2",
+                     r"\int_0^\infty \exp(-x) \, dx = 1", r"\sum_{k=0}^{3} 2^k = 15", r"\sum_{i=1}^{n} (2i - 1) = n^2"]:
+            r = mc.check(text, {"symbols": {"t": ["real"], "n": ["integer", "nonnegative"]}})
+            self.assertEqual(r["status"], "no_issue_found", text)
+            self.assertTrue(r["bound"], text)
+            self.assertFalse(set(r["bound"]) & set(r["assumptions"]), "a bound name is not a free symbol: " + text)
+
+    def test_wrong_closed_forms_get_integer_counterexamples_for_summation_limits(self):
+        r = mc.check(r"\sum_{i=1}^{n} i = n^2")
+        self.assertEqual(r["status"], "issue_found")
+        n = Fraction(r["steps"][0]["counterexample"]["at"]["n"]); self.assertEqual(n.denominator, 1, "n must be sampled at whole numbers")
+        self.assertIn("summation_limit", [s["kind"] for s in r["suggestions"]])
+        self.assertEqual(mc.check(r"\int_0^1 x \, dx = 1")["status"], "issue_found")
+
+    def test_bound_and_free_use_and_unevaluated_or_divergent_forms(self):
+        r = mc.check(r"\sum_{i=1}^{3} i + i = 6 + i")
+        self.assertEqual(r["status"], "no_issue_found"); self.assertIn("bound_and_free", [s["kind"] for s in r["suggestions"]])
+        self.assertEqual(mc.check(r"\int_1^\infty \frac{1}{x} \, dx = 1")["status"], "inconclusive")
+        self.assertEqual(mc.check(r"\sum_{i=1}^{n} \frac{1}{i^{x}} = 1", {"symbols": {"x": ["positive"]}})["status"], "inconclusive")   # no closed form: nothing compared
+        nested = mc.check(r"\sum_{i=1}^{2} \sum_{i=1}^{2} i = 6")
+        self.assertEqual(nested["status"], "unsupported"); self.assertIn("already bound", nested["reason"])
+
+    def test_batch_and_version_requests(self):
+        self.assertEqual(mc.handle({"op": "version"})["status"], "ready")
+        out = mc.handle({"op": "batch", "requests": [{"op": "check", "text": "x = x"}, {"op": "batch"}, 3]})
+        self.assertEqual([r["status"] for r in out["results"]], ["no_issue_found", "unsupported", "unsupported"])
+
+
 class Unsupported(unittest.TestCase):
     def test_unknown_malformed_and_ambiguous_notation_is_unsupported_not_an_error(self):
         cases = {
@@ -74,7 +105,9 @@ class Unsupported(unittest.TestCase):
             r"x^23 = x": "needs braces",
             r"\sin 2x = 2 \sin x": "Ambiguous argument",
             r"\sin^{-1} x = 1": "ambiguous",
-            r"\sum_{i=1}^{n} i = 1": "Unsupported",
+            r"\sum_i i = 1": "needs its range",
+            r"\sum_{i=1}^{n} = 1": "needs a term",
+            r"\int_0^1 x = 1": "differential",
             r"x_{i+1} = x_i": "Indexed",
             r"\frac{1}{0} = 1": "zero",
             r"x = 1/0": "zero",
@@ -152,7 +185,7 @@ class DerivativeClaims(unittest.TestCase):
 
     def test_lookalikes_and_ambiguous_scope_are_unsupported(self):
         cases = {r"\frac{dy}{dx} = 3": "implicit function", r"\frac{d^2}{dx^2} x^3 = 6x": "Higher-order", r"\frac{d}{dx} x y = y": "scope",
-                 r"\frac{d}{dx}x^2 \cdot x = 2x^2": "scope", r"\frac{d}{dx} = 1": "needs an expression", r"\int x dx = x": "Unsupported macro", r"\sum_{i=1}^{n} i = 1": "Unsupported"}
+                 r"\frac{d}{dx}x^2 \cdot x = 2x^2": "scope", r"\frac{d}{dx} = 1": "needs an expression", r"\int x dx = x": "indefinite", r"\sum_{i=1}^{0} i = 1": "reversed"}
         for text, needle in cases.items():
             r = mc.check(text); self.assertEqual(r["status"], "unsupported", text); self.assertIn(needle, r["reason"], text)
         self.assertEqual(mc.check(r"\frac{d}{dx} x = 1", {"symbols": {"d": ["real"]}})["status"], "unsupported")
