@@ -273,6 +273,34 @@ try {
   await until(async () => /stopped/i.test(await rejoin.locator('[role=alert]').textContent()), 'participant removed on stop'); note('stop sharing ends the participant session');
   for (const id of ['#local-savecopy', '#local-zip']) { await rejoin.evaluate(sel => { const node = document.querySelector(sel); node.disabled = false; node.click(); }, id); await until(async () => /ended|not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused after revoke'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }
   note('revoked session: save-copy and export are refused');
+  // ---- S2-05 lock and reconcile dialogs. Added by lane LAN-I, NOT RUN yet (another lane holds the browser fixture): two host losses with the
+  // owner editing while the participant is away; the lock offers Rejoin/Leave and covers the editor; a new room then asks keep or discard.
+  { const share = async page => {
+      await page.getByRole('button', { name: 'Share on this network' }).click(); const p = page.getByRole('dialog', { name: 'Share on this network' });
+      await until(async () => (await p.locator('code').nth(0).textContent()).trim(), 'share link');
+      return { link: (await p.locator('code').nth(0).textContent()).trim(), code: (await p.locator('code').nth(1).textContent()).trim() };
+    };
+    let host = again, room = await share(host); const away = await guestContext.newPage(); away.on('pageerror', error => errors.push('away: ' + error.message.slice(0, 200)));
+    await away.goto(room.link); await away.getByLabel('Passcode').fill(room.code); await away.getByLabel('Your name for this session').fill('Ula'); await away.getByRole('button', { name: 'Join' }).click();
+    await editorOf(away).waitFor({ timeout: 60000 }); await until(async () => (await docOf(away)) === (await docOf(host)), 'away participant has the owner text');
+    for (const [n, choice] of [[1, 'Apply my edits on top'], [2, 'Discard my unsent edits']]) {
+      await host.close(); // host loss: bounded automatic retries (about 30 s), then the explicit lock dialog
+      await until(async () => (await away.getByRole('button', { name: 'Rejoin' }).count()) === 1, 'lock dialog offers Rejoin after the retries', 60000);
+      assert.equal(await away.getByRole('button', { name: 'Leave' }).count(), 1); assert.match(await away.locator('[role=alert]').textContent(), /unsent edits are kept/);
+      assert(await editorOf(away).evaluate(node => { const r = node.getBoundingClientRect(); return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('.lan-join'); }), 'the lock covers the editor');
+      await insert(away, 0, `% unsent ${n}\n`); // programmatic (the lock blocks typing): held in this tab only
+      host = await ownerContext.newPage(); await host.goto(projectUrl); await editorOf(host).waitFor({ timeout: 60000 });
+      await insert(host, 'end', `% owner while away ${n}\n`); room = await share(host);
+      await away.getByLabel('New join link (empty: the same room)').fill(room.link); await away.getByLabel('Passcode (empty: the same room)').fill(room.code);
+      await away.getByRole('button', { name: 'Rejoin' }).click();
+      await away.getByRole('button', { name: choice }).click({ timeout: 30000 }); // both changed: never decided automatically
+      const done = await until(async () => { const [a, b] = [await docOf(away), await docOf(host)]; return a === b && !(await away.locator('.lan-join').count()) ? a : false; }, `${choice}: both sides converge`);
+      assert.equal(done.split(`% owner while away ${n}\n`).length - 1, 1, 'the owner version is kept');
+      assert.equal(done.split(`% unsent ${n}\n`).length - 1, n === 1 ? 1 : 0, n === 1 ? 'keep applies the unsent edit once' : 'discard drops only the unsent edit');
+      await insert(away, 'end', `% after choice ${n}\n`); await until(async () => (await docOf(host)).includes(`% after choice ${n}`), 'edits flow after the choice');
+    }
+    note('S2-05 lock dialog (Rejoin/Leave, covers the editor) and keep/discard reconcile dialogs after a new room [added, not yet run]');
+    await away.close(); await host.close(); }
   // ---- the participant device kept no project and no source text in browser storage
   const probe = await guestContext.newPage(); await probe.goto(root + '/extension/index.html');
   const stored = await probe.evaluate(async () => {

@@ -87,7 +87,7 @@ const serial = () => { let tail = Promise.resolve(); return task => { const run 
  * receives requests that passed `authorize`.
  */
 export class OwnerRoom {
-  #peers = new Map(); #stopped = false; #resume = new Map(); // name -> resume token for an authenticated rejoin (memory only)
+  #peers = new Map(); #stopped = false; #resume = new Map(); // name -> { token, grant }: an authenticated rejoin keeps the owner's latest grant (memory only)
   #retired = []; // passcodes replaced by rotatePasscode(): they still open a resume, never a new join
   constructor({ send, admit, drop, onJoin = () => {}, onMessage = () => {}, onLeave = () => {} }, secrets = newRoomSecrets()) {
     Object.assign(this, { roomId: secrets.roomId, passcode: secrets.passcode, transport: { send, admit, drop }, onJoin, onMessage, onLeave });
@@ -111,7 +111,8 @@ export class OwnerRoom {
   async setGrant(peer, grant) {
     const entry = this.#peers.get(peer);
     if (!GRANTS.includes(grant) || entry?.state !== 'joined') throw Error('Unknown participant or permission');
-    entry.grant = grant; await this.#send(peer, entry, { t: 'grant', grant });
+    entry.grant = grant; const kept = this.#resume.get(entry.name); if (kept) kept.grant = grant; // also binds a resume of a connection that is already gone on the participant's side
+    await this.#send(peer, entry, { t: 'grant', grant });
   }
   async sendTo(peer, message) { const entry = this.#peers.get(peer); if (entry?.state === 'joined') await this.#send(peer, entry, message); }
   async broadcast(message, except) { await Promise.all(this.participants.filter(p => p.peer !== except).map(p => this.sendTo(p.peer, message))); }
@@ -164,14 +165,14 @@ export class OwnerRoom {
       const name = message.t === 'join' && validUsername(message.name);
       if (!name) throw Error('Invalid join');
       // A rejoin proves the token from its last welcome; revoke and leave delete it, so a removed participant cannot resume.
-      const resuming = 'resume' in message, valid = resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name);
+      const resuming = 'resume' in message, valid = resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name)?.token;
       if (resuming && !valid) { await this.#send(peer, entry, { t: 'refused', code: 'resume', reason: 'This session can no longer be resumed' }); throw Error('Stale resume'); }
       if (entry.retired && !valid) { await this.#send(peer, entry, { t: 'refused', reason: 'This passcode was replaced. Ask the owner for the current one' }); throw Error('Retired passcode'); }
       const held = this.participants.find(p => p.name === name);
       if (held && valid) this.#remove(held.peer, true); // the same participant on a new connection: the old one is stale
       else if (held) { await this.#send(peer, entry, { t: 'refused', reason: 'That name is already in use in this session' }); throw Error('Name in use'); }
-      const resume = base64url(random(16)); this.#resume.set(name, resume);
-      Object.assign(entry, { state: 'joined', name, grant: 'online' });
+      const resume = base64url(random(16)), grant = valid ? this.#resume.get(name).grant : 'online'; this.#resume.set(name, { token: resume, grant });
+      Object.assign(entry, { state: 'joined', name, grant });
       this.transport.admit(peer);
       await this.#send(peer, entry, { t: 'welcome', grant: entry.grant, participants: this.participants.map(p => p.name), resume });
       this.onJoin(peer, name);

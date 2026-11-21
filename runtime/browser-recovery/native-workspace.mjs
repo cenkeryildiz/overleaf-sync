@@ -190,7 +190,7 @@ try {
     for (const path of conflicts) {
       const file = files.get(path), doc = file?.doc && editors.get(file.doc)?.container.doc;
       if (!doc) { lan?.forget(path); continue; }
-      const deliver = (op, v) => broadcast('otUpdateApplied', { doc: file.doc, op, v, meta: { source: 'lan:Owner', user_id: hue('Owner'), ts: Date.now() } });
+      const deliver = (op, v) => broadcast('otUpdateApplied', op ? { doc: file.doc, op, v, meta: { source: 'lan:Owner', user_id: hue('Owner'), ts: Date.now() } } : { doc: file.doc, v }); // no op: the acknowledgement shape used for applyOtUpdate
       for (let choice = 'auto', note = ''; lan;) { // the owner's version is never replaced; only this tab's unsent edits are kept or dropped
         try { if (await reconcile(lan, path, doc, deliver, choice)) break; } catch (error) { note = error.message + '. '; }
         choice = await new Promise(resolve => lock(`${note}The owner changed ${path} while you were away, and you have unsent edits in it. The owner's version is kept either way.`,
