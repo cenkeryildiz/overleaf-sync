@@ -20,12 +20,14 @@ for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if
 for (const name of ['native-workspace.html', 'project-workspace.html']) { const path = join(extension, 'recovery', name); writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>')); }
 import { assetName, patchEditorUnicode } from '../../runtime/browser-recovery/apply.mjs';
 const editorPath = join(extension, 'js', assetName); { // as package.mjs does; the base asset embeds an older recovery-core.js, so carry this repository's LAN guard into it as provisioning would
-  let editor = patchEditorUnicode(readFileSync(editorPath, 'utf8'));
+  const raw = readFileSync(editorPath, 'utf8'), patched = String.raw`/[\0\uD800-\uDFFF]/gu`;
+  let editor = raw.includes(patched) ? raw : patchEditorUnicode(raw); // a packaged base (with the compiler) is already patched
   const header = 'function extension(State, Transaction, container, name) {\n    return State.transactionFilter.of(';
   assert.equal(editor.split(header).length - 1, 1, 'base editor asset has an unexpected recovery extension');
   assert(readFileSync(join(repository, 'runtime/browser-recovery/recovery-core.js'), 'utf8').includes('if (globalThis.overleafLanGate) return [];'));
   writeFileSync(editorPath, editor.replace(header, 'function extension(State, Transaction, container, name) {\n    if (globalThis.overleafLanGate) return [];\n    return State.transactionFilter.of('));
 }
+cpSync(join(repository, 'runtime/participant-compile/worker.js'), join(extension, 'recovery/busytex/busytex_worker.js')); // as package.mjs does
 const manifest = JSON.parse(readFileSync(join(repository, 'runtime/chrome-extension/manifest.json'), 'utf8'));
 writeFileSync(join(extension, 'manifest.json'), JSON.stringify(manifest));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
@@ -50,6 +52,8 @@ const cleanup = async (...contexts) => { for (const context of contexts) await c
 let ownerContext, guestContext; const errors = [];
 try {
   ownerContext = await profile('owner', { registerHelper: true }); guestContext = await profile('guest');
+  const guestLogs = []; // every console line of the participant profile, pages and workers (the compiler runs in a worker)
+  guestContext.on('console', m => guestLogs.push(m.text())); if (process.env.LAN_DEBUG) guestContext.on('requestfailed', r => guestLogs.push('failed ' + r.url().slice(0, 160))); if (process.env.LAN_DEBUG) guestContext.on('response', r => { if (r.status() >= 400) guestLogs.push(r.status() + ' ' + r.url().slice(0, 160)); }); guestContext.on('page', p => p.on('worker', w => w.on('console', m => guestLogs.push(m.text()))));
   const owner = await ownerContext.newPage(); owner.on('pageerror', error => errors.push('owner: ' + error.message.slice(0, 200)));
   if (process.env.LAN_DEBUG) { owner.on('console', m => console.log('[owner console]', m.text().slice(0, 300))); owner.on('requestfailed', r => console.log('[owner failed]', r.url().slice(0, 120))); }
   await owner.goto(root + '/extension/index.html');
@@ -127,17 +131,82 @@ try {
   await editorOf(rejoin).waitFor({ timeout: 60000 }); await until(async () => (await docOf(rejoin)) === ownerText, 'rejoined participant has the owner text');
   await insert(rejoin, 'end', '% after rejoin\n'); await until(async () => (await docOf(again)).includes('% after rejoin'), 'edit after rejoin reaches the owner');
   note('rejoin with a new room code: old code refused, shared text current, edits flow');
+  // ---- S2-04 owner permissions: restricted by default, owner grants a copy, downgrade stops new copies, enforcement without the UI
+  const copyIds = ['#local-zip', '#local-pdf', '#local-export', '#local-savecopy'], states = page => page.evaluate(ids => ids.map(id => document.querySelector(id).disabled), copyIds);
+  const permission = panel2.getByLabel('Permission for Zoë 😀');
+  assert.equal(await permission.inputValue(), 'online'); assert.deepEqual(await states(rejoin), [true, true, true, true]);
+  note('owner lists the participant with "Edit while host is online" (default); participant copy/export/download/save controls are disabled');
+  const scan = (page, markers) => page.evaluate(async markers => { // every browser store of the extension origin, searched for restricted text
+    const hit = value => markers.some(marker => value.includes(marker)), text = value => JSON.stringify(value, (_, x) => ArrayBuffer.isView(x) ? new TextDecoder().decode(x) : x) ?? '';
+    const out = { projects: 0, idbHits: 0, local: 0, session: 0, cacheEntries: 0, cacheHits: 0 };
+    for (const { name } of await indexedDB.databases()) {
+      const db = await new Promise((resolve, reject) => { const r = indexedDB.open(name); r.onsuccess = () => resolve(r.result); r.onerror = reject; });
+      for (const store of db.objectStoreNames) {
+        const all = await new Promise(resolve => { const q = db.transaction(store).objectStore(store).getAll(); q.onsuccess = () => resolve(q.result); });
+        if (name === 'overleaf-local-projects' && store === 'projects') out.projects = all.length;
+        out.idbHits += all.filter(value => hit(text(value))).length;
+      }
+      db.close();
+    }
+    out.local = Object.entries(localStorage).filter(entry => hit(entry.join(' '))).length; out.session = Object.entries(sessionStorage).filter(entry => hit(entry.join(' '))).length;
+    for (const name of await caches.keys()) { const cache = await caches.open(name); for (const request of await cache.keys()) { out.cacheEntries++; const body = await (await cache.match(request)).blob(); if (hit(request.url) || (body.size < 8e6 && hit(await body.text()))) out.cacheHits++; } }
+    return out;
+  }, markers);
+  // restricted edit + in-memory compile; \typeout puts the marker on TeX's stdout, which must not reach the console
+  const restricted = '\\documentclass{article}\n\\begin{document}\nRestricted RSECRETA text.\\typeout{RSECRETA-stdout}\n\\end{document}\n';
+  await editorOf(rejoin).evaluate((node, text) => { const view = node.cmView.view; view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); }, restricted);
+  await until(async () => (await docOf(again)) === restricted, 'restricted edit reaches the owner');
+  await rejoin.getByRole('button', { name: 'Recompile', exact: true }).click();
+  await rejoin.locator('.textLayer span').filter({ hasText: 'RSECRETA' }).first().waitFor({ timeout: 120000 })
+    .catch(async error => { console.log('participant status:', await rejoin.locator('#local-status').textContent()); if (process.env.LAN_DEBUG) console.log('GUESTLOG', guestLogs.filter(l => !/RSECRET/.test(l)).slice(-15).join('\n')); throw error; });
+  note('restricted participant compiles locally and sees the PDF (output kept in session memory)');
+  const devtools = await rejoin.evaluate(async () => { const t = await (await fetch('/extension/native-template.json')).json(); return globalThis.overleafLocalProjects.local(t, 'Devtools copy', [{ path: 'main.tex', content: 'RSECRETA' }], 'main.tex').then(() => 'saved', e => e.message); });
+  assert.match(devtools, /not allowed/); const downloads = []; rejoin.on('download', d => downloads.push(d.suggestedFilename()));
+  await rejoin.evaluate(ids => { for (const id of ids) document.querySelector(id).disabled = false; }, copyIds); // a participant who re-enables the controls
+  for (const id of ['#local-zip', '#local-pdf']) { await rejoin.locator(id).click(); await until(async () => /not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }
+  for (const id of ['#local-export', '#local-savecopy']) { await rejoin.evaluate(sel => document.querySelector(sel).click(), id); await until(async () => /not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }
+  await rejoin.waitForTimeout(300); assert.deepEqual(downloads, []);
+  const fresh = await guestContext.newPage(); await fresh.goto(root + '/extension/index.html'); // a reload's view: a new page of the same profile
+  const restrictedScan = await scan(fresh, ['RSECRETA']); await fresh.close();
+  assert.deepEqual({ ...restrictedScan, cacheEntries: undefined }, { projects: 0, idbHits: 0, local: 0, session: 0, cacheEntries: undefined, cacheHits: 0 }, JSON.stringify(restrictedScan));
+  assert(!guestLogs.some(line => line.includes('RSECRETA')), 'restricted text in the participant console');
+  note('restricted: devtools save, re-enabled buttons and direct clicks are refused; no download; nothing in IndexedDB/localStorage/sessionStorage/CacheStorage/console, read from a freshly loaded page', JSON.stringify(restrictedScan));
+  // grant: explicit copies work
+  await permission.selectOption('copy'); await until(async () => (await states(rejoin)).every(disabled => !disabled), 'controls enabled after the copy grant');
+  await rejoin.locator('#local-zip').click(); await until(() => downloads.some(name => name.endsWith('.zip')), 'ZIP download');
+  await rejoin.locator('#local-pdf').click(); await until(() => downloads.includes('output.pdf'), 'PDF download');
+  await rejoin.evaluate(() => document.querySelector('#local-savecopy').click()); await until(async () => /standalone copy was saved/.test(await rejoin.locator('#local-status').textContent()), 'standalone copy saved');
+  assert.equal((await scan(rejoin, [])).projects, 1); note('owner grants "Keep a copy": ZIP, PDF download and a standalone saved copy work', downloads.join(','));
+  // downgrade: new copies stop, the earlier copy is not recalled
+  await permission.selectOption('online'); await until(async () => (await states(rejoin)).every(Boolean), 'controls disabled after the downgrade');
+  await rejoin.evaluate(ids => { for (const id of ids) document.querySelector(id).disabled = false; }, copyIds);
+  const before = downloads.length; await rejoin.locator('#local-zip').click(); await until(async () => /not allowed/.test(await rejoin.locator('#local-status').textContent()), 'zip refused after downgrade');
+  await rejoin.evaluate(() => document.querySelector('#local-savecopy').click()); await rejoin.waitForTimeout(500); assert.equal(downloads.length, before);
+  await insert(rejoin, 0, '% RSECRETB after downgrade\n'); await until(async () => (await docOf(again)).includes('RSECRETB'), 'post-downgrade edit reaches the owner');
+  assert.equal((await scan(rejoin, [])).projects, 1); note('downgrade disables copies and the owner refuses them; the earlier copy remains');
   // ---- stop sharing revokes
   await panel2.getByRole('button', { name: 'Stop sharing' }).click();
   await until(async () => /stopped/i.test(await rejoin.locator('[role=alert]').textContent()), 'participant removed on stop'); note('stop sharing ends the participant session');
+  for (const id of ['#local-savecopy', '#local-zip']) { await rejoin.evaluate(sel => { const node = document.querySelector(sel); node.disabled = false; node.click(); }, id); await until(async () => /ended|not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused after revoke'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }
+  note('revoked session: save-copy and export are refused');
   // ---- the participant device kept no project and no source text in browser storage
   const probe = await guestContext.newPage(); await probe.goto(root + '/extension/index.html');
   const stored = await probe.evaluate(async () => {
     const projects = await new Promise(resolve => { const r = indexedDB.open('overleaf-local-projects'); r.onsuccess = () => { const db = r.result; if (!db.objectStoreNames.contains('projects')) { db.close(); resolve(0); return; } const c = db.transaction('projects').objectStore('projects').count(); c.onsuccess = () => { db.close(); resolve(c.result); }; }; r.onerror = () => resolve(-1); });
-    const local = Object.entries(localStorage).filter(([, v]) => /Hello world|OWNER|Türkçe|after rejoin/.test(v)).length;
+    const local = Object.entries(localStorage).filter(([, v]) => /Hello world|OWNER|Türkçe|after rejoin|RSECRET/.test(v)).length;
     return { projects, local };
   });
-  assert.deepEqual(stored, { projects: 0, local: 0 }); note('participant profile: no saved project, no source text in localStorage', JSON.stringify(stored));
+  assert.deepEqual(stored, { projects: 1, local: 0 }); note('participant profile: only the explicitly permitted copy is saved, no source text in localStorage', JSON.stringify(stored));
+  const final = await scan(probe, ['RSECRETB']); assert.deepEqual([final.idbHits, final.cacheHits], [0, 0], JSON.stringify(final));
+  assert(!guestLogs.some(line => /RSECRET/.test(line)), 'restricted text in the participant console'); note('text typed after the downgrade is in no browser store or console');
+  // the permitted copy is an independent project: it opens and saves with the network off and no session
+  await guestContext.setOffline(true);
+  const copyId = await probe.evaluate(() => new Promise(resolve => { const r = indexedDB.open('overleaf-local-projects'); r.onsuccess = () => { const q = r.result.transaction('projects').objectStore('projects').getAll(); q.onsuccess = () => { r.result.close(); resolve(q.result[0].id); }; }; }));
+  await probe.goto(root + '/recovery/native-workspace.html#' + copyId); await editorOf(probe).waitFor({ timeout: 60000 });
+  await until(async () => (await docOf(probe)).includes('Restricted RSECRETA text.'), 'saved copy holds the shared text');
+  await insert(probe, 0, '% offline edit\n'); await until(async () => /Saved in this browser/.test(await probe.locator('#local-status').textContent()), 'offline edit saved');
+  await probe.reload(); await editorOf(probe).waitFor({ timeout: 60000 }); await until(async () => (await docOf(probe)).startsWith('% offline edit\n'), 'offline edit kept after reload');
+  note('permitted copy reopens offline, is edited and keeps the edit across a reload');
   assert.deepEqual(errors, [], 'page errors');
   console.log(`PASS ${results.length} checks (loopback only; no physical LAN)`);
 } finally { await cleanup(ownerContext, guestContext); }

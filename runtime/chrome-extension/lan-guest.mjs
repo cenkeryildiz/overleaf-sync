@@ -79,6 +79,8 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       /** Owner-permitted, explicit copies. `save(copy)` must create the standalone project (overleafLocalProjects.local); file export gets the released copy. */
       saveCopy: save => saveStandaloneCopy({ gate, store, send: m => session.send(m), save: copy => save(copyResources(copy), copy) }),
       exportCopy: kind => exportCopy({ gate, store, send: m => session.send(m), kind }),
+      /** One owner-signed permit for an action that hands out no source copy (the compiled PDF download). */
+      authorize: kind => gate.authorize(m => session.send(m), kind),
     };
   } catch (error) { clearTimeout(timer); session.leave(); store.wipe(); socket.close(); throw error; }
 }
@@ -106,7 +108,9 @@ export async function memoryProjects(shared, template) {
         store.write(current.path, text); revisions.set(current.path, current.revision + 1);
         return { ...current, content: text, revision: current.revision + 1 };
       },
-      create: refuse, list: refuse, output: refuse, blank: refuse, local: refuse, add: refuse, change: refuse, viewPdf: refuse,
+      // Compiled PDF/SyncTeX stay on this object (session memory); native-workspace serves them from there, never from IndexedDB.
+      output: async (current, expected, pdf, synctex, digest) => ({ ...current, pdf, synctex, outputDigest: digest, pdfImported: false, pdfDigest: undefined }),
+      create: refuse, list: refuse, blank: refuse, local: refuse, add: refuse, change: refuse, viewPdf: refuse,
     }),
   };
 }

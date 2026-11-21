@@ -27,6 +27,8 @@ if (location.pathname.startsWith('/recovery/busytex/')) {
   // The generated package loaders console.error exactly these two lines before their normal fetch fallback; Chrome lists them as extension errors.
   const nativeError = console.error.bind(console), expected = ['using IndexedDB to cache data can only be done on a web page or in a web worker', 'falling back to default preload behavior'];
   console.error = (...args) => { if (!(args.length === 1 && expected.includes(args[0]?.message ?? args[0]))) nativeError(...args); };
+  // TeX stdout echoes source lines (errors, overfull boxes); the page shows the compile log, the console must not keep it (LAN restricted sessions).
+  console.log = console.info = console.debug = () => {};
 }
 // Measurement only (OPT-01): stage marks that browser checks read with performance.getEntriesByType('mark').
 const nativePost = self.postMessage.bind(self), compileStreaming = WebAssembly.compileStreaming, instantiate = WebAssembly.instantiate;
