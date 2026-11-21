@@ -344,6 +344,14 @@ try {
     const method = init?.method || (input instanceof Request ? input.method : 'GET');
     if (url.origin !== location.origin) return new Response('External requests disabled in Local only mode', { status: 503 });
     if (globalThis.overleafStandalone && url.pathname.startsWith(`/recovery/native-output/${project.id}/`) && url.pathname.endsWith('/output.log')) return new Response(compileLog, { headers: { 'Content-Type': 'text/plain' } });
+    if (joined && url.pathname.startsWith(`/recovery/native-output/${project.id}/${project.outputDigest}/`)) { // shared session: the PDF lives in this tab only
+      const bytes = url.pathname.endsWith('/output.pdf') ? project.pdf : url.pathname.endsWith('/output.synctex.gz') && project.synctex ? new Blob([project.synctex]) : null;
+      if (!bytes) return new Response('Local output unavailable', { status: 404 });
+      const range = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('Range')?.match(/^bytes=(\d+)-(\d*)$/);
+      const start = range ? Number(range[1]) : 0, end = range ? Math.min(bytes.size - 1, range[2] ? Number(range[2]) : bytes.size - 1) : bytes.size - 1;
+      if (range && start > end) return new Response(null, { status: 416 });
+      return new Response(bytes.slice(start, end + 1), { status: range ? 206 : 200, headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1), ...(range ? { 'Content-Range': `bytes ${start}-${end}/${bytes.size}` } : {}) } });
+    }
     if (url.pathname === `/editingSession/${clientProject}` && method === 'PUT') return new Response(null, { status: 204 });
     const editing = url.pathname.match(new RegExp(`^/project/${clientProject}/(doc|file|folder)/([a-f0-9]{24})(?:/(rename|move))?$`));
     if (globalThis.overleafStandalone && editing && (method === 'DELETE' || method === 'POST')) {
@@ -485,21 +493,24 @@ try {
   };
   globalThis.fetch = localFetch; globalThis.overleafParticipantFetch = localFetch;
   if (globalThis.overleafStandalone) {
-    // The native upload dialog uses XHR; route only its local endpoint through the same guarded adapter.
+    // The native upload dialog uses XHR; route only its local endpoint through the same guarded adapter. PDF.js also reads
+    // chrome-extension: URLs with XHR, so a shared session's in-memory PDF goes through the adapter too, not the service worker.
     const NativeXHR = globalThis.XMLHttpRequest;
     globalThis.XMLHttpRequest = class extends NativeXHR {
-      #local; #url; #state = 0; #result; #text = ''; #controller;
+      #local; #url; #method; #headers; #state = 0; #result; #text = ''; #buffer; #controller;
       open(method, input, ...args) {
-        const url = new URL(input, location.href);
-        this.#local = method.toUpperCase() === 'POST' && url.origin === location.origin && url.pathname.toLowerCase() === `/project/${clientProject}/upload`;
-        this.#url = url.href; this.#result = undefined; this.#text = ''; this.#state = 1;
+        const url = new URL(input, location.href); this.#method = method.toUpperCase(); this.#headers = new Headers();
+        this.#local = url.origin === location.origin && ((this.#method === 'POST' && url.pathname.toLowerCase() === `/project/${clientProject}/upload`) ||
+          (!!joined && this.#method === 'GET' && url.pathname.startsWith('/recovery/native-output/')));
+        this.#url = url.href; this.#result = undefined; this.#text = ''; this.#buffer = undefined; this.#state = 1;
         return super.open(method, input, ...args);
       }
+      setRequestHeader(name, value) { if (this.#local) this.#headers.set(name, value); else super.setRequestHeader(name, value); }
       get readyState() { return this.#local ? this.#state : super.readyState; }
       get status() { return this.#local ? this.#result?.status || 0 : super.status; }
       get statusText() { return this.#local ? this.#result?.statusText || '' : super.statusText; }
       get responseText() { return this.#local ? this.#text : super.responseText; }
-      get response() { return this.#local ? this.responseType === 'json' ? (this.#text ? JSON.parse(this.#text) : null) : this.#text : super.response; }
+      get response() { return this.#local ? this.#buffer ?? (this.responseType === 'json' ? (this.#text ? JSON.parse(this.#text) : null) : this.#text) : super.response; }
       get responseURL() { return this.#local ? this.#url : super.responseURL; }
       getResponseHeader(name) { return this.#local ? this.#result?.headers.get(name) || null : super.getResponseHeader(name); }
       getAllResponseHeaders() { return this.#local ? [...(this.#result?.headers || [])].map(([key, value]) => `${key}: ${value}\r\n`).join('') : super.getAllResponseHeaders(); }
@@ -510,11 +521,13 @@ try {
         this.dispatchEvent(new ProgressEvent('loadstart')); this.upload.dispatchEvent(new ProgressEvent('loadstart'));
         void (async () => {
           try {
-            const result = await localFetch(this.#url, { method: 'POST', body, signal: controller.signal });
-            const text = await result.text(); if (controller.signal.aborted) return;
-            this.#result = result; this.#text = text; this.#state = 4;
-            this.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: body.get('qqfile')?.size || 0, total: body.get('qqfile')?.size || 0 }));
-            this.upload.dispatchEvent(new ProgressEvent('load')); this.upload.dispatchEvent(new ProgressEvent('loadend'));
+            const result = await localFetch(this.#url, { method: this.#method, headers: this.#headers, ...(this.#method === 'POST' ? { body } : {}), signal: controller.signal });
+            const buffer = this.responseType === 'arraybuffer' ? await result.arrayBuffer() : undefined, text = buffer ? '' : await result.text(); if (controller.signal.aborted) return;
+            this.#result = result; this.#text = text; this.#buffer = buffer; this.#state = 4;
+            if (this.#method === 'POST') {
+              this.upload.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: body.get('qqfile')?.size || 0, total: body.get('qqfile')?.size || 0 }));
+              this.upload.dispatchEvent(new ProgressEvent('load')); this.upload.dispatchEvent(new ProgressEvent('loadend'));
+            } else this.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: buffer?.byteLength ?? text.length, total: buffer?.byteLength ?? text.length }));
             this.dispatchEvent(new Event('readystatechange')); this.dispatchEvent(new ProgressEvent('load')); this.dispatchEvent(new ProgressEvent('loadend'));
           } catch { if (!controller.signal.aborted) { this.#state = 4; this.dispatchEvent(new ProgressEvent('error')); this.dispatchEvent(new ProgressEvent('loadend')); } }
           finally { clearTimeout(timer); }
@@ -551,9 +564,15 @@ try {
     catch (error) { status(error.message + '. Your source files are retained.', true); }
   }
   document.querySelector('#local-zip').onclick = exportZip;
-  document.querySelector('#local-pdf').onclick = () => {
-    if (project.pdf) download(project.pdf, 'output.pdf', 'application/pdf'); else status('No saved PDF yet. Recompile the project first.', true);
+  document.querySelector('#local-pdf').onclick = async () => {
+    if (!project.pdf) { status('No saved PDF yet. Recompile the project first.', true); return; }
+    try { if (joined) await joined.shared.authorize('download'); download(project.pdf, 'output.pdf', 'application/pdf'); } catch (error) { status(error.message, true); }
   };
+  if (joined) { // visible state only: every handler above still needs an owner-signed ticket, and the owner re-checks the grant
+    const copyControls = ['#local-zip', '#local-pdf', '#local-export', '#local-savecopy'].map(id => document.querySelector(id));
+    const allowCopies = grant => { for (const node of copyControls) { node.disabled = grant !== 'copy'; node.title = grant === 'copy' ? '' : 'The project owner has not allowed copies of this project'; } };
+    lanEvents.onGrant = allowCopies; allowCopies(joined.shared.store.grant);
+  }
   document.addEventListener('click', event => {
     const link = event.target.closest('a[href]'); if (!link) return;
     const url = new URL(link.href, location.href);

@@ -25,6 +25,7 @@ try {
     assert(exits.every(code => code === 0), 'Public asset extraction failed: ' + errors.join(''));
   }
   execFileSync('docker', ['cp', `${container}:/overleaf/services/web/public/participant/busytex`, join(destination, 'recovery')], { stdio: 'pipe' });
+  cpSync(resolve(repository, 'runtime/participant-compile/worker.js'), join(destination, 'recovery/busytex/busytex_worker.js'));   // current worker guards, not the image's copy
   const dictionaries = join(destination, 'js/dictionaries/0.0.3'); mkdirSync(dictionaries, { recursive: true });
   for (const language of ['en_US', 'en_GB']) for (const suffix of ['aff', 'dic']) execFileSync('docker', ['cp', `${container}:/overleaf/services/web/public/js/dictionaries/0.0.3/${language}.${suffix}`, join(dictionaries, `${language}.${suffix}`)], { stdio: 'pipe' });
   for (const name of ['favicon.svg', 'favicon-compiled.svg', 'favicon-compiling.svg', 'favicon-error.svg']) execFileSync('docker', ['cp', `${container}:/overleaf/services/web/public/${name}`, join(destination, name)], { stdio: 'pipe' });
