@@ -23,9 +23,9 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
 CARGO_TARGET_DIR="$BUILD_DIR" cargo build --offline --release --quiet --manifest-path runtime/chrome-extension/lan/Cargo.toml
 mkdir -p -- "$APP_DIR" "$HOSTS_DIR"
 cp -- "$BUILD_DIR/release/latex-local-lan" "$BINARY"
-chmod 755 -- "$BINARY"
+chmod 755 "$BINARY"
 cat > "$MANIFEST" <<EOF
 {"name":"$NAME","description":"LaTeX Local: Share on this network","path":"$BINARY","type":"stdio","allowed_origins":["chrome-extension://$EXTENSION_ID/"]}
 EOF
-chmod 644 -- "$MANIFEST"
+chmod 644 "$MANIFEST"
 echo "Installed. Restart Chrome, then use Share in the editor. Remove with: sh scripts/install-lan-helper.sh --uninstall"
