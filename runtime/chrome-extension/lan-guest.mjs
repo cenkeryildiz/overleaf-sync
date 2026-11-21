@@ -6,6 +6,7 @@ import { connectStore } from './lan-session-store.mjs';
 import { parseJoinLink, validUsername } from './lan-room.mjs';
 import { GrantGate, saveStandaloneCopy, exportCopy, copyResources } from './lan-grants.mjs';
 import { apply, invert, diff } from './lan-ot.mjs';
+import { ProjectTree, SnapshotReceiver, streamFiles, rekey, within } from './lan-transfer.mjs';
 
 const randomHex = bytes => Array.from(globalThis.crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2, '0')).join('');
 const TIMEOUT = 15000, HOLD = 5000;
@@ -15,9 +16,11 @@ const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
 
 /**
  * Opens the socket, joins with the passcode and username, receives the verified project. Resolves with the controller
- * the native adapter uses: join(path) -> {text, v}, edit(path, {op, v}) -> version, cursor(c), leave(), plus `store`, `docs`, `gate`.
+ * the native adapter uses: join(path) -> {text, v}, edit(path, {op, v}) -> version, fs(op) -> onFs result, cursor(c), leave(),
+ * plus `store`, `docs`, `folders`, `gate`.
  * Handlers: onRemote(path, {op, v, by}), onCursor({name, path, row, column}), onEnd(reason), onGrant(grant), onPresence(names),
- * onLost(reason, {retrying}), onResumed(conflicts).
+ * onLost(reason, {retrying}), onResumed(conflicts), onFs(op) for every file-tree change the owner accepted (already applied to
+ * `store`; put ops carry `bytes`); its result answers our own fs().
  *
  * S2-05 host loss: editing locks (onLost), unacknowledged edits stay in this closure only, and a rejoin to the same room
  * (resume token from the last welcome) replays the owner's log after the last known version: own entries acknowledge the
@@ -25,7 +28,7 @@ const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
  * resent with their ids and the owner transforms them. A new room or a log that no longer covers us is reported in
  * onResumed(conflicts); `reconcile` below settles those explicitly. Revoke, stop and leave end everything.
  */
-export async function joinSession({ link, passcode, username, onRemote = () => {}, onCursor = () => {}, onEnd = () => {}, onGrant = () => {}, onPresence = () => {},
+export async function joinSession({ link, passcode, username, onRemote = () => {}, onCursor = () => {}, onEnd = () => {}, onGrant = () => {}, onPresence = () => {}, onFs = () => {},
   onLost = () => {}, onResumed = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket }) {
   let target = parseJoinLink(link), current = link, code = passcode; // the passcode stays in this closure for the bounded rejoin; never logged or stored
   const name = validUsername(username), cid = randomHex(16), waiting = new Map(), cursors = new Map(), files = new Map(), byKey = new Map(), counters = new Map();
@@ -78,18 +81,57 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       if (m.done && f.syncing) { f.syncing = false; release(m.path, f); resumed(); }
     });
   }
-  const onMessage = c => m => {
+  /** One owner-accepted file-tree change on connection c, in the owner's order: its memory copy, open files, then the editor. */
+  const change = async (c, m, upload) => {
+    if (!Number.isSafeInteger(m.seq) || m.seq <= c.seq) return; // already part of the received project
+    if (m.seq !== c.seq + 1) throw Error('A change to the shared files was lost');
+    const op = c.tree.check(m.op), bytes = op.kind === 'put' ? (upload?.xfer === m.xfer && upload.files.size === 1 ? upload.files.get(op.path) : null) : undefined;
+    if (bytes === null || (bytes && bytes.length !== op.size)) throw Error('An uploaded file did not arrive intact');
+    if (op.kind === 'doc' || op.kind === 'put') c.store.write(op.path, op.kind === 'doc' ? '' : bytes);
+    else if (op.kind === 'relocate') c.store.move(op.from, op.to);
+    else if (op.kind === 'main') { if (!c.docs.has(op.path)) throw Error('The owner chose a main document that is not text'); c.store.setMain(op.path); }
+    else if (op.kind === 'remove') for (const path of c.tree.paths) if (within(path, op.from)) c.store.remove(path);
+    const moved = c.tree.apply(op); c.seq = m.seq;
+    if (op.kind === 'doc' || (op.kind === 'put' && op.doc)) c.docs.add(op.path);
+    for (const [from, to] of moved) if (c.docs.delete(from) && to !== null) c.docs.add(to);
+    if (op.from && c === conn) { // open files, their unacknowledged edits and pending joins follow the rename, or fail on delete
+      const to = op.kind === 'relocate' ? op.to : null;
+      for (const o of [...byKey.values()]) if (within(o.path, op.from)) {
+        if (to === null) finish(o, null, Error('The file was deleted'));
+        else { byKey.delete(o.key); o.path = to + o.path.slice(op.from.length); o.key = `${o.path}\0${o.id}`; byKey.set(o.key, o); }
+      }
+      rekey(files, op.from, to); rekey(counters, op.from, to);
+      for (const w of rekey(waiting, op.from, to)) w.reject(Error('The file was deleted'));
+    }
+    const result = await (async () => onFs({ ...op, ...(bytes ? { bytes } : {}), by: typeof m.by === 'string' ? m.by : '' }))().catch(error => error);
+    if (typeof m.ref === 'string') settle(`fs:${m.ref}`, !(result instanceof Error), result);
+  };
+  const fsMessage = async (c, m) => {
+    if (m.k === 'blob') { c.blob = null; c.blob = await c.blobs.accept(m.m).catch(() => null); }
+    else if (m.k === 'refused') settle(`fs:${m.ref}`, false, Error(String(m.reason ?? 'Refused by the owner')));
+    else if (m.k === 'change') { const upload = c.blob; c.blob = null; if (c.tree) await change(c, m, upload); else c.early.push([m, upload]); } // early: the project is still arriving
+  };
+  // Messages of one connection run in order; a file change finishes before the next message. A broken change ends a live
+  // session (as before the merge) and fails a connection that is still opening.
+  const onMessage = c => m => { c.tail = c.tail.then(() => handle(c, m)).catch(error => { if (c === conn) end(error.message); else c.project?.reject(error); }); };
+  const handle = async (c, m) => {
     if (c.dead || c.gate.receive(m)) return; // grant key, tickets and the denials that answer a ticket request
-    if (m.t === 'tree') { if (!c.docs && Array.isArray(m.docs) && m.docs.length <= 1000 && m.docs.every(p => typeof p === 'string')) c.docs = new Set(m.docs); return; }
+    if (m.t === 'tree') {
+      if (!c.treeSeen && Array.isArray(m.docs) && m.docs.length <= 1000 && m.docs.every(p => typeof p === 'string') && Number.isSafeInteger(m.seq)) {
+        c.treeSeen = true; c.docs = new Set(m.docs); c.seq = m.seq; c.folders = Array.isArray(m.folders) && m.folders.length <= 1000 ? m.folders.filter(p => typeof p === 'string') : [];
+      }
+      return;
+    }
+    if (m.t === 'fs') return fsMessage(c, m);
     if (c !== conn) return; // replies to a connection still being opened; the rejoin catches up from the log
     switch (m.t) {
-      case 'doc': if (typeof m.path === 'string' && typeof m.text === 'string' && Number.isSafeInteger(m.v)) settle(`join\0${m.path}`, true, { text: m.text, v: m.v }); break;
+      case 'doc': if (typeof m.path === 'string' && typeof m.text === 'string' && Number.isSafeInteger(m.v)) settle(`${m.path}\0join`, true, { text: m.text, v: m.v }); break;
       case 'ack': { const o = byKey.get(`${m.path}\0${m.id}`), f = files.get(m.path); if (o && f && Number.isSafeInteger(m.v)) { f.known = Math.max(f.known, m.v); finish(o, m.v - 1 - f.off); } break; }
       case 'refused': {
         const o = m.id && byKey.get(`${m.path}\0${m.id}`);
         if (o) finish(o, null, Error(`Refused by the owner (${m.reason})`));
         else if (!m.id && files.get(m.path)?.syncing) conflict(m.path); // the log no longer covers us
-        else settle(`join\0${m.path}`, false, Error(`Refused by the owner (${m.reason})`));
+        else settle(`${m.path}\0join`, false, Error(`Refused by the owner (${m.reason})`));
         break;
       }
       case 'denied': { const o = byKey.get(String(m.ref)); if (o) finish(o, null, Error('The owner has not allowed this action')); else settle(String(m.ref), false, Error('The owner has not allowed this action')); break; }
@@ -101,14 +143,15 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   };
   /** One authenticated connection with a freshly transferred project; nothing is adopted until it is complete. */
   async function open(t, pass, resume) {
-    const c = { gate: new GrantGate({ roomId: t.roomId, name }), docs: null, dead: false };
-    let project; const transfer = new Promise((resolve, reject) => { project = { resolve, reject }; }); transfer.catch(() => {});
+    const c = { gate: new GrantGate({ roomId: t.roomId, name }), blobs: new SnapshotReceiver(), docs: null, folders: [], treeSeen: false, seq: 0, tree: null, blob: null,
+      tail: Promise.resolve(), early: [], dead: false };
+    const transfer = new Promise((resolve, reject) => { c.project = { resolve, reject }; }); transfer.catch(() => {});
     const socket = new WebSocketImpl(t.url); socket.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(Error('Cannot reach the owner at this link')); });
     Object.assign(c, connectStore({
       roomId: t.roomId, passcode: pass, username, resume, send: bytes => socket.send(bytes), close: () => socket.close(), onMessage: onMessage(c),
-      onGrant: g => { c.gate.observeGrant(g); if (c === conn) onGrant(g); }, onProject: p => project.resolve(p), onTransferError: e => project.reject(e),
-      onEnd: (reason, final) => { project.reject(Error(reason)); lost(c, reason, final); },
+      onGrant: g => { c.gate.observeGrant(g); if (c === conn) onGrant(g); }, onProject: p => c.project.resolve(p), onTransferError: e => c.project.reject(e),
+      onEnd: (reason, final) => { c.project.reject(Error(reason)); lost(c, reason, final); },
     }));
     socket.onmessage = event => c.session.receive(new Uint8Array(event.data));
     socket.onclose = () => c.session.closed();
@@ -117,21 +160,26 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       c.welcome = await Promise.race([c.session.joined, timeout]);
       c.gate.observeGrant(c.welcome.grant);
       await c.requestSnapshot();
-      await Promise.race([transfer, timeout]);
-      if (!c.docs) throw Error('The owner sent an incomplete project');
+      const received = await Promise.race([transfer, timeout]);
+      await (c.tail = c.tail.then(async () => { // the tree message precedes the bytes; changes made meanwhile are replayed on top, in order
+        if (!c.docs) throw Error('The owner sent an incomplete project');
+        c.tree = new ProjectTree({ files: [...received.files].map(([path, bytes]) => [path, bytes.length]), folders: c.folders, main: received.main });
+        for (const [m, upload] of c.early.splice(0)) await change(c, m, upload);
+      }));
+      if (c.dead) throw Error('The session ended');
       return c;
-    } catch (error) { c.dead = true; c.session.leave(); c.store.wipe(); socket.close(); throw error; }
+    } catch (error) { c.dead = true; c.blobs.abort(); c.session.leave(); c.store.wipe(); socket.close(); throw error; }
     finally { clearTimeout(clock); }
   }
   const adopt = c => { conn = c; token = c.welcome.resume; c.gate.installStorageGuard(); };
   function end(reason) {
     if (state === 'ended') return; state = 'ended'; clearTimeout(timer);
-    conn.gate.end(); conn.store.wipe(); failAll(reason);
+    conn.gate.end(); conn.blobs.abort(); conn.store.wipe(); failAll(reason);
     for (const o of [...byKey.values()]) finish(o, null, Error(reason));
     onEnd(reason);
   }
   function lost(c, reason, final) {
-    if (c.dead) return; c.dead = true; c.gate.end();
+    if (c.dead) return; c.dead = true; c.gate.end(); c.blobs.abort();
     if (c !== conn || state === 'ended') return;
     if (final) return end(reason);
     state = 'lost'; syncs = 0; conflicts = []; failAll(reason);
@@ -153,6 +201,8 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     try { c = await open(t, pass || code, same ? token : undefined); }
     catch (error) { state = 'lost'; if (error.code === 'resume') end('The owner removed you from this session'); throw error; }
     if (state === 'ended') { c.dead = true; c.session.leave(); throw Error('This session has ended'); } // left while reconnecting
+    // shortcut: file-tree changes others made while we were away are in the new store and docs, but the native file tree is
+    // only told about changes from now on (onFs); replay a tree diff through onFs if participants need them shown live.
     adopt(c); target = t; current = next || current; code = pass || code;
     onGrant(c.welcome.grant);
     if (!same) { counters.clear(); for (const f of files.values()) Object.assign(f, { stale: true, hold: null }); conflicts = [...files.keys()]; }
@@ -163,7 +213,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   async function request(path) {
     if (state !== 'live') throw Error('Not connected');
     if (!conn.docs.has(path)) throw Error('Not a shared text file');
-    const ref = `join\0${path}`, answer = wait(ref);
+    const ref = `${path}\0join`, answer = wait(ref);
     answer.catch(() => {}); await conn.session.send({ t: 'update', k: 'join', path, ref }).catch(error => { settle(ref, false, error); throw error; });
     return answer;
   }
@@ -172,7 +222,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     state = 'live';
   return {
       cid, name, get state() { return state; }, get link() { return current; }, get store() { return conn.store; }, get session() { return conn.session; },
-      get docs() { return conn.docs; }, get gate() { return conn.gate; }, get main() { return conn.store.main; }, get grant() { return conn.session.grant; },
+      get docs() { return conn.docs; }, get folders() { return conn.tree.folders; }, get gate() { return conn.gate; }, get main() { return conn.store.main; }, get grant() { return conn.session.grant; },
       participants: conn.welcome.participants,
       /** Current text/version of one shared text file; later remote edits to it are delivered through onRemote. */
       async join(path) {
@@ -180,11 +230,20 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
         files.set(path, { known: s.v, off: 0, out: [], hold: null, stale: false, syncing: false });
         return s;
       },
+      /** Asks the owner for one file-tree change ({kind, ...}; put carries `bytes`); resolves once it is applied here (onFs's result). */
+      async fs(op) {
+        if (state !== 'live') throw Error('Not connected');
+        const { bytes, ...rest } = op ?? {}, ref = randomHex(8), key = `fs:${ref}`, { session } = conn;
+        if (rest.kind === 'put') ({ xfer: rest.xfer } = await streamFiles(m => session.send({ t: 'fs', k: 'blob', m }), { files: [{ path: rest.path, bytes }] }));
+        const answer = wait(key); answer.catch(() => {});
+        await session.send({ t: 'fs', k: 'op', ref, op: rest }).catch(error => { settle(key, false, error); throw error; });
+        return answer;
+      },
       leaveDoc: path => files.delete(path),
       /** Resolves with the version the editor must report as applied, or null when reconciliation dropped the edit. */
       edit(path, update) {
         const f = files.get(path);
-        if (!f || state === 'ended') return Promise.reject(Error('Not connected'));
+        if (!f || state === 'ended') return Promise.reject(Error(state !== 'ended' && !conn.docs.has(path) ? 'The file was deleted' : 'Not connected'));
         let base = update.v + f.off, ops = update.op;
         if (update.v < f.floor) { // queued before a reconciliation: the editor's own op was already replaced or dropped there
           const x = f.expect; f.expect = undefined; if (!x) return Promise.resolve(null); ({ base, ops } = x);
@@ -256,10 +315,10 @@ export async function memoryProjects(shared, template) {
   const revisions = new Map();
   const encode = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
   const refuse = async () => { throw Error('This is not available in a shared session'); };
-  const project = { id: workspace, account, project: randomHex(12), main: shared.store.has(shared.main) ? shared.main : shared.store.paths()[0], compiler: 'pdflatex', pdf: null, folders: [],
+  const project = { id: workspace, account, project: randomHex(12), main: shared.store.has(shared.main) ? shared.main : shared.store.paths()[0], compiler: 'pdflatex', pdf: null, folders: shared.folders,
     name: 'Shared project', localOnly: true, native: { ...template, projectMeta: {} } };
-  const file = path => docIds.has(path)
-    ? { path, workspace, doc: docIds.get(path), content: shared.store.readText(path), revision: revisions.get(path) ?? 0 }
+  const file = path => shared.docs.has(path)
+    ? { path, workspace, doc: docIds.get(path) ?? docIds.set(path, randomHex(12)).get(path), content: shared.store.readText(path), revision: revisions.get(path) ?? 0 }
     : { path, workspace, data: encode(shared.store.read(path)), revision: 0 };
   return {
     project, docIds,
@@ -270,7 +329,17 @@ export async function memoryProjects(shared, template) {
         shared.store.write(current.path, text); revisions.set(current.path, current.revision + 1);
         return { ...current, content: text, revision: current.revision + 1 };
       },
-      create: refuse, list: refuse, output: refuse, blank: refuse, local: refuse, add: refuse, change: refuse, viewPdf: refuse,
+      // File-tree changes reach here only after the owner accepted them and lan-guest applied them to the store: these calls
+      // just give the native adapter the updated view, keeping each document's id across a rename.
+      add: async (_, kind, path) => { project.folders = shared.folders; return { project, ...(kind === 'doc' ? { file: file(path) } : {}) }; },
+      change: async (_, __, action) => {
+        const main = action.kind === 'settings' && action.main !== undefined && action.compiler === undefined && action.name === undefined && action.preferences === undefined;
+        if (action.kind !== 'relocate' && action.kind !== 'remove' && action.kind !== 'put' && !main) return refuse();
+        if (action.kind === 'relocate' || action.kind === 'remove') { const to = action.kind === 'relocate' ? action.to : null; rekey(docIds, action.from, to); rekey(revisions, action.from, to); }
+        Object.assign(project, { main: shared.store.main, folders: shared.folders });
+        return { project, files: shared.store.paths().map(file) };
+      },
+      create: refuse, list: refuse, output: refuse, blank: refuse, local: refuse, viewPdf: refuse,
     }),
   };
 }

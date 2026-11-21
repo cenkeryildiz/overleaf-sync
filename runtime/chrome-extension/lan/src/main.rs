@@ -88,19 +88,33 @@ pub fn parse_upgrade(request: &[u8], room: &str) -> Option<String> {
 }
 #[derive(Debug, PartialEq)]
 pub enum Frame { Binary(Vec<u8>), Ping(Vec<u8>), Pong, Close }
-/// Reads one masked, unfragmented client frame; anything else is a protocol violation.
+/// Reads one masked client message: a whole binary frame, or binary + continuation fragments (Chrome splits large messages),
+/// bounded by MAX_FRAME in total; or one control frame. Anything else is a protocol violation.
 pub fn read_frame(reader: &mut impl Read) -> Result<Frame, ()> {
-    let mut head = [0u8; 2]; reader.read_exact(&mut head).map_err(|_| ())?;
-    let (fin, reserved, op, masked) = (head[0] & 0x80 != 0, head[0] & 0x70, head[0] & 0x0f, head[1] & 0x80 != 0);
-    if !fin || reserved != 0 || !masked { return Err(()); }
-    let mut length = u64::from(head[1] & 0x7f);
-    if length == 126 { let mut b = [0u8; 2]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from(u16::from_be_bytes(b)); }
-    else if length == 127 { let mut b = [0u8; 8]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from_be_bytes(b); }
-    if length > MAX_FRAME as u64 || (op >= 8 && length > 125) { return Err(()); }
-    let mut mask = [0u8; 4]; reader.read_exact(&mut mask).map_err(|_| ())?;
-    let mut payload = vec![0u8; length as usize]; reader.read_exact(&mut payload).map_err(|_| ())?;
-    for (index, byte) in payload.iter_mut().enumerate() { *byte ^= mask[index % 4]; }
-    match op { 2 => Ok(Frame::Binary(payload)), 8 => Ok(Frame::Close), 9 => Ok(Frame::Ping(payload)), 10 => Ok(Frame::Pong), _ => Err(()) }
+    let mut message: Option<Vec<u8>> = None;
+    loop {
+        let mut head = [0u8; 2]; reader.read_exact(&mut head).map_err(|_| ())?;
+        let (fin, reserved, op, masked) = (head[0] & 0x80 != 0, head[0] & 0x70, head[0] & 0x0f, head[1] & 0x80 != 0);
+        if reserved != 0 || !masked || (op >= 8 && !fin) { return Err(()); }
+        let mut length = u64::from(head[1] & 0x7f);
+        if length == 126 { let mut b = [0u8; 2]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from(u16::from_be_bytes(b)); }
+        else if length == 127 { let mut b = [0u8; 8]; reader.read_exact(&mut b).map_err(|_| ())?; length = u64::from_be_bytes(b); }
+        let held = if op < 8 { message.as_ref().map_or(0, Vec::len) as u64 } else { 0 };
+        if held + length > MAX_FRAME as u64 || (op >= 8 && length > 125) { return Err(()); }
+        let mut mask = [0u8; 4]; reader.read_exact(&mut mask).map_err(|_| ())?;
+        let mut payload = vec![0u8; length as usize]; reader.read_exact(&mut payload).map_err(|_| ())?;
+        for (index, byte) in payload.iter_mut().enumerate() { *byte ^= mask[index % 4]; }
+        match (op, message.as_mut()) {
+            (2, None) if fin => return Ok(Frame::Binary(payload)),
+            (2, None) => message = Some(payload),
+            (0, Some(held)) => { held.extend_from_slice(&payload); if fin { return Ok(Frame::Binary(message.take().unwrap_or_default())); } },
+            (8, _) => return Ok(Frame::Close),
+            (9, None) => return Ok(Frame::Ping(payload)),
+            (10, _) => if message.is_none() { return Ok(Frame::Pong) },
+            // shortcut: a ping inside a fragmented message is refused (Chrome clients do not send pings); answer it if a client needs that.
+            _ => return Err(()),
+        }
+    }
 }
 pub fn frame(op: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x80 | op];
@@ -244,7 +258,14 @@ fn main() {
         assert_eq!(read_frame(&mut &masked(2, true, b"sealed")[..]), Ok(Frame::Binary(b"sealed".to_vec())));
         assert_eq!(read_frame(&mut &masked(2, true, &vec![7; 70_000])[..]), Ok(Frame::Binary(vec![7; 70_000])));
         assert!(read_frame(&mut &frame(2, b"unmasked")[..]).is_err());
-        assert!(read_frame(&mut &masked(2, false, b"part")[..]).is_err());
+        let joined = [masked(2, false, b"pa"), masked(10, true, b""), masked(0, false, b"r"), masked(0, true, b"t")].concat();
+        assert_eq!(read_frame(&mut &joined[..]), Ok(Frame::Binary(b"part".to_vec())));
+        assert!(read_frame(&mut &masked(2, false, b"part")[..]).is_err());                       // never finished
+        assert!(read_frame(&mut &masked(0, true, b"part")[..]).is_err());                        // continuation without a start
+        assert!(read_frame(&mut &[masked(2, false, b"a"), masked(2, true, b"b")].concat()[..]).is_err());
+        assert!(read_frame(&mut &[masked(2, false, b"a"), masked(9, true, b"")].concat()[..]).is_err());
+        assert!(read_frame(&mut &[masked(2, false, &vec![0; MAX_FRAME]), masked(0, true, b"x")].concat()[..]).is_err()); // bounded in total
+        assert!(read_frame(&mut &masked(9, false, b"")[..]).is_err());
         assert!(read_frame(&mut &masked(1, true, b"text")[..]).is_err());
         assert!(read_frame(&mut &masked(2, true, &vec![0; MAX_FRAME + 1])[..]).is_err());
         assert!(read_frame(&mut &masked(9, true, &[0; 126])[..]).is_err());

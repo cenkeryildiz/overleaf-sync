@@ -220,3 +220,165 @@ test('S2-05 rejoin into a new room: unsafe files wait for an explicit choice; ke
   b.submit([{ p: 5, i: '!' }]); await until(() => b.idle && host2.text('sec/a.tex') === 'ALPHA!'); // versions line up after the choice
   await host2.stop();
 });
+
+// ---- S2-03: exact project transfer and file-tree changes during a session ------------------------------------------------------
+import { CHUNK, MAX_FILE, streamFiles } from '../runtime/chrome-extension/lan-transfer.mjs';
+import { settle } from './lan-transfer-harness.mjs';
+const noise = (length, seed = 1) => { const out = new Uint8Array(length); let s = seed >>> 0; for (let i = 0; i < length; i++) { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; out[i] = s >>> 24; } return out; };
+const hex = bytes => Buffer.from(bytes).toString('hex');
+/** Owner project like native-workspace: text docs (bytes = UTF-8 of the saved text), binary files, folders; apply() mutates it. */
+async function fsRoom() {
+  const r = relay(), files = new Map(), folders = new Set(['figures', 'empty/nested']), applied = [], open = [], project = { main: 'main.tex' };
+  // like native-workspace: an open editor follows a rename and closes on delete
+  const follow = (ctl, op) => { for (const x of open) if (x.ctl === ctl && x.path && op.from && (x.path === op.from || x.path.startsWith(op.from + '/'))) x.path = op.kind === 'relocate' ? op.to + x.path.slice(op.from.length) : null; };
+  const put = (path, bytes, doc) => files.set(path, { bytes, doc, revision: 0 });
+  put('main.tex', text('\\documentclass{article}\r\n\\begin{document}\r\nTürkçe 😀 𝔛\r\n\\end{document}\r\n'), true);
+  put('sec/a.tex', text('alpha\nbeta\r\n'), true);
+  put('figures/plot.png', noise(CHUNK + 1234, 3), false);
+  const pdf = noise(2 * CHUNK + 7, 9); pdf.set(text('%PDF-1.7\n'), 0); put('out/paper.pdf', pdf, false);
+  put('fonts/Ünï.otf', noise(5000, 4), false); put('empty.txt', new Uint8Array(0), false);
+  const inside = (path, root) => path === root || path.startsWith(root + '/');
+  let host;
+  const source = {
+    tree: () => ({ main: project.main, folders: [...folders], docs: [...files].filter(([, f]) => f.doc).map(([p]) => p), files: [...files].map(([path, f]) => ({ path, bytes: f.bytes })) }),
+    text: path => files.get(path)?.doc ? { text: new TextDecoder().decode(files.get(path).bytes), version: files.get(path).revision } : null,
+    persist: (path, value) => { const f = files.get(path); if (f) f.bytes = text(value); },
+    apply: async op => {
+      applied.push(op.kind); follow(host, op);
+      if (op.kind === 'main') { if (!files.get(op.path)?.doc) throw Error('Choose an existing text main document'); project.main = op.path; }
+      else if (op.kind === 'folder') folders.add(op.path);
+      else if (op.kind === 'doc') put(op.path, new Uint8Array(0), true);
+      else if (op.kind === 'put') { if (op.doc && !new TextDecoder().decode(op.bytes).isWellFormed()) throw Error('Unsupported text file'); put(op.path, op.bytes.slice(), op.doc); }
+      else for (const [path, f] of [...files]) if (inside(path, op.from)) { files.delete(path); if (op.kind === 'relocate') files.set(op.to + path.slice(op.from.length), f); }
+      if (op.kind === 'relocate' && inside(project.main, op.from)) project.main = op.to + project.main.slice(op.from.length); // as project-store.js
+      if (op.from) for (const path of [...folders]) if (inside(path, op.from)) { folders.delete(path); if (op.kind === 'relocate') folders.add(op.to + path.slice(op.from.length)); }
+      return { applied: op.kind };
+    },
+  };
+  const route = ctl => (path, e) => open.find(x => x.ctl === ctl && x.path === path)?.remote(e.op, e.v);
+  host = await startHost({ helper: r.helper, source, onPeers: () => {}, onRemote: (...a) => route(host)(...a) });
+  const join = async username => {
+    const seen = [], ctl = await joinSession({ link: host.link, passcode: host.passcode, username, WebSocketImpl: r.Socket, onEnd: reason => (ctl.ended = reason),
+      onRemote: (...a) => route(ctl)(...a), onFs: op => { seen.push(op); follow(ctl, op); return { seenBy: username, kind: op.kind }; } });
+    ctl.seen = seen; return ctl;
+  };
+  const edit = async (ctl, path) => { const e = new Editor(ctl, path, ctl === host ? host.join(path) : await ctl.join(path)); open.push(e); return e; };
+  /** Every file of the owner equals the participant's bytes, and nothing else exists there. */
+  const same = ctl => { assert.deepEqual(ctl.store.paths(), [...files.keys()].sort()); for (const [path, f] of files) if (!open.some(x => x.path === path)) assert.equal(hex(ctl.store.read(path)), hex(f.bytes), path); return true; }; // live-edited text is the native persist's job
+  return { r, host, join, files, folders, same, applied, edit, project };
+}
+
+test('S2-03 join transfers the whole project exactly: CRLF/supplementary text, multi-chunk binaries, empty file and empty folders', async () => {
+  const { join, same, folders } = await fsRoom(), ada = await join('Ada');
+  assert.ok(same(ada));
+  assert.deepEqual(new Set(ada.folders), new Set([...folders, 'empty', 'sec', 'out', 'fonts']));
+  assert.deepEqual([...ada.docs].sort(), ['main.tex', 'sec/a.tex']);
+  assert.equal(ada.store.readText('main.tex').includes('\r\nTürkçe 😀 𝔛\r\n'), true);
+});
+
+test('S2-03 owner and participant file-tree changes reach every peer through the owner, in order, with exact bytes', async () => {
+  const { host, join, files, same, folders, edit } = await fsRoom(), ada = await join('Ada'), bob = await join('Bob');
+  let count = 0; const settled = () => until(() => ada.seen.length === count && bob.seen.length === count);
+  // owner: folder, doc, multi-chunk binary upload, rename and move
+  await host.fs({ kind: 'folder', path: 'chapters' }); count++;
+  await host.fs({ kind: 'doc', path: 'chapters/one.tex' }); count++;
+  const big = noise(3 * CHUNK + 99, 21); await host.fs({ kind: 'put', path: 'figures/big.bin', doc: false, bytes: big }); count++;
+  await settled(); assert.ok(same(ada) && same(bob)); assert.ok(ada.docs.has('chapters/one.tex'));
+  assert.equal(hex(ada.seen.find(op => op.kind === 'put').bytes), hex(big));
+  // participant: upload a binary and a text file, create a folder; the answer is this peer's own onFs result
+  const png = noise(CHUNK * 2 + 5, 33);
+  assert.deepEqual(await ada.fs({ kind: 'put', path: 'figures/ada.png', doc: false, bytes: png }), { seenBy: 'Ada', kind: 'put' }); count++;
+  await ada.fs({ kind: 'put', path: 'chapters/two.tex', doc: true, bytes: text('Zwei 😀\r\n') }); count++;
+  await bob.fs({ kind: 'folder', path: 'chapters/drafts' }); count++;
+  const deep = noise(777, 8); await bob.fs({ kind: 'put', path: 'new/deep/Ünï 😀.bin', doc: false, bytes: deep }); count++; // an upload creates its folders
+  await settled(); assert.equal(hex(files.get('figures/ada.png').bytes), hex(png)); assert.ok(same(ada) && same(bob)); assert.ok(bob.docs.has('chapters/two.tex'));
+  assert.ok(folders.has('chapters/drafts') && bob.folders.includes('chapters/drafts'));
+  // rename a document both sides are editing, then keep editing under the new name: the shared log carries on
+  const o = await edit(host, 'sec/a.tex'), a = await edit(ada, 'sec/a.tex');
+  a.submit([{ p: 0, i: 'A1 ' }]); o.submit([{ p: 0, i: 'O1 ' }]); await until(() => a.idle && o.idle && a.version === o.version);
+  await ada.fs({ kind: 'relocate', from: 'sec', to: 'chapters/sec' }); count++;
+  await settled(); assert.equal(a.path, 'chapters/sec/a.tex'); await until(() => o.path === 'chapters/sec/a.tex');
+  a.submit([{ p: 0, i: 'A2 ' }]); o.submit([{ p: 0, i: 'O2 ' }]); await until(() => a.idle && o.idle && a.version === o.version);
+  assert.equal(a.text, o.text); assert.equal(a.text, host.text('chapters/sec/a.tex')); assert.ok(a.text.includes('A2') && a.text.includes('O1'));
+  assert.equal(new TextDecoder().decode(files.get('chapters/sec/a.tex').bytes), o.text); // persisted under the new name
+  assert.ok(!files.has('sec/a.tex') && ada.docs.has('chapters/sec/a.tex') && !ada.docs.has('sec/a.tex'));
+  await host.fs({ kind: 'relocate', from: 'figures/ada.png', to: 'ada.png' }); count++;
+  await host.fs({ kind: 'remove', from: 'out' }); count++;
+  await settled(); assert.ok(same(ada) && same(bob)); assert.ok(!ada.folders.includes('out'));
+  assert.deepEqual(ada.seen.map(op => op.kind), ['folder', 'doc', 'put', 'put', 'put', 'folder', 'put', 'relocate', 'relocate', 'remove']);
+  assert.ok(ada.folders.includes('new/deep') && hex(ada.store.read('new/deep/Ünï 😀.bin')) === hex(deep));
+  // a late joiner gets the current tree exactly
+  const eve = await join('Eve'); assert.ok(same(eve)); assert.deepEqual(new Set(eve.folders), new Set(ada.folders));
+});
+
+test('S2-03 refused changes: collisions, path escape, missing parent, main file, oversized, damaged or truncated uploads change nothing', async () => {
+  const { host, join, files, same } = await fsRoom(), ada = await join('Ada'), snapshot = () => [...files.keys()].sort().join('|');
+  const before = snapshot();
+  for (const [op, reason] of [
+    [{ kind: 'relocate', from: 'sec/a.tex', to: 'main.tex' }, /already exists/],
+    [{ kind: 'relocate', from: 'sec/a.tex', to: 'MAIN.TEX' }, /already exists/],      // case-insensitive file systems
+    [{ kind: 'relocate', from: 'sec', to: 'sec/inner' }, /outside/],
+    [{ kind: 'doc', path: '../escape.tex' }, /Invalid project path/],
+    [{ kind: 'folder', path: 'figures/../../x' }, /Invalid project path/],
+    [{ kind: 'relocate', from: 'main.tex', to: '/abs.tex' }, /valid destination/],
+    [{ kind: 'doc', path: 'missing/x.tex' }, /folder is missing/],
+    [{ kind: 'put', path: 'main.tex/x.bin', doc: false, bytes: new Uint8Array(1) }, /already exists/],   // a file cannot become an upload's folder
+    [{ kind: 'put', path: 'FIGURES/x.bin', doc: false, bytes: new Uint8Array(1) }, /already exists/],
+    [{ kind: 'remove', from: 'main.tex' }, /main document/],
+    [{ kind: 'remove', from: 'nope.tex' }, /missing/],
+    [{ kind: 'chmod', path: 'main.tex' }, /Unknown/],
+  ]) await assert.rejects(ada.fs(op), reason, JSON.stringify(op));
+  await assert.rejects(host.fs({ kind: 'doc', path: 'a\\b' }), /Invalid project path/);
+  await assert.rejects(ada.fs({ kind: 'put', path: 'huge.bin', doc: false, bytes: new Uint8Array(MAX_FILE + 1) }), /size/); // refused before sending
+  // hand-made uploads: oversized manifest, flipped byte (hash mismatch), truncated (end before the last chunk), op without upload
+  const send = m => ada.session.send({ t: 'fs', k: 'blob', m });
+  const raw = async (bytes, tamper) => { const msgs = []; const { xfer } = await streamFiles(async m => msgs.push(m), { files: [{ path: 'evil.bin', bytes }] }); for (const m of tamper(msgs)) await send(m); return xfer; };
+  const bytes = noise(CHUNK + 10, 5);
+  const cases = {
+    oversized: msgs => [{ ...msgs[0], total: MAX_FILE + 1, files: [{ ...msgs[0].files[0], size: MAX_FILE + 1, chunks: Math.ceil((MAX_FILE + 1) / CHUNK) }] }, ...msgs.slice(1)],
+    'hash mismatch': msgs => msgs.map(m => m.t === 'file' && m.seq === 1 ? { ...m, data: Buffer.from(Buffer.from(m.data, 'base64').map((b, i) => i === 3 ? b ^ 1 : b)).toString('base64') } : m),
+    truncated: msgs => [...msgs.slice(0, -2), msgs.at(-1)],
+    'short chunk': msgs => msgs.map(m => m.t === 'file' && m.seq === 1 ? { ...m, data: m.data.slice(0, 8) } : m),
+  };
+  for (const [name, tamper] of Object.entries(cases)) {
+    const xfer = await raw(bytes, tamper), ref = name.length.toString(16).padStart(4, '0');
+    await ada.session.send({ t: 'fs', k: 'op', ref, op: { kind: 'put', path: 'evil.bin', doc: false, xfer } });
+    await settle(); assert.equal(files.has('evil.bin'), false, name); assert.equal(ada.session.state, 'joined', name);
+  }
+  await assert.rejects(ada.fs({ kind: 'put', path: 'evil.bin', doc: false }), /Invalid project/);   // no bytes at all: refused locally
+  assert.equal(snapshot(), before); assert.ok(same(ada)); assert.equal(ada.seen.length, 0);
+});
+
+test('S2-03 deleting a file someone has open: late edits are refused without ending the session; the path can be created again', async () => {
+  const { host, join, files, edit } = await fsRoom(), ada = await join('Ada');
+  const a = await edit(ada, 'sec/a.tex'), o = await edit(host, 'sec/a.tex');
+  a.submit([{ p: 0, i: 'x' }]); await until(() => a.idle);
+  await host.fs({ kind: 'remove', from: 'sec' }); await until(() => ada.seen.length === 1);
+  assert.equal(files.has('sec/a.tex'), false); assert.equal(ada.store.has('sec/a.tex'), false); assert.equal(ada.docs.has('sec/a.tex'), false);
+  await assert.rejects(ada.edit('sec/a.tex', { op: [{ p: 0, i: 'late' }], v: a.version }), /no_such_file|deleted/);
+  await assert.rejects(host.edit('sec/a.tex', { op: [{ p: 0, i: 'late' }], v: o.version }), /deleted|Unknown/);
+  assert.equal(ada.session.state, 'joined'); assert.equal(files.has('sec/a.tex'), false);
+  await ada.fs({ kind: 'folder', path: 'sec' }); await ada.fs({ kind: 'doc', path: 'sec/a.tex' });
+  const fresh = await edit(ada, 'sec/a.tex'); assert.equal(fresh.text, '');
+  fresh.submit([{ p: 0, i: 'new' }]); await until(() => fresh.idle); assert.equal(host.text('sec/a.tex'), 'new');
+});
+
+test('S2-03 changes made while a participant is still receiving the project are applied once, after it', async () => {
+  const { host, join, same } = await fsRoom();
+  const joining = join('Ada'), changes = (async () => { for (let i = 0; i < 6; i++) await host.fs({ kind: 'put', path: `late${i}.bin`, doc: false, bytes: noise(CHUNK + i, 50 + i) }); })();
+  const ada = await joining; await changes; await until(() => ada.store.has('late5.bin'));
+  await settle(); assert.ok(same(ada)); assert.equal(ada.session.state, 'joined'); assert.ok(ada.seen.length < 6 || ada.seen.length === 6);
+});
+
+test('S2-03 set-main goes through the owner: a binary main is refused, a text main moves on every peer and frees the old main', async () => {
+  const { host, join, project, same } = await fsRoom(), ada = await join('Ada'), bob = await join('Bob');
+  await assert.rejects(ada.fs({ kind: 'main', path: 'figures/plot.png' }), /text main/);
+  await assert.rejects(ada.fs({ kind: 'main', path: 'nope.tex' }), /existing/);
+  await assert.rejects(bob.fs({ kind: 'remove', from: 'main.tex' }), /main document/);
+  await ada.fs({ kind: 'main', path: 'sec/a.tex' }); await until(() => bob.seen.length === 1);
+  assert.equal(project.main, 'sec/a.tex'); assert.equal(ada.store.main, 'sec/a.tex'); assert.equal(bob.store.main, 'sec/a.tex');
+  await bob.fs({ kind: 'remove', from: 'main.tex' }); await until(() => ada.seen.length === 2);   // the old main is an ordinary file now
+  await host.fs({ kind: 'relocate', from: 'sec', to: 'body' }); await until(() => ada.seen.length === 3 && bob.seen.length === 3);
+assert.equal(ada.store.main, 'body/a.tex'); assert.equal(bob.store.main, 'body/a.tex'); assert.ok(same(ada) && same(bob));
+  const eve = await join('Eve'); assert.equal(eve.main, 'body/a.tex');
+});

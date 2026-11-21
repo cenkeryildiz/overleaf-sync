@@ -49,7 +49,7 @@ export function joinForm(hash, events) {
       const passcode = code.value; code.value = '';
       try {
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
-          onCursor: (...a) => events.onCursor?.(...a), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
+          onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
           onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c) });
         const template = await (await fetch('/extension/native-template.json')).json();
         const { api, project, docIds } = await memoryProjects(shared, template);
