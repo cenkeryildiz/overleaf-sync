@@ -121,10 +121,12 @@ try {
         const editor = editors.get(doc), version = editor?.container.doc?.getVersion(), text = textOf(editor);
         pending = pending.then(async () => {
           if (failure) throw failure;
-          const file = [...files.values()].find(file => file.doc === doc);
+          const file = [...files.values()].find(file => file.doc === doc), gone = () => ![...files.values()].some(file => file.doc === doc);
+          if (lan && !file) { callback(null); return; } // the file was deleted in the shared session: nothing to save
           if (!editor || !file || (!lan && update.v !== version) || typeof text !== 'string') throw Error('Local source version changed');
           // Shared: the owner's log orders and transforms the edit; the acknowledgement carries the version it was applied at.
-          const applied = lan ? await lan.edit(file.path, update) : update.v;
+          const applied = lan ? await lan.edit(file.path, update).catch(error => { if (gone()) return null; throw error; }) : update.v;
+          if (applied === null) { callback(null); return; }
           if (lan) persist(file.path, joined ? textOf(editors.get(doc)) : lan.text(file.path)); // saved after the acknowledgement; shared text is authoritative
           else { const next = await api.save(file, text); files.set(next.path, next); }
           nav = undefined; callback(null); broadcast('otUpdateApplied', { doc, v: applied });
@@ -180,14 +182,14 @@ try {
       await flush();
       if ([...editors.values()].some(editor => editor.container.doc?.hasBufferedOps())) throw Error('Finish typing, then share again');
       const source = {
-        tree: () => ({ main: project.main, docs: [...files.values()].filter(file => file.doc).map(file => file.path),
+        tree: () => ({ main: project.main, folders: project.folders || [], docs: [...files.values()].filter(file => file.doc).map(file => file.path),
           files: [...files.values()].map(file => ({ path: file.path, bytes: file.doc ? new TextEncoder().encode(file.content) : Uint8Array.from(atob(file.data), char => char.charCodeAt(0)) })) }),
         text(path) { // the owner's open editor is the truth for its document; others come from the saved file
           const file = files.get(path); if (!file?.doc) return null;
           const doc = editors.get(file.doc)?.container.doc;
           return doc ? { text: doc.getSnapshot(), version: doc.getVersion() } : { text: file.content, version: file.revision };
         },
-        persist,
+        persist, apply: op => fsApply(op),
       };
       const host = await (await import('/extension/lan-ui.mjs')).shareFlow({ source, events: lanEvents });
       for (const file of files.values()) if (file.doc && editors.get(file.doc)?.container.doc) host.join(file.path); // freeze open documents' state before any edit
@@ -230,7 +232,7 @@ try {
   };
   const originalFetch = globalThis.fetch.bind(globalThis);
   const change = async action => {
-    await flush();
+    if (!joined) await flush(); // a participant's copy is memory only, and its pending edits may wait on the owner, who waits on this change
     const saved = await api.change(project, [...files.values()], action);
     project = saved.project; files = new Map(saved.files.map(file => [file.path, file])); nav = undefined;
     status('Saved in this browser. PDF may be from an earlier compilation.'); report('device');
@@ -244,6 +246,66 @@ try {
     }
     throw Error('Local file or folder is missing');
   };
+  const split = path => { const at = path.lastIndexOf('/'); return [path.slice(0, Math.max(0, at)), path.slice(at + 1)]; };
+  const folderAt = path => [...folders.values()].find(folder => folder.path === path);
+  const toBase64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
+  /** One file-tree change by project path ({kind:'folder'|'doc', path} | {kind:'put', path, file|bytes, doc} | {kind:'relocate', from, to} | {kind:'remove', from}):
+   * saved through the project API and shown in the native tree. Local edits, the sharing owner (lan-host source.apply) and a
+   * participant replaying an owner-accepted change (lan-guest onFs) all come through here. */
+  const fsApply = async op => {
+    if (op.kind === 'folder' || op.kind === 'doc') {
+      if (!joined) await flush();
+      const [dir, name] = split(op.path), parent = folderAt(dir);
+      if (!parent || !name) throw Error('Invalid local parent or name');
+      const next = await api.add(project, op.kind, op.path); project = next.project; nav = undefined;
+      let entity;
+      if (next.file) { files.set(op.path, next.file); entity = { _id: next.file.doc, name }; parent.node.docs.push(entity); }
+      else { entity = folder(name); parent.node.folders.push(entity); folders.set(entity._id, { node: entity, path: op.path }); }
+      broadcast(next.file ? 'reciveNewDoc' : 'reciveNewFolder', parent.node._id, structuredClone(entity));
+      return entity;
+    }
+    if (op.kind === 'put') {
+      const resource = op.file ?? (op.doc ? { path: op.path, content: new TextDecoder('utf-8', { fatal: true }).decode(op.bytes) } : { path: op.path, data: toBase64(op.bytes) });
+      await change({ kind: 'put', file: resource });
+      const saved = files.get(resource.path), parts = saved.path.split('/'), name = parts.pop(), previousFolders = new Set(folders.keys());
+      const folder = ensureFolder(parts.join('/'));
+      // Nested upload folders must reach both the adapter and the native tree.
+      for (const [id, entry] of folders) if (!previousFolders.has(id)) {
+        const parentPath = entry.path.split('/').slice(0, -1).join('/'), parentFolder = [...folders.values()].find(folder => folder.path === parentPath);
+        broadcast('reciveNewFolder', parentFolder.node._id, { ...entry.node, folders: [], docs: [], fileRefs: [] });
+      }
+      const node = { _id: saved.doc || crypto.randomUUID().replaceAll('-', '').slice(0, 24), name };
+      folder[saved.doc ? 'docs' : 'fileRefs'].push(node);
+      if (!saved.doc) assets.set(node._id, saved);
+      broadcast(saved.doc ? 'reciveNewDoc' : 'reciveNewFile', folder._id, structuredClone(node));
+      return { entity_id: node._id, entity_type: saved.doc ? 'doc' : 'file' };
+    }
+    if (op.kind === 'main') { await change({ kind: 'settings', main: op.path }); broadcast('rootDocUpdated', files.get(project.main).doc); return {}; }
+    if (op.kind !== 'relocate' && op.kind !== 'remove') throw Error('Invalid local project action');
+    const from = op.from, remove = op.kind === 'remove', [dir, base] = split(from), within = folderAt(dir);
+    const kind = ['doc', 'file', 'folder'].find(kind => within?.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[kind]].some(node => node.name === base));
+    if (!kind) throw Error('Local file or folder is missing');
+    const item = entity(kind, within.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[kind]].find(node => node.name === base)._id);
+    const [toDir, name] = remove ? [dir, base] : split(op.to), parent = remove ? item.parent : folderAt(toDir);
+    if (!parent || !name) throw Error('Invalid local destination');
+    const to = op.to;
+    await change(remove ? { kind: 'remove', from } : { kind: 'relocate', from, to });
+    item.list.splice(item.list.indexOf(item.node), 1);
+    if (!remove) { item.node.name = name; parent.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[kind]].push(item.node); }
+    const inside = path => path === from || path.startsWith(from + '/');
+    for (const [id, folder] of folders) if (inside(folder.path)) { if (remove) folders.delete(id); else folder.path = to + folder.path.slice(from.length); }
+    for (const [id, file] of assets) if (inside(file.path)) { if (remove) assets.delete(id); else assets.set(id, files.get(to + file.path.slice(from.length))); }
+    if (remove) for (const [id, editor] of editors) if (![...files.values()].some(file => file.doc === id)) { editors.delete(id); if (active === editor) active = undefined; }
+    if (remove) broadcast('removeEntity', item.node._id);
+    else {
+      if (parent !== item.parent) broadcast('reciveEntityMove', item.node._id, parent.node._id);
+      if (name !== base) broadcast('reciveEntityRename', item.node._id, name);
+    }
+    broadcast('rootDocUpdated', files.get(project.main).doc);
+  };
+  lanEvents.onFs = fsApply;
+  // While sharing, the owner's room checks and orders every change (lan-host.mjs); a participant's change returns once applied here.
+  const fsChange = op => lan ? lan.fs(op) : fsApply(op);
   const localFetch = async (input, init) => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
     const method = init?.method || (input instanceof Request ? input.method : 'GET');
@@ -258,19 +320,7 @@ try {
         const parent = editing[3] === 'move' ? folders.get(body.folder_id) : item.parent;
         const name = editing[3] === 'rename' ? body.name : item.node.name;
         if (!parent || typeof name !== 'string' || name.includes('/')) throw Error('Invalid local destination');
-        const to = parent.path ? parent.path + '/' + name : name;
-        const remove = method === 'DELETE';
-        await change(remove ? { kind: 'remove', from } : { kind: 'relocate', from, to });
-        item.list.splice(item.list.indexOf(item.node), 1);
-        if (!remove) { item.node.name = name; parent.node[{ doc: 'docs', file: 'fileRefs', folder: 'folders' }[editing[1]]].push(item.node); }
-        const inside = path => path === from || path.startsWith(from + '/');
-        for (const [id, folder] of folders) if (inside(folder.path)) { if (remove) folders.delete(id); else folder.path = to + folder.path.slice(from.length); }
-        for (const [id, file] of assets) if (inside(file.path)) { if (remove) assets.delete(id); else assets.set(id, files.get(to + file.path.slice(from.length))); }
-        if (remove) for (const [id, editor] of editors) if (![...files.values()].some(file => file.doc === id)) { editors.delete(id); if (active === editor) active = undefined; }
-        if (remove) broadcast('removeEntity', item.node._id);
-        else if (editing[3] === 'rename') broadcast('reciveEntityRename', item.node._id, name);
-        else broadcast('reciveEntityMove', item.node._id, parent.node._id);
-        broadcast('rootDocUpdated', files.get(project.main).doc);
+        await fsChange(method === 'DELETE' ? { kind: 'remove', from } : { kind: 'relocate', from, to: parent.path ? parent.path + '/' + name : name });
         return new Response(null, { status: 204 });
       } catch (error) { return Response.json({ message: error.message }, { status: 409 }); }
     }
@@ -278,7 +328,8 @@ try {
       try {
         const body = JSON.parse(init?.body ?? await input.clone().text()), main = body.rootDocId === undefined ? undefined : [...files.values()].find(file => file.doc === body.rootDocId)?.path;
         if (body.rootDocId !== undefined && !main) throw Error('Choose an existing text main document');
-        await change({ kind: 'settings', main, compiler: body.compiler, name: body.name });
+        if (lan && main !== undefined) await fsChange({ kind: 'main', path: main }); // shared: the owner orders set-main with the other tree changes
+        if (!lan || body.compiler !== undefined || body.name !== undefined) await change({ kind: 'settings', main: lan ? undefined : main, compiler: body.compiler, name: body.name });
         if (body.compiler !== undefined) broadcast('compilerUpdated', project.compiler);
         if (main !== undefined) broadcast('rootDocUpdated', files.get(project.main).doc);
         return new Response(null, { status: 204 });
@@ -301,19 +352,10 @@ try {
         const relative = directoryPath && directoryPath !== 'null' ? directoryPath : body.get('name') || file.name;
         resource.path = parent.path ? parent.path + '/' + relative : relative;
         init?.signal?.throwIfAborted();
-        await change({ kind: 'put', file: resource });
-        const saved = files.get(resource.path), parts = saved.path.split('/'), name = parts.pop(), previousFolders = new Set(folders.keys());
-        const folder = ensureFolder(parts.join('/'));
-        // Nested upload folders must reach both the adapter and the native tree.
-        for (const [id, entry] of folders) if (!previousFolders.has(id)) {
-          const parentPath = entry.path.split('/').slice(0, -1).join('/'), parentFolder = [...folders.values()].find(folder => folder.path === parentPath);
-          broadcast('reciveNewFolder', parentFolder.node._id, { ...entry.node, folders: [], docs: [], fileRefs: [] });
-        }
-        const node = { _id: saved.doc || crypto.randomUUID().replaceAll('-', '').slice(0, 24), name };
-        folder[saved.doc ? 'docs' : 'fileRefs'].push(node);
-        if (!saved.doc) assets.set(node._id, saved);
-        broadcast(saved.doc ? 'reciveNewDoc' : 'reciveNewFile', folder._id, structuredClone(node));
-        return Response.json({ success: true, entity_id: node._id, entity_type: saved.doc ? 'doc' : 'file' });
+        const doc = typeof resource.content === 'string';
+        // Shared uploads travel as exact bytes; the owner and every peer rebuild the same resource from them.
+        const result = await fsChange({ kind: 'put', path: resource.path, doc, ...(lan ? { bytes: doc ? new TextEncoder().encode(resource.content) : Uint8Array.from(atob(resource.data), c => c.charCodeAt(0)) } : { file: resource }) });
+        return Response.json({ success: true, ...result });
       } catch (error) { return Response.json({ success: false, error: error.message }, { status: 409 }); }
     }
     if (globalThis.overleafStandalone && url.pathname === `/project/${clientProject}/latest/history` && method === 'GET') {
@@ -341,19 +383,10 @@ try {
     const creating = url.pathname.match(new RegExp(`^/project/${clientProject}/(doc|folder)$`));
     if (creating && method === 'POST') {
       try {
-        await flush();
         const body = JSON.parse(init?.body ?? await input.clone().text());
         const parent = folders.get(body.parent_folder_id);
         if (!parent || typeof body.name !== 'string' || body.name.includes('/')) throw Error('Invalid local parent or name');
-        const path = parent.path ? parent.path + '/' + body.name : body.name;
-        const next = await api.add(project, creating[1], path); project = next.project; nav = undefined;
-        let entity;
-        if (next.file) {
-          files.set(path, next.file); entity = { _id: next.file.doc, name: body.name }; parent.node.docs.push(entity);
-        } else {
-          entity = folder(body.name); parent.node.folders.push(entity); folders.set(entity._id, { node: entity, path });
-        }
-        broadcast(next.file ? 'reciveNewDoc' : 'reciveNewFolder', body.parent_folder_id, structuredClone(entity));
+        const entity = await fsChange({ kind: creating[1], path: parent.path ? parent.path + '/' + body.name : body.name });
         status('Created in this browser. Export the project to transfer new files.');
         return Response.json(entity);
       } catch (error) { return Response.json({ message: error.message }, { status: 409 }); }

@@ -82,17 +82,20 @@ export class SnapshotReceiver {
 }
 
 const sending = new WeakMap();                            // room -> peers with a transfer in flight
-/** Owner side: validates the whole project first, then sends manifest, chunks and end marker. project: {files:[{path, bytes}], main?} */
-export async function sendSnapshot(room, peer, project) {
+/** Validates the whole project first, then sends manifest, chunks and end marker through `send`. Resolves with the transfer id. */
+export async function streamFiles(send, project) {
   const files = project?.files; if (!Array.isArray(files) || files.some(file => !(file?.bytes instanceof Uint8Array))) throw Error('Invalid project');
   const entries = await Promise.all(files.map(async file => ({ path: file.path, size: file.bytes.length, sha256: await sha256(file.bytes), chunks: Math.ceil(file.bytes.length / CHUNK) })));
   const manifest = { t: 'snapshot', xfer: randomId(), main: project.main ?? null, total: entries.reduce((n, e) => n + e.size, 0), files: entries };
   checkManifest(manifest);
-  await room.sendTo(peer, manifest);
+  await send(manifest);
   for (let i = 0; i < files.length; i++) for (let seq = 0; seq < entries[i].chunks; seq++)
-    await room.sendTo(peer, { t: 'file', xfer: manifest.xfer, i, seq, data: encode(files[i].bytes.subarray(seq * CHUNK, (seq + 1) * CHUNK)) });
-  await room.sendTo(peer, { t: 'snapshot', xfer: manifest.xfer, end: true });
+    await send({ t: 'file', xfer: manifest.xfer, i, seq, data: encode(files[i].bytes.subarray(seq * CHUNK, (seq + 1) * CHUNK)) });
+  await send({ t: 'snapshot', xfer: manifest.xfer, end: true });
+  return { xfer: manifest.xfer, files: entries };
 }
+/** Owner side: the whole project to one participant. project: {files:[{path, bytes}], main?} */
+export const sendSnapshot = (room, peer, project) => streamFiles(m => room.sendTo(peer, m), project);
 /** Plug into OwnerRoom onMessage: answers a participant's {t:'snapshot', req:true}; one transfer per peer at a time. Returns the send promise or null. */
 export function handleSnapshotRequest(room, peer, message, getProject) {
   if (message?.t !== 'snapshot' || message.req !== true) return null;
@@ -100,4 +103,73 @@ export function handleSnapshotRequest(room, peer, message, getProject) {
   if (busy.has(peer)) return null;
   busy.add(peer);
   return Promise.resolve().then(() => sendSnapshot(room, peer, getProject())).finally(() => busy.delete(peer));
+}
+
+const parentOf = path => path.slice(0, Math.max(0, path.lastIndexOf('/')));
+export const within = (path, root) => path === root || path.startsWith(root + '/');
+/** Moves every key of `map` at or below `from` ('path' or 'path\0suffix') to `to` (null: deletes); returns the removed values. */
+export const rekey = (map, from, to) => {
+  const gone = [];
+  for (const [key, value] of [...map]) {
+    const cut = key.indexOf('\0'), path = cut < 0 ? key : key.slice(0, cut);
+    if (!within(path, from)) continue;
+    map.delete(key);
+    if (to === null) gone.push(value); else map.set(to + key.slice(from.length), value);
+  }
+  return gone;
+};
+/**
+ * S2-03 file tree during a session: the owner checks every structural change against this model before applying it, and
+ * every participant replays the accepted changes on its own copy. Ops (paths are project paths):
+ *   {kind:'folder'|'doc', path}   {kind:'put', path, size, doc}   {kind:'relocate', from, to}   {kind:'remove', from}   {kind:'main', path}
+ * A put's bytes travel separately as a verified one-file transfer (streamFiles/SnapshotReceiver) named by the op's `xfer`.
+ * Same rules as project-store.js: no overwrite, existing parent folder, the main file stays, one name per case-folded path.
+ */
+export class ProjectTree {
+  #files = new Map(); #folders = new Set(); #keys = new Map(); #total = 0;
+  constructor({ files = [], folders = [], main = null } = {}) {   // files: [{path, size}] or [path, size] pairs
+    for (const entry of files) { const [path, size] = Array.isArray(entry) ? entry : [entry.path, entry.size]; this.#addFile(path, size); }
+    for (const path of folders) this.#addFolder(path);
+    this.main = main;
+  }
+  get paths() { return [...this.#files.keys()]; }
+  get folders() { return [...this.#folders]; }
+  isFile(path) { return this.#files.has(path); }
+  #addFolder(path) { for (let p = path; p && !this.#folders.has(p); p = parentOf(p)) { this.#folders.add(p); this.#keys.set(pathKey(p), p); } }
+  #addFile(path, size) { this.#files.set(path, size); this.#keys.set(pathKey(path), path); this.#total += size; if (parentOf(path)) this.#addFolder(parentOf(path)); }
+  #free(path, self = null) { const at = this.#keys.get(pathKey(path)); if (at !== undefined && at !== self) throw Error('A file or folder with this name already exists'); }
+  #parent(path) { const parent = parentOf(path); if (parent && !this.#folders.has(parent)) throw Error('The destination folder is missing'); }
+  /** Returns a clean copy of `op` that apply() accepts, or throws a user-facing reason. Does not change the model. */
+  check(op) {
+    const kind = op?.kind, count = this.#files.size + this.#folders.size;
+    if (['folder', 'doc', 'put'].includes(kind)) {
+      if (!validPath(op.path)) throw Error('Invalid project path');
+      this.#free(op.path);
+      if (kind !== 'put') this.#parent(op.path);
+      else for (let p = parentOf(op.path); p; p = parentOf(p)) { const at = this.#keys.get(pathKey(p)); if (at !== undefined && (at !== p || this.#files.has(p))) throw Error('A file or folder with this name already exists'); } // an upload creates its folders, as project-store.js does
+      if (count >= MAX_FILES) throw Error('Project exceeds the supported file and folder limit');
+      if (kind !== 'put') return { kind, path: op.path };
+      if (!Number.isSafeInteger(op.size) || op.size < 0 || op.size > MAX_FILE || this.#total + op.size > MAX_TOTAL) throw Error('File size outside limits');
+      if (typeof op.doc !== 'boolean') throw Error('Invalid uploaded file');
+      return { kind, path: op.path, size: op.size, doc: op.doc };
+    }
+    if (kind === 'main') { if (!this.#files.has(op.path)) throw Error('Choose an existing text main document'); return { kind, path: op.path }; }
+    if (kind !== 'relocate' && kind !== 'remove') throw Error('Unknown file change');
+    if (!validPath(op.from) || (!this.#files.has(op.from) && !this.#folders.has(op.from))) throw Error('The file or folder is missing');
+    if (kind === 'remove') { if (this.main && within(this.main, op.from)) throw Error('Choose another main document before deleting this one'); return { kind, from: op.from }; }
+    if (!validPath(op.to) || within(op.to, op.from)) throw Error('Choose a different valid destination outside this folder');
+    this.#free(op.to, op.from); this.#parent(op.to);
+    return { kind, from: op.from, to: op.to };
+  }
+  /** Applies a checked op; returns the [from, to] path pairs it moved or removed (to = null). */
+  apply(op) {
+    if (op.kind === 'main') { this.main = op.path; return []; }
+    if (op.kind === 'folder') { this.#addFolder(op.path); return []; }
+    if (op.kind === 'doc' || op.kind === 'put') { this.#addFile(op.path, op.kind === 'put' ? op.size : 0); return []; }
+    const moved = [], target = path => op.kind === 'remove' ? null : op.to + path.slice(op.from.length);
+    for (const [path, size] of [...this.#files]) if (within(path, op.from)) { moved.push([path, target(path)]); this.#files.delete(path); this.#keys.delete(pathKey(path)); this.#total -= size; if (op.kind === 'relocate') this.#addFile(target(path), size); }
+    for (const path of [...this.#folders]) if (within(path, op.from)) { this.#folders.delete(path); this.#keys.delete(pathKey(path)); if (op.kind === 'relocate') this.#addFolder(target(path)); }
+    if (op.kind === 'relocate') { this.#addFolder(parentOf(op.to)); if (this.main && within(this.main, op.from)) this.main = target(this.main); }
+    return moved;
+  }
 }

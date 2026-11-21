@@ -2,12 +2,14 @@
 // Owner side of "Share on this network": helper relay + OwnerRoom (auth/crypto) + one OwnerSync log per text file.
 // The owner's own editor is a local client of the same logs, so every edit has one order and one version number.
 // Participant requests: {t:'update',k:'join',path} -> {t:'doc',path,v,text}; {t:'update',k:'op',path,...}; {t:'cursor',path,row,column};
-// {t:'snapshot',req:true} -> {t:'tree',docs} + the verified project transfer (lan-transfer.mjs). Nothing else is served:
-// no compile, no filesystem access beyond the project the owner passed in.
+// {t:'snapshot',req:true} -> {t:'tree',docs,folders,seq} + the verified project transfer (lan-transfer.mjs);
+// {t:'fs',k:'blob',m} (a one-file transfer) and {t:'fs',k:'op',ref,op} -> checked here, applied by the owner, then broadcast in order as
+// [{t:'fs',k:'blob',m}...] {t:'fs',k:'change',seq,by,ref,op,xfer} or answered {t:'fs',k:'refused',ref,reason}.
+// Nothing else is served: no compile, no filesystem access beyond the project the owner passed in.
 import { OwnerRoom, MAX_MESSAGE, joinLink } from './lan-room.mjs';
 import { GrantAuthority } from './lan-grants.mjs';
 import { OwnerSync } from './lan-sync.mjs';
-import { handleSnapshotRequest } from './lan-transfer.mjs';
+import { handleSnapshotRequest, streamFiles, SnapshotReceiver, ProjectTree, within, rekey } from './lan-transfer.mjs';
 import { ot } from './lan-ot.mjs';
 
 const LOCAL = 'owner', OWNER_CID = '0'.repeat(32), NAME = 'Owner';
@@ -31,34 +33,88 @@ export function nativeHelper(connectNative = chrome.runtime.connectNative.bind(c
 }
 const b64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
 const unb64 = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
-const ACTION = { update: 'edit', cursor: 'edit', snapshot: 'view' };
-
+const ACTION = { update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view' };
 /**
- * source: { tree() -> {files:[{path,bytes}], docs:[path], main}, text(path) -> {text, version} or null,
- *           persist(path, text) }   persist runs after every committed entry (the editor mirrors it when open).
+ * source: { tree() -> {files:[{path,bytes}], docs:[path], folders:[path], main}, text(path) -> {text, version} or null,
+ *           persist(path, text), apply(op, by) }   persist runs after every committed entry (the editor mirrors it when open);
+ *           apply performs one checked file-tree change (put ops carry `bytes`) on the owner's project and editor, or throws.
  * permission(info) is the owner-permission hook (see report): info = {peer, name, action:'view'|'edit', message}; return false to deny.
  * Events: onRemote(path, {op, v, by}), onCursor({name, path, row, column}), onPeers(names[]), onLost().
  */
 export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, secrets }) {
-  const syncs = new Map(), waiting = new Map(), counters = new Map(); let room, grants, stopped = false;
+  const syncs = new Map(), waiting = new Map(), counters = new Map(), uploads = new Map(), aliases = new Map(), removed = new Set();
+  let room, grants, stopped = false, fsTail = Promise.resolve(), fsSeq = 0, moving = null;
+  const initial = source.tree();
+  const tree = new ProjectTree({ files: initial.files.map(file => ({ path: file.path, size: file.bytes.length })), folders: initial.folders ?? [], main: initial.main });
+  const current = path => aliases.get(path) ?? path; // a participant may still use a name the owner has just changed
+  const queue = task => { const run = fsTail.then(task); fsTail = run.catch(() => {}); return run; }; // one structural change at a time
   const names = () => room.participants.map(p => p.name);
   const local = (path, m) => {
     if (m.t === 'remote') { onRemote(path, { op: m.ops, v: m.v - 1, by: m.by, id: m.id }); source.persist?.(path, syncs.get(path).text); }
     else if (m.t === 'ack' || m.t === 'refused') { const key = `${path}\0${m.id}`, w = waiting.get(key); if (w) { waiting.delete(key); m.t === 'ack' ? w.resolve(m.v - 1) : w.reject(Error(`The edit was refused (${m.reason})`)); } }
   };
-  const hub = path => ({
-    sendTo: (peer, m) => peer === LOCAL ? Promise.resolve(local(path, m)) : room.sendTo(peer, { ...m, path }),
-    broadcast: (m, except) => { if (except !== LOCAL) local(path, m); return room.broadcast({ ...m, path }, except); },
+  const hub = ref => ({ // ref.path follows renames, so acknowledgements and broadcasts always carry the current name
+    sendTo: (peer, m) => peer === LOCAL ? Promise.resolve(local(ref.path, m)) : room.sendTo(peer, { ...m, path: ref.path }),
+    broadcast: (m, except) => { if (except !== LOCAL) local(ref.path, m); return room.broadcast({ ...m, path: ref.path }, except); },
   });
   const sync = path => {
     let entry = syncs.get(path);
     if (!entry) {
       const current = source.text(path); // null: not a text file of this project
       if (!current) return null;
-      entry = new OwnerSync({ room: hub(path), ot, text: current.text, version: current.version });
+      const ref = { path };
+      entry = new OwnerSync({ room: hub(ref), ot, text: current.text, version: current.version }); entry.ref = ref;
       syncs.set(path, entry);
     }
     return entry;
+  };
+  /** Checks, applies (owner first: the host is the authority) and broadcasts one file-tree change. Resolves with source.apply's result. */
+  const change = (op, by, bytes, ref = null) => queue(async () => {
+    if (stopped) throw Error('Sharing stopped');
+    const checked = tree.check(op?.kind === 'put' ? { ...op, size: bytes?.length } : op);
+    if (checked.kind === 'put' && !(bytes instanceof Uint8Array)) throw Error('The upload was incomplete or damaged');
+    let done; if (checked.from) moving = { from: checked.from, done: new Promise(resolve => { done = resolve; }) };
+    try {
+      const result = await source.apply?.(checked.kind === 'put' ? { ...checked, bytes } : checked, by);
+      const seq = ++fsSeq;
+      for (const [from, to] of tree.apply(checked)) {
+        if (to === null) removed.add(from); else { removed.delete(to); aliases.delete(to); aliases.set(from, to); }
+        if (to !== null) for (const [old, target] of aliases) if (target === from) aliases.set(old, to); // a deleted target keeps its aliases: late edits are refused, not fatal
+      }
+      if (checked.path && checked.kind !== 'main') { removed.delete(checked.path); aliases.delete(checked.path); }
+      if (checked.from) {
+        const to = checked.kind === 'relocate' ? checked.to : null;
+        for (const entry of rekey(syncs, checked.from, null)) {
+          if (to === null) continue;
+          entry.ref.path = to + entry.ref.path.slice(checked.from.length); syncs.set(entry.ref.path, entry);
+          source.persist?.(entry.ref.path, entry.text); // edits that landed while the owner was renaming
+        }
+        rekey(counters, checked.from, to);
+        for (const w of rekey(waiting, checked.from, to)) w.reject(Error('The file was deleted'));
+      }
+      let xfer = null;
+      if (checked.kind === 'put') ({ xfer } = await streamFiles(m => room.broadcast({ t: 'fs', k: 'blob', m }), { files: [{ path: checked.path, bytes }] }));
+      await room.broadcast({ t: 'fs', k: 'change', seq, by, ref, op: checked, xfer });
+      return result;
+    } finally { if (done) { moving = null; done(); } }
+  });
+  const refuse = (peer, ref, error) => room.sendTo(peer, { t: 'fs', k: 'refused', ref, reason: String(error?.message ?? error).slice(0, 200) });
+  /** Participant file-tree requests: one ordered lane per peer, so an upload's chunks, end and op stay together. */
+  const fsRequest = (peer, m, name) => {
+    let lane = uploads.get(peer);
+    if (!lane) uploads.set(peer, lane = { receiver: new SnapshotReceiver(), tail: Promise.resolve(), blob: null });
+    const run = lane.tail.then(async () => {
+      if (m.k === 'blob') { lane.blob = null; lane.blob = await lane.receiver.accept(m.m).catch(() => null); return; } // a bad chunk discards the upload
+      if (m.k !== 'op' || typeof m.ref !== 'string' || !/^[0-9a-f]{1,64}$/.test(m.ref)) throw Error('Malformed file change');
+      const blob = lane.blob; lane.blob = null;
+      let bytes;
+      if (m.op?.kind === 'put') {
+        bytes = blob?.xfer === m.op.xfer && blob.files.size === 1 ? blob.files.get(m.op.path) : undefined;
+        if (!bytes) return refuse(peer, m.ref, 'The upload was incomplete or damaged');
+      }
+      await change(m.op, name, bytes, m.ref).catch(error => refuse(peer, m.ref, error));
+    });
+    lane.tail = run.catch(() => room.revoke(peer));
   };
   const presence = () => { const list = names(); onPeers(list); room.broadcast({ t: 'presence', names: [NAME, ...list] }).catch(() => {}); };
   const deny = (peer, m) => room.sendTo(peer, { t: 'denied', request: m.t, ref: m.ref ?? null });
@@ -73,11 +129,17 @@ export async function startHost({ helper, source, permission = () => true, onRem
     }
     if (m.t === 'snapshot') {
       if (m.req !== true) throw Error('Unknown snapshot request');
-      const { docs, ...project } = source.tree();
-      return room.sendTo(peer, { t: 'tree', docs }).then(() => handleSnapshotRequest(room, peer, m, () => project));
+      return queue(async () => { // the tree, its change number and the bytes are taken together; later changes follow in order
+        const { docs, folders, ...project } = source.tree();
+        await room.sendTo(peer, { t: 'tree', docs, folders: tree.folders, seq: fsSeq });
+        handleSnapshotRequest(room, peer, m, () => project)?.catch(() => {});
+      });
     }
+    if (m.t === 'fs') return fsRequest(peer, m, name);
     if (typeof m.path !== 'string' || m.path.length > 1024) throw Error('Malformed update');
-    const entry = sync(m.path);
+    if (moving && within(current(m.path), moving.from)) return moving.done.then(() => onMessage(peer, m, name)).catch(() => room.revoke(peer)); // wait for the rename/delete
+    const path = current(m.path), entry = sync(path);
+    if (!entry && removed.has(path)) return room.sendTo(peer, { t: 'refused', reason: 'no_such_file', path: m.path, ...(m.k === 'op' ? { id: `${m.cid}.${m.n}` } : {}) });
     if (m.k === 'join') {
       if (!entry) return room.sendTo(peer, { t: 'refused', reason: 'no_such_file', path: m.path });
       if (entry.text.length > entry.limits.snapshotBytes / 2) return room.sendTo(peer, { t: 'refused', reason: 'too_large', path: m.path });
@@ -95,7 +157,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
   }, secrets);
   grants = await GrantAuthority.create(room.roomId);
   const unsubscribe = helper.subscribe(event => {
-    if (event.ev === 'peer') room.connected(event.peer);
+    if (event.ev === 'peer') { uploads.delete(event.peer); room.connected(event.peer); }
     else if (event.ev === 'data' && typeof event.data === 'string') { const bytes = unb64(event.data); if (bytes.length <= MAX_MESSAGE) room.receive(event.peer, bytes); }
     else if (event.ev === 'gone') room.disconnected(event.peer);
     else if (event.ev === 'helper-lost' && !stopped) { stopped = true; for (const w of waiting.values()) w.reject(Error('Sharing stopped')); onLost(); }
@@ -110,10 +172,13 @@ export async function startHost({ helper, source, permission = () => true, onRem
   return {
     room, port, link: joinLink(LOOPBACK, port, room.roomId), passcode: room.passcode, stop, get stopped() { return stopped; },
     /** Current text/version for the owner's editor; the log, not the file, is authoritative while sharing. */
-    text: path => syncs.get(path)?.text,
+    text: path => syncs.get(current(path))?.text,
+    /** An owner file-tree change ({kind, ...}; put carries `bytes`): checked, applied through source.apply, then sent to everyone. */
+    fs: op => { const { bytes, ...rest } = op ?? {}; return change(rest, NAME, bytes); },
     join(path) { const entry = sync(path); return entry && { text: entry.text, v: entry.version }; },
     /** An owner edit {op, v} from the native editor; resolves with the version the editor must report as applied. */
     edit(path, update) {
+      path = current(path); if (removed.has(path) && !syncs.has(path)) return Promise.reject(Error('The file was deleted'));
       const entry = sync(path), n = (counters.get(path) ?? 0) + 1; counters.set(path, n);
       if (!entry) return Promise.reject(Error('Unknown file'));
       const key = `${path}\0${OWNER_CID}.${n}`, done = new Promise((resolve, reject) => waiting.set(key, { resolve, reject }));

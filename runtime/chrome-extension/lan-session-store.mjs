@@ -48,6 +48,13 @@ export class SessionStore {
     if (path === this.#main) throw Error('The main file cannot be removed');
     bytes.fill(0); files.delete(path); this.#bytes -= bytes.length;
   }
+  /** Renames a file, or every file below a folder, keeping the bytes; the owner has already checked the change. */
+  move(from, to) {
+    const files = this.#live(); if (!validPath(to)) throw Error('Invalid project path');
+    for (const [path, bytes] of [...files]) if (path === from || path.startsWith(from + '/')) { files.delete(path); files.set(to + path.slice(from.length), bytes); }
+    if (this.#main === from || this.#main?.startsWith(from + '/')) this.#main = to + this.#main.slice(from.length);
+  }
+  setMain(path) { if (!this.#live().has(path)) throw Error('No such file'); this.#main = path; }
   /** Explicit independent copy for an export/download/save: fresh buffers, new identity, no link back to this store. */
   release(kind) {
     if (!KINDS.has(kind)) throw Error('Unknown request');

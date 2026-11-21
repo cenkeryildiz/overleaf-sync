@@ -20,7 +20,7 @@ for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if
 for (const name of ['native-workspace.html', 'project-workspace.html']) { const path = join(extension, 'recovery', name); writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>')); }
 import { assetName, patchEditorUnicode } from '../../runtime/browser-recovery/apply.mjs';
 const editorPath = join(extension, 'js', assetName); { // as package.mjs does; the base asset embeds an older recovery-core.js, so carry this repository's LAN guard into it as provisioning would
-  let editor = patchEditorUnicode(readFileSync(editorPath, 'utf8'));
+  let editor = readFileSync(editorPath, 'utf8'); if (!editor.includes(String.raw`/[\0\uD800-\uDFFF]/gu`)) editor = patchEditorUnicode(editor); // a packaged base is already patched
   const header = 'function extension(State, Transaction, container, name) {\n    return State.transactionFilter.of(';
   assert.equal(editor.split(header).length - 1, 1, 'base editor asset has an unexpected recovery extension');
   assert(readFileSync(join(repository, 'runtime/browser-recovery/recovery-core.js'), 'utf8').includes('if (globalThis.overleafLanGate) return [];'));
@@ -47,6 +47,25 @@ const until = async (check, what, ms = 15000) => { const end = Date.now() + ms; 
 const insert = (page, at, text) => editorOf(page).evaluate((node, [position, value]) => { const view = node.cmView.view; view.dispatch({ changes: { from: position === 'end' ? view.state.doc.length : position, insert: value }, selection: { anchor: (position === 'end' ? view.state.doc.length : position) + value.length } }); }, [at, text]);
 const cleanup = async (...contexts) => { for (const context of contexts) await context?.close().catch(() => {}); if (process.env.LAN_KEEP_EXTENSION) console.log('kept', extension); else rmSync(work, { recursive: true, force: true }); };
 
+
+// ---- S2-03 helpers: everything goes through the page's own project fetch (the same routes the native file tree uses)
+const noise = (length, seed) => { const out = Buffer.alloc(length); let x = seed >>> 0; for (let i = 0; i < length; i++) { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; out[i] = x >>> 24; } return out; };
+const sha = bytes => createHash('sha256').update(bytes).digest('hex') + ':' + bytes.length;
+const call = (page, path, method = 'POST', body) => page.evaluate(async ([path, method, body]) => { const id = document.querySelector('meta[name="ol-project_id"]').content;
+  const r = await fetch(`/project/${id}${path}`, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); return r.status + ' ' + await r.text(); }, [path, method, body]);
+const upload = (page, path, bytes) => page.evaluate(async ([path, data]) => { const id = document.querySelector('meta[name="ol-project_id"]').content, name = path.split('/').pop();
+  const form = new FormData(); form.append('qqfile', new File([Uint8Array.from(atob(data), c => c.charCodeAt(0))], name)); form.append('relativePath', path); form.append('name', name);
+  const r = await fetch(`/project/${id}/upload`, { method: 'POST', body: form }); return r.status + ' ' + await r.text(); }, [path, bytes.toString('base64')]);
+/** path -> sha256:length of every project file, read back through the page's history snapshot and blob routes. */
+const digests = page => page.evaluate(async () => { const id = document.querySelector('meta[name="ol-project_id"]').content, out = {};
+  const { chunk } = await (await fetch(`/project/${id}/latest/history`)).json();
+  for (const [path, file] of Object.entries(chunk.history.snapshot.files)) {
+    const bytes = typeof file.content === 'string' ? new TextEncoder().encode(file.content) : new Uint8Array(await (await fetch(`/project/${id}/blob/${file.hash}`)).arrayBuffer());
+    out[path] = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('') + ':' + bytes.length;
+  }
+  return out; });
+const entityId = (page, name) => page.evaluate(name => document.querySelector(`li[role=treeitem][aria-label="${CSS.escape(name)}"] [data-file-id]`)?.dataset.fileId, name);
+const inTree = (page, name) => page.locator(`li[role=treeitem][aria-label="${name}"]`).count();
 let ownerContext, guestContext; const errors = [];
 try {
   ownerContext = await profile('owner', { registerHelper: true }); guestContext = await profile('guest');
@@ -59,13 +78,21 @@ try {
   await editorOf(owner).waitFor({ timeout: 60000 });
   const projectUrl = owner.url();
   assert((await docOf(owner)).includes('Hello world.'));
+  // Paths stay in the BMP: the native editor's history model refuses surrogates in path names (BadPathnameError); content carries supplementary characters.
+  // ---- S2-03 fixture: nested Unicode folders, a CRLF/supplementary text file, a multi-chunk binary and a PDF (all synthetic)
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1'), noise(420_000, 9), Buffer.from('\n%%EOF\n')]);
+  const fixture = { 'figures/Ünï ğ/plot.bin': noise(900_000, 3), 'out/paper.pdf': pdf, 'notes Ω.tex': Buffer.from('Bölüm 𝔛 😀\r\nikinci satır\r\n') };
+  for (const [path, bytes] of Object.entries(fixture)) assert.match(await upload(owner, path, bytes), /^200 /, path);
+  const ownerFiles = await digests(owner);
+  for (const [path, bytes] of Object.entries(fixture)) assert.equal(ownerFiles[path], sha(bytes), path);
+  const projectBytes = Object.values(ownerFiles).reduce((n, d) => n + Number(d.split(':')[1]), 0);
   // ---- Share on this network
   await owner.getByRole('button', { name: 'Share on this network' }).click();
   const panel = owner.getByRole('dialog', { name: 'Share on this network' });
-  await until(async () => (await panel.locator('code').nth(0).textContent()).trim() || /./.test(await owner.locator('#local-status').textContent()), 'share link or error');
+  await until(async () => (await panel.locator('code').nth(0).textContent()).trim() || (await owner.locator('#local-status').getAttribute('data-error')) === 'true', 'share link or error');
   assert.equal(await panel.count(), 1, await owner.locator('#local-status').textContent());
   const link = (await panel.locator('code').nth(0).textContent()).trim(), passcode = (await panel.locator('code').nth(1).textContent()).trim();
-  assert.match(link, /^chrome-extension:\/\/[a-p]{32}\/extension\/index\.html#join=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{22}$/); assert.doesNotMatch(link, new RegExp(passcode.replaceAll('-', '').slice(0, 8)));
+  assert.match(link, /^chrome-extension:\/\/[a-p]{32}\/extension\/index\.html#join=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{22}$/, await owner.locator('#local-status').textContent()); assert.doesNotMatch(link, new RegExp(passcode.replaceAll('-', '').slice(0, 8)));
   note('owner shares on loopback: link without passcode, separate passcode', link.replace(/\/[A-Za-z0-9_-]{22}$/, '/<room>'));
   // ---- wrong passcode is refused, in the participant's isolated profile
   const bad = await guestContext.newPage(); await bad.goto(link);
@@ -76,11 +103,14 @@ try {
   const guest = await guestContext.newPage(); guest.on('pageerror', error => { errors.push('guest: ' + error.message.slice(0, 200)); if (process.env.LAN_DEBUG) console.log('[guest pageerror]', error.stack.slice(0, 600)); });
   if (process.env.LAN_DEBUG) guest.on('console', m => { if (!/BusyTeX/.test(m.text())) console.log('[guest console]', m.text().slice(0, 300)); });
   await guest.goto(link);
-  await guest.getByLabel('Passcode').fill(passcode); await guest.getByLabel('Your name for this session').fill('Zoë 😀'); await guest.getByRole('button', { name: 'Join' }).click();
-  await editorOf(guest).waitFor({ timeout: 60000 });
+  await guest.getByLabel('Passcode').fill(passcode); await guest.getByLabel('Your name for this session').fill('Zoë 😀');
+  const joinStart = performance.now(); await guest.getByRole('button', { name: 'Join' }).click();
+  await editorOf(guest).waitFor({ timeout: 60000 }); const joinMs = performance.now() - joinStart;
   await until(async () => (await docOf(guest)).includes('Hello world.'), 'guest has the owner text');
   await until(async () => (await panel.textContent()).includes('Zoë 😀'), 'owner lists the participant by session name');
   note('guest joins with link+passcode+session name; owner sees the name');
+  assert.deepEqual(await digests(guest), ownerFiles, 'participant files equal the owner files byte for byte');
+  note('S2-03 join transfers the project exactly (nested Unicode folders, CRLF text, multi-chunk binary, PDF)', `${Object.keys(ownerFiles).length} files, ${projectBytes} bytes, join->editor ${joinMs.toFixed(0)} ms`);
   // ---- concurrent edits, supplementary Unicode, same position
   await Promise.all([insert(owner, 0, 'OWNER 😀 Türkçe\n'), insert(guest, 0, 'GUEST 𝔛 ж\n')]);
   await insert(owner, 'end', '% owner tail ß\n'); await insert(guest, 'end', '% guest tail 🎉\n');
@@ -104,10 +134,36 @@ try {
     await to.mouse.move(spot.x, spot.y); await until(async () => (await to.locator('.ol-cm-cursorHighlightLabel').allTextContents()).some(t => t.includes(name)), `caret label shows ${name}`);
   }
   note('carets: each side draws the other\'s caret at its offset, labelled with its session name');
+  // ---- S2-03 live file-tree changes in both directions, each one ordered by the owner
+  const same = async what => { const want = await until(async () => { const [a, b] = [await digests(owner), await digests(guest)]; const differ = Object.keys({ ...a, ...b }).filter(k => a[k] !== b[k]); if (!differ.length) return a; throw Error(JSON.stringify(differ.map(k => [k, a[k], b[k]]))); }, what); return want; };
+  const png = noise(700_000, 33);
+  const treeStart = performance.now(); assert.match(await upload(guest, 'guest ж.png', png), /^200 /);
+  let now = await same('participant upload reaches the owner'); assert.equal(now['guest ж.png'], sha(png));
+  await until(() => inTree(owner, 'guest ж.png'), 'owner tree shows the upload'); const uploadMs = performance.now() - treeStart;
+  await owner.getByRole('button', { name: 'New folder' }).click(); await owner.getByRole('dialog').getByRole('textbox').fill('chapters ß');
+  await owner.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
+  await until(() => inTree(guest, 'chapters ß'), 'owner folder reaches the participant tree');
+  assert.match(await call(guest, `/file/${await entityId(guest, 'guest ж.png')}/move`, 'POST', { folder_id: await entityId(guest, 'chapters ß') }), /^204/);
+  now = await same('participant move reaches the owner'); assert.equal(now['chapters ß/guest ж.png'], sha(png)); assert.equal(now['guest ж.png'], undefined);
+  await until(async () => !(await inTree(owner, 'guest ж.png')), 'owner tree moved the file');
+  assert.match(await call(owner, `/doc/${await entityId(owner, 'notes Ω.tex')}/rename`, 'POST', { name: 'notları Ω.tex' }), /^204/);
+  now = await same('owner rename reaches the participant'); assert.equal(now['notları Ω.tex'], ownerFiles['notes Ω.tex']);
+  await until(() => inTree(guest, 'notları Ω.tex'), 'participant tree shows the new name');
+  assert.match(await call(guest, '/settings', 'POST', { rootDocId: await entityId(guest, 'notları Ω.tex') }), /^204/);   // set-main from the participant
+  assert.match(await call(guest, `/doc/${await entityId(guest, 'notları Ω.tex')}`, 'DELETE'), /^409 .*main document/);   // the owner now guards the new main
+  assert.match(await call(owner, '/settings', 'POST', { rootDocId: await entityId(owner, 'main.tex') }), /^204/);
+  assert.match(await call(guest, `/folder/${await entityId(guest, 'out')}`, 'DELETE'), /^204/);
+  now = await same('participant delete reaches the owner'); assert.equal(now['out/paper.pdf'], undefined); assert.equal(now['figures/Ünï ğ/plot.bin'], ownerFiles['figures/Ünï ğ/plot.bin']);
+  await until(async () => !(await inTree(owner, 'out')), 'owner tree removed the folder');
+  assert.match(await call(guest, `/doc/${await entityId(guest, 'main.tex')}/rename`, 'POST', { name: '../escape.tex' }), /^409/);   // refused by the owner
+  assert.match(await call(guest, `/doc/${await entityId(guest, 'notları Ω.tex')}/rename`, 'POST', { name: 'MAIN.TEX' }), /^409 .*already exists/);
+  await same('refusals change nothing');
+  note('S2-03 live tree: participant upload/move/set-main/delete and owner folder/rename/set-main reach both sides exactly; escape and case duplicate refused', `upload ${png.length} bytes -> owner tree ${uploadMs.toFixed(0)} ms`);
   // ---- the owner's saved project already holds the merged text (reload from IndexedDB)
   await owner.waitForTimeout(500); const ownerText = await docOf(owner);
   const copy = await ownerContext.newPage(); await copy.goto(projectUrl); await editorOf(copy).waitFor({ timeout: 60000 });
-  await until(async () => (await docOf(copy)) === ownerText, 'reloaded owner copy equals the shared text'); await copy.close();
+  await until(async () => (await docOf(copy)) === ownerText, 'reloaded owner copy equals the shared text');
+  assert.deepEqual(await digests(copy), await digests(owner), 'owner device saved every shared tree change exactly'); await copy.close();
   note('owner reload shows the exact merged text (persisted on the owner device)');
   // ---- host loss: closing the owner page stops the helper; the guest is locked; the owner's data stays
   await owner.close();
@@ -134,7 +190,7 @@ try {
   const probe = await guestContext.newPage(); await probe.goto(root + '/extension/index.html');
   const stored = await probe.evaluate(async () => {
     const projects = await new Promise(resolve => { const r = indexedDB.open('overleaf-local-projects'); r.onsuccess = () => { const db = r.result; if (!db.objectStoreNames.contains('projects')) { db.close(); resolve(0); return; } const c = db.transaction('projects').objectStore('projects').count(); c.onsuccess = () => { db.close(); resolve(c.result); }; }; r.onerror = () => resolve(-1); });
-    const local = Object.entries(localStorage).filter(([, v]) => /Hello world|OWNER|Türkçe|after rejoin/.test(v)).length;
+    const local = Object.entries(localStorage).filter(([, v]) => /Hello world|OWNER|Türkçe|after rejoin|Bölüm|%PDF/.test(v)).length;
     return { projects, local };
   });
   assert.deepEqual(stored, { projects: 0, local: 0 }); note('participant profile: no saved project, no source text in localStorage', JSON.stringify(stored));
