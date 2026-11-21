@@ -57,7 +57,7 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
     el('div', { className: 'lan-step' }, el('span', { className: 'lan-num', textContent: '1' }), el('div', {}, el('p', { textContent: 'Send this link' }),
       el('div', { className: 'lan-row' }, link, copyButton('Copy link', () => link.textContent)))),
     el('div', { className: 'lan-step' }, el('span', { className: 'lan-num', textContent: '2' }), el('div', {}, el('p', { textContent: 'Tell them this code separately' }),
-      pass, el('p', { className: 'lan-hint', textContent: 'Not in the same message as the link. Anyone with both can edit while sharing is on.' }))),
+      el('div', { className: 'lan-row' }, pass, copyButton('Copy code', () => pass.textContent)), el('p', { className: 'lan-hint', textContent: 'Not in the same message as the link. Anyone with both can edit while sharing is on.' }))),
     el('div', { className: 'lan-section' }, el('h3', {}, 'In this session', count), people,
       el('p', { className: 'lan-hint', textContent: 'Edit while I’m online: nothing is saved on their device. Can keep a copy: they may save and export their own copy; switching back stops new copies, not earlier ones.' })),
     note, stopButton);
@@ -80,11 +80,13 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
         finally { choice.disabled = false; }
       };
       const remove = el('button', { type: 'button', className: 'lan-remove', textContent: 'Remove', ariaLabel: `Remove ${name}` }); let armed;
+      const disarm = () => { armed = undefined; remove.textContent = 'Remove'; remove.ariaLabel = `Remove ${name}`; remove.classList.remove('lan-confirm'); };
       remove.onclick = async () => {
-        if (!armed) { armed = setTimeout(() => { armed = undefined; remove.textContent = 'Remove'; remove.classList.remove('lan-confirm'); }, 3000); remove.textContent = 'Confirm'; remove.classList.add('lan-confirm'); return; }
+        if (!armed) { armed = setTimeout(disarm, 3000); remove.textContent = 'Confirm'; remove.ariaLabel = `Confirm: remove ${name}`; remove.classList.add('lan-confirm'); return; }
         clearTimeout(armed); remove.disabled = true;
-        pass.textContent = await host.remove(peer);
-        note.textContent = `${name} was removed. New joins need the new code above; people still here are not affected.`; render([]);
+        try { pass.textContent = await host.remove(peer); note.textContent = `${name} was removed. New joins need the new code above; people still here are not affected.`; }
+        catch { note.textContent = `${name} could not be removed. Stop sharing to end every session.`; }
+        render([]); stopButton.focus(); // the row and its button are gone: keep keyboard focus inside the panel
       };
       return el('li', { className: 'lan-person' }, avatar, el('span', { className: 'lan-name', textContent: name, title: name }), choice, remove);
     }));
@@ -103,7 +105,7 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
       network: !globalThis.LATEX_LAN_LOOPBACK, // the loopback browser fixture sets this; real use shares on the local network
     });
   } catch (error) { gone(); helper.close(); throw error; }
-  link.textContent = host.link; link.title = host.link; pass.textContent = host.passcode; render([]);
+  link.textContent = host.link; link.title = host.link; pass.textContent = host.passcode; render([]); panel.querySelector('.lan-btn').focus();
   close.onclick = () => { panel.hidden = true; };
   stopButton.onclick = async () => { stopButton.disabled = true; await host.stop(); gone(); };
   host.panel = panel;
@@ -114,15 +116,15 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
 export function joinForm(hash, events) {
   document.head.append(style);
   const initial = hash ? `chrome-extension://${location.host}/extension/index.html#${hash}` : '';
-  const link = el('input', { value: initial, ariaLabel: 'Join link', autocomplete: 'off', spellcheck: false });
-  const code = el('input', { ariaLabel: 'Passcode', className: 'lan-code', autocomplete: 'off', spellcheck: false, placeholder: 'XXXX-XXXX-XXXX-XXXX', autofocus: true });
-  const name = el('input', { ariaLabel: 'Your name for this session', autocomplete: 'off', maxLength: 32, placeholder: 'How others will see you' });
+  const link = el('input', { id: 'lan-join-link', value: initial, ariaLabel: 'Join link', autocomplete: 'off', spellcheck: false });
+  const code = el('input', { id: 'lan-join-code', ariaLabel: 'Passcode', className: 'lan-code', autocomplete: 'off', spellcheck: false, placeholder: 'XXXX-XXXX-XXXX-XXXX', autofocus: true });
+  const name = el('input', { id: 'lan-join-name', ariaLabel: 'Your name for this session', autocomplete: 'off', maxLength: 32, placeholder: 'How others will see you' });
   const note = el('p', { role: 'status' }), submit = el('button', { type: 'submit', className: 'lan-btn lan-primary', textContent: 'Join' });
   let from = ''; try { const t = parseJoinLink(initial); from = `Shared from ${t.host} on your network.`; } catch {}
   // The link opened this page, so only the passcode and a name are asked; without a valid link the field is shown.
   const form = el('form', { className: 'lan-panel', ariaLabel: 'Join a shared project' }, el('div', { className: 'lan-head' }, el('h2', { textContent: 'Join a shared project' })),
-    ...(from ? [el('p', { className: 'lan-sub', textContent: from })] : [el('label', { textContent: 'Join link' }), link]),
-    el('label', { textContent: 'Passcode' }), code, el('label', { textContent: 'Your name for this session' }), name, submit, note);
+    ...(from ? [el('p', { className: 'lan-sub', textContent: from })] : [el('label', { textContent: 'Join link', htmlFor: link.id }), link]),
+    el('label', { textContent: 'Passcode', htmlFor: code.id }), code, el('label', { textContent: 'Your name for this session', htmlFor: name.id }), name, submit, note);
   const screen = el('div', { className: 'lan-join' }, form); document.body.append(screen); code.focus();
   return new Promise(resolve => {
     form.onsubmit = async event => {

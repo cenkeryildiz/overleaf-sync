@@ -209,7 +209,7 @@ try {
   lanEvents.onStopped = () => { lan = null; cursors.clear(); status('Sharing stopped. Your project is unchanged on this device.'); };
   document.querySelector('#local-share')?.addEventListener('click', async () => {
     const button = document.querySelector('#local-share');
-    if (lan?.panel) { lan.panel.hidden = !lan.panel.hidden; return; }
+    if (lan?.panel) { lan.panel.hidden = !lan.panel.hidden; if (!lan.panel.hidden) lan.panel.querySelector('.lan-btn')?.focus(); return; }
     button.disabled = true;
     try {
       await flush();

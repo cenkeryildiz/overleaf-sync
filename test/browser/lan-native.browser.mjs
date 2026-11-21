@@ -263,7 +263,9 @@ try {
     await reveal(again, panel2); await until(async () => (await panel2.textContent()).includes('Temp'), 'owner lists Temp');
     const remove = panel2.getByRole('button', { name: 'Remove Temp' }); await remove.click(); await remove.click(); // second click confirms
     await until(async () => (await panel2.locator('code').nth(1).textContent()).trim() !== passcode2, 'new code after Remove');
-    await until(async () => !(await panel2.textContent()).includes('Temp'), 'Temp no longer listed');
+    // the list, not the whole panel: the status line names the removed person on purpose
+    await until(async () => !(await panel2.locator('ul').textContent()).includes('Temp'), 'Temp no longer listed');
+    await until(async () => /removed you/i.test(await temp.locator('[role=alert]').textContent()), 'Temp is told it was removed and is locked out');
     const late = await ctx.newPage(); await late.goto(link2);
     await late.getByLabel('Passcode').fill(passcode2); await late.getByLabel('Your name for this session').fill('Temp again'); await late.getByRole('button', { name: 'Join' }).click();
     await until(async () => /replaced/i.test(await late.locator('.lan-panel [role=status]').textContent()), 'old code refused after Remove'); await ctx.close();
@@ -292,5 +294,5 @@ try {
   await probe.reload(); await editorOf(probe).waitFor({ timeout: 60000 }); await until(async () => (await docOf(probe)).startsWith('% offline edit\n'), 'offline edit kept after reload');
   note('permitted copy reopens offline, is edited and keeps the edit across a reload');
   assert.deepEqual(errors, [], 'page errors');
-  console.log(`PASS ${results.length} checks (loopback only; no physical LAN)`);
+  console.log(`PASS ${results.length} checks (${process.env.LAN_NETWORK ? "this Mac's private network address" : "loopback"} only; no second device)`);
 } finally { await cleanup(ownerContext, guestContext); }
