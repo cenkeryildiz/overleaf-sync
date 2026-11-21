@@ -174,3 +174,18 @@ test('S2-05 resume: a forged, replayed or revoked resume token is refused; a val
   const revoked = connect({ resume: next.resume }); await assert.rejects(revoked.session.joined, error => error.code === 'resume');
   const wrong = connect({ resume: next.resume, passcode: 'AAAA-AAAA-AAAA-AAAA' }); await assert.rejects(wrong.session.joined, /passcode incorrect/);
 });
+
+test('removing a participant rotates the passcode: others still resume with the old one, the removed one cannot return', async () => {
+  const { room, connect } = harness();
+  const ada = connect(), bob = connect({ username: 'Bob' }); const { resume } = await ada.session.joined; await bob.session.joined; await settle();
+  const old = room.passcode, bobPeer = room.participants.find(p => p.name === 'Bob').peer;
+  await room.revoke(bobPeer); const fresh = room.rotatePasscode(); await settle();
+  assert.notEqual(fresh, old); assert.deepEqual(room.participants.map(p => p.name), ['Ada']);
+  const bobAgain = connect({ passcode: old, username: 'Bob' }); await assert.rejects(bobAgain.session.joined, /replaced/);         // old code, no token
+  const bobOther = connect({ passcode: old, username: 'Robert' }); await assert.rejects(bobOther.session.joined, /replaced/);    // a new name does not help
+  const back = connect({ passcode: old, resume }), next = await back.session.joined; await settle();                              // Ada after a Wi-Fi drop
+  assert.ok(next.resume); assert.deepEqual(room.participants.map(p => p.name), ['Ada']);
+  const eve = connect({ passcode: fresh, username: 'Eve' }); await eve.session.joined; await settle();                            // the new code admits newcomers
+  assert.deepEqual(room.participants.map(p => p.name).sort(), ['Ada', 'Eve']);
+  const wrong = connect({ passcode: newRoomSecrets().passcode, username: 'Mallory', resume: next.resume }); await assert.rejects(wrong.session.joined); // never-valid code fails even with a token
+});

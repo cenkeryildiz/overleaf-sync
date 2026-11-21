@@ -48,6 +48,8 @@ async function profile(name, { registerHelper = false } = {}) {
 const editorOf = page => page.getByRole('textbox', { name: /^Source Editor/ });
 const docOf = page => editorOf(page).evaluate(node => node.cmView.view.state.doc.toString());
 const until = async (check, what, ms = 15000) => { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await check(); if (last) return last; } catch (error) { last = error; } await new Promise(r => setTimeout(r, 50)); } throw Error('Timed out: ' + what + (last instanceof Error ? ' (' + last.message + ')' : '')); };
+/** The Share panel closes on any outside click (light dismiss): reopen it from the toolbar before using it. */
+const reveal = async (page, panel) => { if (!(await panel.isVisible())) await page.locator('#local-share').click(); await panel.waitFor(); };
 const insert = (page, at, text) => editorOf(page).evaluate((node, [position, value]) => { const view = node.cmView.view; view.dispatch({ changes: { from: position === 'end' ? view.state.doc.length : position, insert: value }, selection: { anchor: (position === 'end' ? view.state.doc.length : position) + value.length } }); }, [at, text]);
 const cleanup = async (...contexts) => { for (const context of contexts) await context?.close().catch(() => {}); if (process.env.LAN_KEEP_EXTENSION) console.log('kept', extension); else rmSync(work, { recursive: true, force: true }); };
 
@@ -117,7 +119,11 @@ try {
   const joinStart = performance.now(); await guest.getByRole('button', { name: 'Join' }).click();
   await editorOf(guest).waitFor({ timeout: 60000 }); const joinMs = performance.now() - joinStart;
   await until(async () => (await docOf(guest)).includes('Hello world.'), 'guest has the owner text');
+  await reveal(owner, panel);
   await until(async () => (await panel.textContent()).includes('Zoë 😀'), 'owner lists the participant by session name');
+  await owner.mouse.click(5, 300); await until(async () => !(await panel.isVisible()), 'panel closes on an outside click');
+  await reveal(owner, panel); await owner.keyboard.press('Escape'); await until(async () => !(await panel.isVisible()), 'Esc closes the panel');
+  await reveal(owner, panel); note('share panel closes on an outside click and on Esc; the Share button reopens it');
   note('guest joins with link+passcode+session name; owner sees the name');
   assert.deepEqual(await digests(guest), ownerFiles, 'participant files equal the owner files byte for byte');
   note('S2-03 join transfers the project exactly (nested Unicode folders, CRLF text, multi-chunk binary, PDF)', `${Object.keys(ownerFiles).length} files, ${projectBytes} bytes, join->editor ${joinMs.toFixed(0)} ms`);
@@ -195,6 +201,7 @@ try {
   note('rejoin with a new room code: old code refused, shared text current, edits flow');
   // ---- S2-04 owner permissions: restricted by default, owner grants a copy, downgrade stops new copies, enforcement without the UI
   const copyIds = ['#local-zip', '#local-pdf', '#local-export', '#local-savecopy'], states = page => page.evaluate(ids => ids.map(id => document.querySelector(id).disabled), copyIds);
+  await reveal(again, panel2);
   const permission = panel2.getByLabel('Permission for Zoë 😀');
   assert.equal(await permission.inputValue(), 'online'); assert.deepEqual(await states(rejoin), [true, true, true, true]);
   note('owner lists the participant with "Edit while host is online" (default); participant copy/export/download/save controls are disabled');
@@ -234,12 +241,14 @@ try {
   assert(!guestLogs.some(line => line.includes('RSECRETA')), 'restricted text in the participant console');
   note('restricted: devtools save, re-enabled buttons and direct clicks are refused; no download; nothing in IndexedDB/localStorage/sessionStorage/CacheStorage/console, read from a freshly loaded page', JSON.stringify(restrictedScan));
   // grant: explicit copies work
+  await reveal(again, panel2);
   await permission.selectOption('copy'); await until(async () => (await states(rejoin)).every(disabled => !disabled), 'controls enabled after the copy grant');
   await rejoin.locator('#local-zip').click(); await until(() => downloads.some(name => name.endsWith('.zip')), 'ZIP download');
   await rejoin.locator('#local-pdf').click(); await until(() => downloads.includes('output.pdf'), 'PDF download');
   await rejoin.evaluate(() => document.querySelector('#local-savecopy').click()); await until(async () => /standalone copy was saved/.test(await rejoin.locator('#local-status').textContent()), 'standalone copy saved');
   assert.equal((await scan(rejoin, [])).projects, 1); note('owner grants "Keep a copy": ZIP, PDF download and a standalone saved copy work', downloads.join(','));
   // downgrade: new copies stop, the earlier copy is not recalled
+  await reveal(again, panel2);
   await permission.selectOption('online'); await until(async () => (await states(rejoin)).every(Boolean), 'controls disabled after the downgrade');
   await rejoin.evaluate(ids => { for (const id of ids) document.querySelector(id).disabled = false; }, copyIds);
   const before = downloads.length; await rejoin.locator('#local-zip').click(); await until(async () => /not allowed/.test(await rejoin.locator('#local-status').textContent()), 'zip refused after downgrade');
@@ -247,6 +256,19 @@ try {
   await insert(rejoin, 0, '% RSECRETB after downgrade\n'); await until(async () => (await docOf(again)).includes('RSECRETB'), 'post-downgrade edit reaches the owner');
   assert.equal((await scan(rejoin, [])).projects, 1); note('downgrade disables copies and the owner refuses them; the earlier copy remains');
   // ---- stop sharing revokes
+  // ---- Remove: that session ends and a new code replaces the old one, which then admits nobody new
+  { const ctx = await profile('removed'), temp = await ctx.newPage(); await temp.goto(link2);
+    await temp.getByLabel('Passcode').fill(passcode2); await temp.getByLabel('Your name for this session').fill('Temp'); await temp.getByRole('button', { name: 'Join' }).click();
+    await editorOf(temp).waitFor({ timeout: 60000 });
+    await reveal(again, panel2); await until(async () => (await panel2.textContent()).includes('Temp'), 'owner lists Temp');
+    const remove = panel2.getByRole('button', { name: 'Remove Temp' }); await remove.click(); await remove.click(); // second click confirms
+    await until(async () => (await panel2.locator('code').nth(1).textContent()).trim() !== passcode2, 'new code after Remove');
+    await until(async () => !(await panel2.textContent()).includes('Temp'), 'Temp no longer listed');
+    const late = await ctx.newPage(); await late.goto(link2);
+    await late.getByLabel('Passcode').fill(passcode2); await late.getByLabel('Your name for this session').fill('Temp again'); await late.getByRole('button', { name: 'Join' }).click();
+    await until(async () => /replaced/i.test(await late.locator('.lan-panel [role=status]').textContent()), 'old code refused after Remove'); await ctx.close();
+    note('owner removes a participant (two-click confirm): the session ends, a new code is shown, the old code admits nobody new'); }
+  await reveal(again, panel2);
   await panel2.getByRole('button', { name: 'Stop sharing' }).click();
   await until(async () => /stopped/i.test(await rejoin.locator('[role=alert]').textContent()), 'participant removed on stop'); note('stop sharing ends the participant session');
   for (const id of ['#local-savecopy', '#local-zip']) { await rejoin.evaluate(sel => { const node = document.querySelector(sel); node.disabled = false; node.click(); }, id); await until(async () => /ended|not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused after revoke'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }

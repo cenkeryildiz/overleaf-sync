@@ -88,6 +88,7 @@ const serial = () => { let tail = Promise.resolve(); return task => { const run 
  */
 export class OwnerRoom {
   #peers = new Map(); #stopped = false; #resume = new Map(); // name -> resume token for an authenticated rejoin (memory only)
+  #retired = []; // passcodes replaced by rotatePasscode(): they still open a resume, never a new join
   constructor({ send, admit, drop, onJoin = () => {}, onMessage = () => {}, onLeave = () => {} }, secrets = newRoomSecrets()) {
     Object.assign(this, { roomId: secrets.roomId, passcode: secrets.passcode, transport: { send, admit, drop }, onJoin, onMessage, onLeave });
   }
@@ -119,12 +120,24 @@ export class OwnerRoom {
     if (entry?.state === 'joined') { this.#resume.delete(entry.name); await this.#send(peer, entry, { t: 'revoked' }).catch(() => {}); }
     this.#remove(peer, true);
   }
+  /**
+   * After removing someone: new joins need a new passcode. Participants already in the session keep reconnecting with the
+   * old one, because a rejoin under a retired passcode must also prove its resume token (a removed participant has none).
+   */
+  rotatePasscode() { if (this.#stopped) return this.passcode; this.#retired = [this.passcode, ...this.#retired].slice(0, 8); this.passcode = newRoomSecrets().passcode; return this.passcode; }
   /** Stop sharing: every participant loses access; a new room has a new passcode. */
   async stop() {
     if (this.#stopped) return;
     await this.broadcast({ t: 'stopped' }).catch(() => {});
     this.#stopped = true;
     for (const peer of [...this.#peers.keys()]) this.#remove(peer, true);
+  }
+  /** The first sealed message decides which passcode the participant used: the current one, or a retired one (resume only). */
+  async #openJoin(entry, bytes) {
+    try { return await entry.channel.open(bytes); } catch (error) {
+      for (const channel of entry.older) { const message = await channel.open(bytes).catch(() => null); if (message) { Object.assign(entry, { channel, retired: true }); return message; } }
+      throw error;
+    } finally { entry.older = []; }
   }
   async #send(peer, entry, message) { this.transport.send(peer, await entry.channel.seal(message)); }
   #remove(peer, drop) {
@@ -138,18 +151,22 @@ export class OwnerRoom {
     if (entry.state === 'hello') {
       if (bytes.length !== 1 + POINT || bytes[0] !== HELLO) throw Error('Malformed hello');
       const pair = await subtle.generateKey(ECDH, false, ['deriveBits']), own = new Uint8Array(await subtle.exportKey('raw', pair.publicKey)), nonce = random(NONCE);
-      const theirs = bytes.slice(1), keys = await deriveKeys(pair.privateKey, theirs, this.roomId, normalizePasscode(this.passcode), theirs, own, nonce);
-      Object.assign(entry, { state: 'joining', channel: new Channel(keys.toParticipant, keys.toOwner, this.roomId, 'to-participant', 'to-owner') });
+      const theirs = bytes.slice(1), channels = await Promise.all([this.passcode, ...this.#retired].map(async code => {
+        const keys = await deriveKeys(pair.privateKey, theirs, this.roomId, normalizePasscode(code), theirs, own, nonce);
+        return new Channel(keys.toParticipant, keys.toOwner, this.roomId, 'to-participant', 'to-owner');
+      }));
+      Object.assign(entry, { state: 'joining', channel: channels[0], older: channels.slice(1), retired: false });
       this.transport.send(peer, concat([CHALLENGE], own, nonce));
       return;
     }
-    const message = await entry.channel.open(bytes); // a wrong passcode fails here and drops the connection
+    const message = entry.state === 'joining' ? await this.#openJoin(entry, bytes) : await entry.channel.open(bytes); // a wrong passcode fails here and drops the connection
     if (entry.state === 'joining') {
       const name = message.t === 'join' && validUsername(message.name);
       if (!name) throw Error('Invalid join');
       // A rejoin proves the token from its last welcome; revoke and leave delete it, so a removed participant cannot resume.
       const resuming = 'resume' in message, valid = resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name);
       if (resuming && !valid) { await this.#send(peer, entry, { t: 'refused', code: 'resume', reason: 'This session can no longer be resumed' }); throw Error('Stale resume'); }
+      if (entry.retired && !valid) { await this.#send(peer, entry, { t: 'refused', reason: 'This passcode was replaced. Ask the owner for the current one' }); throw Error('Retired passcode'); }
       const held = this.participants.find(p => p.name === name);
       if (held && valid) this.#remove(held.peer, true); // the same participant on a new connection: the old one is stale
       else if (held) { await this.#send(peer, entry, { t: 'refused', reason: 'That name is already in use in this session' }); throw Error('Name in use'); }

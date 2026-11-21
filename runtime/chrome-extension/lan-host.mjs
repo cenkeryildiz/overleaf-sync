@@ -198,7 +198,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
     waiting.clear();
   };
   return {
-    room, port, link: joinLink(bind, port, room.roomId), passcode: room.passcode, stop, get stopped() { return stopped; },
+    room, port, link: joinLink(bind, port, room.roomId), get passcode() { return room.passcode; }, stop, get stopped() { return stopped; },
     /** Current text/version for the owner's editor; the log, not the file, is authoritative while sharing. */
     text: path => syncs.get(current(path))?.text,
     /** An owner file-tree change ({kind, ...}; put carries `bytes`): checked, applied through source.apply, then sent to everyone. */
@@ -217,5 +217,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
     participants: () => room.participants,
     setGrant: (peer, grant) => room.setGrant(peer, grant),
     revoke: peer => room.revoke(peer),
+    /** Remove one participant: their session ends and new joins need the new passcode this returns. */
+    async remove(peer) { await room.revoke(peer); return room.rotatePasscode(); },
   };
 }
