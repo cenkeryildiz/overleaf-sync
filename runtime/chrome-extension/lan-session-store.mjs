@@ -72,7 +72,7 @@ export function connectStore({ onProject = () => {}, onTransferError = () => {},
       receiver.accept(message).then(project => { if (project) { store.load(project); onProject(project); } }, error => onTransferError(error));
     },
     onGrant: grant => { store.setGrant(grant); onGrant(grant); },
-    onEnd: reason => { receiver.abort(); store.wipe(); onEnd(reason); },
+    onEnd: (reason, final) => { receiver.abort(); store.wipe(); onEnd(reason, final); },
   });
   session.joined.then(({ grant }) => { if (store.grant === null) store.setGrant(grant); }, () => {});
   return { session, store, requestSnapshot: () => session.send({ t: 'snapshot', req: true }) };

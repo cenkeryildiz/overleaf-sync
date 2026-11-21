@@ -87,7 +87,7 @@ const serial = () => { let tail = Promise.resolve(); return task => { const run 
  * receives requests that passed `authorize`.
  */
 export class OwnerRoom {
-  #peers = new Map(); #stopped = false;
+  #peers = new Map(); #stopped = false; #resume = new Map(); // name -> resume token for an authenticated rejoin (memory only)
   constructor({ send, admit, drop, onJoin = () => {}, onMessage = () => {}, onLeave = () => {} }, secrets = newRoomSecrets()) {
     Object.assign(this, { roomId: secrets.roomId, passcode: secrets.passcode, transport: { send, admit, drop }, onJoin, onMessage, onLeave });
   }
@@ -116,7 +116,7 @@ export class OwnerRoom {
   async broadcast(message, except) { await Promise.all(this.participants.filter(p => p.peer !== except).map(p => this.sendTo(p.peer, message))); }
   async revoke(peer) {
     const entry = this.#peers.get(peer);
-    if (entry?.state === 'joined') await this.#send(peer, entry, { t: 'revoked' }).catch(() => {});
+    if (entry?.state === 'joined') { this.#resume.delete(entry.name); await this.#send(peer, entry, { t: 'revoked' }).catch(() => {}); }
     this.#remove(peer, true);
   }
   /** Stop sharing: every participant loses access; a new room has a new passcode. */
@@ -147,16 +147,22 @@ export class OwnerRoom {
     if (entry.state === 'joining') {
       const name = message.t === 'join' && validUsername(message.name);
       if (!name) throw Error('Invalid join');
-      if (this.participants.some(p => p.name === name)) { await this.#send(peer, entry, { t: 'refused', reason: 'That name is already in use in this session' }); throw Error('Name in use'); }
+      // A rejoin proves the token from its last welcome; revoke and leave delete it, so a removed participant cannot resume.
+      const resuming = 'resume' in message, valid = resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name);
+      if (resuming && !valid) { await this.#send(peer, entry, { t: 'refused', code: 'resume', reason: 'This session can no longer be resumed' }); throw Error('Stale resume'); }
+      const held = this.participants.find(p => p.name === name);
+      if (held && valid) this.#remove(held.peer, true); // the same participant on a new connection: the old one is stale
+      else if (held) { await this.#send(peer, entry, { t: 'refused', reason: 'That name is already in use in this session' }); throw Error('Name in use'); }
+      const resume = base64url(random(16)); this.#resume.set(name, resume);
       Object.assign(entry, { state: 'joined', name, grant: 'online' });
       this.transport.admit(peer);
-      await this.#send(peer, entry, { t: 'welcome', grant: entry.grant, participants: this.participants.map(p => p.name) });
+      await this.#send(peer, entry, { t: 'welcome', grant: entry.grant, participants: this.participants.map(p => p.name), resume });
       this.onJoin(peer, name);
       return;
     }
     const action = Object.hasOwn(ACTIONS, message.t) ? ACTIONS[message.t] : null;
     if (!action) throw Error('Unknown request');
-    if (message.t === 'leave') { this.#remove(peer, true); return; }
+    if (message.t === 'leave') { this.#resume.delete(entry.name); this.#remove(peer, true); return; }
     if (!this.authorize(peer, action)) { await this.#send(peer, entry, { t: 'denied', request: message.t, ref: message.ref ?? null }); return; }
     this.onMessage(peer, message, entry.name);
   }
@@ -167,7 +173,7 @@ export class OwnerRoom {
  * message to `receive` and the socket's close to `closed`. `joined` settles once the owner admits or refuses.
  * Session state stays in memory: this module never persists anything.
  */
-export function joinRoom({ roomId, passcode, username, send, close, onMessage = () => {}, onGrant = () => {}, onEnd = () => {} }) {
+export function joinRoom({ roomId, passcode, username, resume, send, close, onMessage = () => {}, onGrant = () => {}, onEnd = () => {} }) {
   const code = normalizePasscode(passcode), name = validUsername(username);
   if (!ROOM.test(String(roomId))) throw Error('This is not a valid join link');
   if (!code) throw Error('Enter the passcode exactly as shown by the owner');
@@ -176,11 +182,11 @@ export function joinRoom({ roomId, passcode, username, send, close, onMessage = 
   const joined = new Promise((resolve, reject) => { settle = { resolve, reject }; });
   joined.catch(() => {});
   const queue = serial();
-  const end = (reason, error) => {
+  const end = (reason, error, final = false) => { // final: revoked, stopped or left; otherwise the connection was lost and may be resumed
     if (state === 'ended') return;
     const wasJoined = state === 'joined'; state = 'ended'; grant = null; channel = null;
     close();
-    if (wasJoined) onEnd(reason); else settle.reject(error ?? Error(reason));
+    if (wasJoined) onEnd(reason, final); else settle.reject(error ?? Error(reason));
   };
   const handle = async bytes => {
     if (state === 'challenge') {
@@ -188,19 +194,20 @@ export function joinRoom({ roomId, passcode, username, send, close, onMessage = 
       const keys = await deriveKeys(pair.privateKey, bytes.slice(1, 1 + POINT), roomId, code, own, bytes.slice(1, 1 + POINT), bytes.slice(1 + POINT));
       channel = new Channel(keys.toOwner, keys.toParticipant, roomId, 'to-owner', 'to-participant');
       state = 'welcome';
-      send(await channel.seal({ t: 'join', name }));
+      send(await channel.seal({ t: 'join', name, ...(resume ? { resume } : {}) }));
       return;
     }
     if (state !== 'welcome' && state !== 'joined') return;
     const message = await channel.open(bytes); // the owner's reply also proves it knows the passcode
     if (state === 'welcome') {
-      if (message.t === 'refused') { end(String(message.reason ?? 'The owner refused this join')); return; }
+      if (message.t === 'refused') { const reason = String(message.reason ?? 'The owner refused this join'); end(reason, Object.assign(Error(reason), { code: message.code === 'resume' ? 'resume' : 'refused' })); return; }
       if (message.t !== 'welcome' || !GRANTS.includes(message.grant)) throw Error('Malformed welcome');
-      state = 'joined'; grant = message.grant; settle.resolve({ grant, participants: Array.isArray(message.participants) ? message.participants.map(String) : [] });
+      state = 'joined'; grant = message.grant;
+      settle.resolve({ grant, participants: Array.isArray(message.participants) ? message.participants.map(String) : [], resume: ROOM.test(message.resume) ? message.resume : null });
       return;
     }
     if (message.t === 'grant' && GRANTS.includes(message.grant)) { grant = message.grant; onGrant(grant); return; }
-    if (message.t === 'revoked' || message.t === 'stopped') { end(message.t === 'revoked' ? 'The owner removed you from this session' : 'The owner stopped sharing'); return; }
+    if (message.t === 'revoked' || message.t === 'stopped') { end(message.t === 'revoked' ? 'The owner removed you from this session' : 'The owner stopped sharing', null, true); return; }
     onMessage(message);
   };
   const session = {
@@ -215,7 +222,7 @@ export function joinRoom({ roomId, passcode, username, send, close, onMessage = 
       if (state !== 'joined' || !Object.hasOwn(ACTIONS, message?.t)) throw Error('Not connected');
       send(await channel.seal(message));
     },
-    leave() { if (state === 'joined') session.send({ t: 'leave' }).catch(() => {}).finally(() => end('You left the session')); else end('You left the session'); },
+    leave() { if (state === 'joined') session.send({ t: 'leave' }).catch(() => {}).finally(() => end('You left the session', null, true)); else end('You left the session', null, true); },
   };
   queue(async () => {
     pair = await subtle.generateKey(ECDH, false, ['deriveBits']); own = new Uint8Array(await subtle.exportKey('raw', pair.publicKey));

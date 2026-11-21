@@ -127,7 +127,7 @@ try {
           const applied = lan ? await lan.edit(file.path, update) : update.v;
           if (lan) persist(file.path, joined ? textOf(editors.get(doc)) : lan.text(file.path)); // saved after the acknowledgement; shared text is authoritative
           else { const next = await api.save(file, text); files.set(next.path, next); }
-          nav = undefined; callback(null); broadcast('otUpdateApplied', { doc, v: applied });
+          nav = undefined; callback(null); if (applied !== null) broadcast('otUpdateApplied', { doc, v: applied }); // null: an explicit reconciliation dropped or replaced it
           status('Saved in this browser. PDF may be from an earlier compilation.'); report('device');
         }).catch(error => {
           failure = error; if (lan) console.warn('[lan] edit failed:', error.message); status(error.message + ' Export your work before closing.', true); report('visible');
@@ -165,10 +165,43 @@ try {
     // A known peer makes the editor publish its caret at once; until then it only does so every five minutes.
     for (const name of names) if (!cursors.has(name)) lanEvents.onCursor({ name, path: project.main, row: 0, column: 0 });
   };
+  // S2-05: a lost connection locks editing behind a notice; unsent edits stay in this tab's memory until a rejoin reconciles them.
+  let notice = null;
+  const node = (tag, props) => Object.assign(document.createElement(tag), props);
+  const lock = (text, ...controls) => { notice?.remove(); notice = node('div', { className: 'lan-join' }); notice.setAttribute('role', 'alert'); notice.append(node('div', { className: 'lan-panel' })); notice.firstChild.append(node('p', { textContent: text }), ...controls); document.body.append(notice); };
+  const unlock = () => { notice?.remove(); notice = null; };
+  lanEvents.onLost = (reason, { retrying }) => {
+    status(reason, true);
+    if (retrying) return lock(reason + '. Reconnecting... Your unsent edits are kept in this tab.');
+    const link = node('input', { ariaLabel: 'New join link (empty: the same room)', placeholder: 'New join link (empty: the same room)', autocomplete: 'off', spellcheck: false });
+    const code = node('input', { ariaLabel: 'Passcode (empty: the same room)', placeholder: 'Passcode (empty: the same room)', autocomplete: 'off', spellcheck: false }), note = node('p', { role: 'status' });
+    const rejoin = node('button', { type: 'button', textContent: 'Rejoin', onclick: async () => {
+      note.textContent = 'Connecting...'; const passcode = code.value; code.value = '';
+      try { await lan.rejoin({ link: link.value.trim() || undefined, passcode: passcode || undefined }); } catch (error) { note.textContent = error.message; }
+    } });
+    lock(reason + '. Your unsent edits are kept in this tab until you rejoin or leave.', link, code, rejoin, node('button', { type: 'button', textContent: 'Leave', onclick: () => lan?.leave() }), note);
+  };
+  lanEvents.onResumed = async conflicts => {
+    unlock(); status('Reconnected to the shared project.');
+    if (!conflicts.length) return;
+    const { reconcile } = await import('/extension/lan-guest.mjs');
+    for (const path of conflicts) {
+      const file = files.get(path), doc = file?.doc && editors.get(file.doc)?.container.doc;
+      if (!doc) { lan?.forget(path); continue; }
+      const deliver = (op, v) => broadcast('otUpdateApplied', { doc: file.doc, op, v, meta: { source: 'lan:Owner', user_id: hue('Owner'), ts: Date.now() } });
+      for (let choice = 'auto', note = ''; lan;) { // the owner's version is never replaced; only this tab's unsent edits are kept or dropped
+        try { if (await reconcile(lan, path, doc, deliver, choice)) break; } catch (error) { note = error.message + '. '; }
+        choice = await new Promise(resolve => lock(`${note}The owner changed ${path} while you were away, and you have unsent edits in it. The owner's version is kept either way.`,
+          node('button', { type: 'button', textContent: 'Apply my edits on top', onclick: () => resolve('keep') }),
+          node('button', { type: 'button', textContent: 'Discard my unsent edits', onclick: () => resolve('discard') })));
+        unlock();
+      }
+    }
+  };
   lanEvents.onEnd = reason => {
-    lan = null; socket.disconnect(); status(reason, true);
+    unlock(); lan = null; socket.disconnect(); status(reason, true);
     const done = document.createElement('div'); done.setAttribute('role', 'alert'); done.className = 'lan-join';
-    const box = document.createElement('p'); box.textContent = reason + '. Editing is locked. Open the join link again to rejoin; unsent edits in this tab are not merged.';
+    const box = document.createElement('p'); box.textContent = reason + '. Editing is locked; any edits not yet acknowledged were not delivered to the owner.';
     done.append(box); document.body.append(done);
   };
   lanEvents.onStopped = () => { lan = null; cursors.clear(); status('Sharing stopped. Your project is unchanged on this device.'); };
