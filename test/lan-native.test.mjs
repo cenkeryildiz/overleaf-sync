@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startHost } from '../runtime/chrome-extension/lan-host.mjs';
-import { joinSession } from '../runtime/chrome-extension/lan-guest.mjs';
+import { joinSession, reconcile } from '../runtime/chrome-extension/lan-guest.mjs';
 import { apply, transformX } from '../runtime/chrome-extension/lan-ot.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -21,7 +21,7 @@ function relay() {
   const helper = {
     calls,
     call: async (op, args) => { calls.push(op); if (op === 'open') { assert.equal(args.bind, '127.0.0.1'); return { port: 4242 }; } if (op === 'drop') { const s = sockets.get(args.peer); if (s) s.deliverClose(); } return {}; },
-    send: message => { if (message.op === 'send') { const s = sockets.get(message.peer); if (s) setImmediate(() => s.onmessage?.({ data: Uint8Array.from(Buffer.from(message.data, 'base64')).buffer })); } },
+    send: message => { if (message.op === 'send') { const s = sockets.get(message.peer); if (s && !s.dead && !s.mute) setImmediate(() => s.onmessage?.({ data: Uint8Array.from(Buffer.from(message.data, 'base64')).buffer })); } },
     subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
     close: () => {},
     lose: () => emit({ ev: 'helper-lost' }),
@@ -33,6 +33,7 @@ function relay() {
     send(bytes) { if (!this.dead) emit({ ev: 'data', peer: this.peer, data: b64(bytes) }); }
     close() { if (!this.dead) { this.dead = true; emit({ ev: 'gone', peer: this.peer }); } }
     deliverClose() { if (!this.dead) { this.dead = true; setImmediate(() => this.onclose?.()); } }
+    cut() { if (!this.dead) { this.dead = true; emit({ ev: 'gone', peer: this.peer }); setImmediate(() => this.onclose?.()); } } // the network drops: both ends notice
   }
   return { helper, Socket, sockets };
 }
@@ -51,11 +52,15 @@ class Editor {
     if (this.inflight || !this.pending.length) return;
     this.inflight = this.pending.shift();
     this.ctl.edit(this.path, { op: this.inflight, v: this.version }).then(applied => {
+      if (applied === null) return; // reconciliation dropped it (clearInflightAndPendingOps already ran)
       assert.equal(applied, this.version, 'acknowledgement version');
       this.version++; this.inflight = null; this.acks++; this.#pump();
     });
   }
   get idle() { return !this.inflight && !this.pending.length; }
+  // the ShareJS document surface reconcile() uses
+  getSnapshot() { return this.text; } getVersion() { return this.version; } getInflightOp() { return this.inflight; }
+  getPendingOp() { return this.pending.length ? this.pending.flat() : null; } clearInflightAndPendingOps() { this.inflight = null; this.pending = []; }
 }
 
 async function room({ permission } = {}) {
@@ -70,8 +75,8 @@ async function room({ permission } = {}) {
   owner = {};
   const own = async path => (owner[path] = new Editor(host, path, host.join(path)));
   const guests = [];
-  const join = async (username = 'Ada', passcode = host.passcode, link = host.link) => {
-    const editors = {}, ctl = await joinSession({ link, passcode, username, WebSocketImpl: r.Socket, onRemote: (path, e) => editors[path]?.remote(e.op, e.v), onEnd: reason => (ctl.ended = reason) });
+  const join = async (username = 'Ada', passcode = host.passcode, link = host.link, options = {}) => {
+    const editors = {}, ctl = await joinSession({ ...options, link, passcode, username, WebSocketImpl: r.Socket, onRemote: (path, e) => editors[path]?.remote(e.op, e.v), onEnd: reason => (ctl.ended = reason) });
     ctl.editors = editors; ctl.open = async path => (editors[path] = new Editor(ctl, path, await ctl.join(path))); guests.push(ctl); return ctl;
   };
   return { r, host, own, join, store, persisted, guests, source };
@@ -169,4 +174,49 @@ test('helper loss stops the owner side and rejects pending edits', async () => {
   const pending = host.edit('main.tex', { op: [{ p: 0, i: 'x' }], v: o.version }); await pending; // acknowledged before loss
   r.helper.lose(); await until(() => host.stopped);
   void lost;
+});
+
+const live = r => [...r.sockets.values()].filter(s => !s.dead).at(-1);
+const count = (text, part) => text.split(part).length - 1;
+
+test('S2-05 a dropped connection locks, keeps unsent edits in memory and resumes through the owner log: nothing applies twice or is lost', async () => {
+  const { r, host, own, join } = await room(); const lost = [], resumed = [];
+  const o = await own('main.tex'), ada = await join('Ada', undefined, undefined, { retries: [5, 5, 5], onLost: (_, x) => lost.push(x.retrying), onResumed: c => resumed.push(c) });
+  const a = await ada.open('main.tex');
+  const s = live(r); s.mute = true; a.submit([{ p: 0, i: 'A1:' }]); // the owner applies it, the acknowledgement is lost with the connection
+  await until(() => host.text('main.tex').startsWith('A1:')); s.cut();
+  await until(() => ada.state !== 'live'); assert.throws(() => ada.store.paths(), /ended/, 'the session copy is wiped on loss');
+  a.submit([{ p: 0, i: 'A2:' }]); o.submit([{ p: o.text.length, i: '|O' }]); // edits on both sides while apart
+  await until(() => ada.state === 'live' && a.idle && o.idle && a.version === o.version);
+  assert.equal(a.text, o.text); assert.equal(a.text, host.text('main.tex'));
+  assert.equal(count(a.text, 'A1:'), 1); assert.equal(count(a.text, 'A2:'), 1); assert.equal(count(a.text, '|O'), 1);
+  assert.deepEqual(lost, [true]); assert.deepEqual(resumed, [[]]); assert.equal(ada.store.readText('sec/a.tex'), 'alpha');
+  // revoked: the session ends and cannot be resumed
+  await host.revoke(host.participants()[0].peer); await until(() => ada.ended);
+  await assert.rejects(ada.rejoin(), /ended/); await assert.rejects(ada.edit('main.tex', { op: [{ p: 0, i: 'z' }], v: a.version }), /./);
+});
+
+test('S2-05 rejoin into a new room: unsafe files wait for an explicit choice; keep rebases onto the owner text, discard drops only the unsent edit', async () => {
+  const { r, host, join, source, store } = await room(); const resumed = [];
+  const ada = await join('Ada', undefined, undefined, { retries: [], onResumed: c => resumed.push(c) });
+  const a = await ada.open('main.tex'), b = await ada.open('sec/a.tex');
+  live(r).cut(); await until(() => ada.state === 'lost');
+  a.submit([{ p: 0, i: 'MINE:' }]); b.submit([{ p: 0, i: 'X' }]); // unsent, held in memory
+  await host.stop(); // the owner's page went away; sharing again opens a new room with a new passcode
+  store.get('main.tex').content = 'OWNER ' + FILES['main.tex']; store.get('sec/a.tex').content = 'ALPHA';
+  const host2 = await startHost({ helper: r.helper, source, onPeers: () => {} });
+  await assert.rejects(ada.rejoin({ link: host2.link, passcode: host.passcode }), /./); // the old passcode does not open the new room
+  assert.equal(ada.state, 'lost');
+  await ada.rejoin({ link: host2.link, passcode: host2.passcode });
+  assert.deepEqual(resumed, [['main.tex', 'sec/a.tex']]);
+  const deliver = editor => (op, v) => editor.remote(op, v);
+  assert.equal(await reconcile(ada, 'main.tex', a, deliver(a)), false, 'auto never picks a side when both changed');
+  assert.equal(host2.text('main.tex') ?? store.get('main.tex').content, 'OWNER ' + FILES['main.tex']);
+  assert.equal(await reconcile(ada, 'main.tex', a, deliver(a), 'keep'), true);
+  await until(() => a.idle && host2.text('main.tex').includes('MINE:'));
+  assert.equal(a.text, host2.text('main.tex')); assert.equal(count(a.text, 'MINE:'), 1); assert.ok(a.text.includes('OWNER '));
+  assert.equal(await reconcile(ada, 'sec/a.tex', b, deliver(b), 'discard'), true);
+  assert.equal(b.text, 'ALPHA'); assert.equal(host2.text('sec/a.tex'), 'ALPHA');
+  b.submit([{ p: 5, i: '!' }]); await until(() => b.idle && host2.text('sec/a.tex') === 'ALPHA!'); // versions line up after the choice
+  await host2.stop();
 });

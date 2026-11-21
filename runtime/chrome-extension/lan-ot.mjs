@@ -46,5 +46,18 @@ function cross(left, right) {
   return [component(left[0], right[0], 'left'), component(right[0], left[0], 'right')];
 }
 export function transformX(left, right) { check(left); check(right); return cross(left, right); }
+/** The op that undoes `op` on the text `op` produced. */
+export function invert(op) { check(op); return [...op].reverse().map(c => c.i !== undefined ? { p: c.p, d: c.i } : { p: c.p, i: c.d }); }
+const high = (text, at) => (text.charCodeAt(at) & 0xfc00) === 0xd800, low = (text, at) => (text.charCodeAt(at) & 0xfc00) === 0xdc00;
+/** One delete + insert turning `a` into `b` (common prefix and suffix kept), never splitting a surrogate pair. */
+export function diff(a, b) {
+  const n = Math.min(a.length, b.length); let s = 0, e = 0;
+  while (s < n && a[s] === b[s]) s++;
+  if (s && s < n && high(a, s - 1)) s--;
+  while (e < n - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  if (e && low(a, a.length - e)) e--;
+  const d = a.slice(s, a.length - e), i = b.slice(s, b.length - e);
+  return [...(d ? [{ p: s, d }] : []), ...(i ? [{ p: s, i }] : [])];
+}
 export const ot = Object.freeze({ apply, transformX });
 

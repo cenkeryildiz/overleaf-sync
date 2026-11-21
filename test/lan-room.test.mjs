@@ -162,3 +162,15 @@ test('join links carry routing only, never the passcode', () => {
   assert.equal(validUsername('  Zoë 😀 '), 'Zoë 😀');
   assert.equal(normalizePasscode('ABCD-EFGH-JKLM-NPQ0'), null);
 });
+
+test('S2-05 resume: a forged, replayed or revoked resume token is refused; a valid one replaces the stale connection', async () => {
+  const { room, connect } = harness();
+  const ada = connect(), { resume } = await ada.session.joined; assert.match(resume, /^[A-Za-z0-9_-]{22}$/);
+  const forged = connect({ resume: 'A'.repeat(22) }); await assert.rejects(forged.session.joined, error => error.code === 'resume');
+  const again = connect({ resume }), next = await again.session.joined; await settle();
+  assert.notEqual(next.resume, resume); assert.deepEqual(room.participants.map(p => p.name), ['Ada']); assert.equal(ada.session.state, 'ended');
+  const replayed = connect({ resume }); await assert.rejects(replayed.session.joined, error => error.code === 'resume'); // single use
+  await room.revoke(again.peer); await settle();
+  const revoked = connect({ resume: next.resume }); await assert.rejects(revoked.session.joined, error => error.code === 'resume');
+  const wrong = connect({ resume: next.resume, passcode: 'AAAA-AAAA-AAAA-AAAA' }); await assert.rejects(wrong.session.joined, /passcode incorrect/);
+});
