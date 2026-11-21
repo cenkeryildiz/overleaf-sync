@@ -16,6 +16,14 @@ const LOCAL = 'owner', OWNER_CID = '0'.repeat(32), NAME = 'Owner';
 // network: true binds this computer's private LAN address (the helper refuses public ones); tests keep the loopback default.
 export const LOOPBACK = '127.0.0.1';
 
+/** Shown wherever the helper is missing: the one install step, in the words the package uses. */
+export const HELPER_HINT = 'Install the sharing helper once on this computer: in the folder you loaded this extension from, double-click "Install Sharing Helper", then quit and reopen the browser.';
+/** True when the helper answers within 3 s; it is closed again either way. */
+export async function helperAvailable(connectNative = chrome.runtime.connectNative.bind(chrome.runtime)) {
+  let helper; try { helper = nativeHelper(connectNative); } catch { return false; }
+  let clock; const late = new Promise((_, reject) => { clock = setTimeout(() => reject(Error('timeout')), 3000); });
+  try { await Promise.race([helper.call('addresses'), late]); return true; } catch { return false; } finally { clearTimeout(clock); helper.close(); }
+}
 /** Native-messaging helper client with the same shape the tests use for a child process. */
 export function nativeHelper(connectNative = chrome.runtime.connectNative.bind(chrome.runtime), name = 'com.cenker.latex_lan') {
   const port = connectNative(name), pending = new Map(), listeners = new Set(); let next = 1, closed = null;
@@ -23,7 +31,7 @@ export function nativeHelper(connectNative = chrome.runtime.connectNative.bind(c
     if (message?.id) { const entry = pending.get(message.id); pending.delete(message.id); if (entry) message.error ? entry.reject(Error(message.error)) : entry.resolve(message.result); }
     else for (const listener of listeners) listener(message);
   });
-  port.onDisconnect.addListener(() => { closed = Error('The sharing helper is not available. Install it, then share again.'); for (const entry of pending.values()) entry.reject(closed); pending.clear(); for (const listener of listeners) listener({ ev: 'helper-lost' }); });
+  port.onDisconnect.addListener(() => { closed = Error('The sharing helper is not available. ' + HELPER_HINT); for (const entry of pending.values()) entry.reject(closed); pending.clear(); for (const listener of listeners) listener({ ev: 'helper-lost' }); });
   return {
     call: (op, args = {}) => new Promise((resolve, reject) => { if (closed) return reject(closed); const id = next++; pending.set(id, { resolve, reject }); try { port.postMessage({ id, op, ...args }); } catch (error) { pending.delete(id); reject(error); } }),
     send: message => { if (!closed) port.postMessage(message); },

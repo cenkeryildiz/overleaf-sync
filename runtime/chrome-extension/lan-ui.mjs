@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Share panel (owner) and join form (participant) for the native workspace. Text only: names and messages are set with
 // textContent, never as HTML; the passcode exists only in this panel and is never written to a URL, storage or log.
-import { helperSocket, nativeHelper, startHost } from './lan-host.mjs';
+import { HELPER_HINT, helperAvailable, helperSocket, nativeHelper, startHost } from './lan-host.mjs';
 import { joinSession, memoryProjects } from './lan-guest.mjs';
 
 const GRANT_LABELS = [['online', 'Edit while host is online'], ['copy', 'Keep a copy and continue elsewhere']];
@@ -63,14 +63,17 @@ export function joinForm(hash, events) {
     form.onsubmit = async event => {
       event.preventDefault(); submit.disabled = true; note.textContent = 'Connecting...';
       const passcode = code.value; code.value = '';
+      // The helper connects when installed: Chrome's local-network rules block extension pages from reaching another computer,
+      // and they change by version. Without it, try the browser's own WebSocket (older browsers, same computer).
+      const viaHelper = await helperAvailable();
       try {
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
           onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
-          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), WebSocketImpl: helperSocket() }); // the helper connects: Chrome blocks extension pages
+          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), WebSocketImpl: viaHelper ? helperSocket() : globalThis.WebSocket });
         const template = await (await fetch('/extension/native-template.json')).json();
         const { api, project, docIds } = await memoryProjects(shared, template);
         screen.remove(); resolve({ api, shared, project, docIds });
-      } catch (error) { note.textContent = error.message; submit.disabled = false; }
+      } catch (error) { note.textContent = error.message.includes(HELPER_HINT) || viaHelper ? error.message : `${error.message} ${HELPER_HINT}`; submit.disabled = false; }
     };
   });
 }

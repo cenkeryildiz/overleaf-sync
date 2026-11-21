@@ -105,6 +105,10 @@ try {
   await bad.getByLabel('Passcode').fill('AAAA-AAAA-AAAA-AAAA'); await bad.getByLabel('Your name for this session').fill('Mallory'); await bad.getByRole('button', { name: 'Join' }).click();
   await until(async () => /Room unavailable|passcode/i.test(await bad.locator('.lan-panel [role=status]').textContent()), 'wrong passcode refused');
   assert.equal(await editorOf(bad).count(), 0); await bad.close(); note('wrong passcode refused; no project reaches the page');
+  // ---- a participant without the helper falls back to the browser's WebSocket (allowed here: same computer)
+  { const plainContext = await profile('plain'), plain = await plainContext.newPage(); await plain.goto(link);
+    await plain.getByLabel('Passcode').fill(passcode); await plain.getByLabel('Your name for this session').fill('NoHelper'); await plain.getByRole('button', { name: 'Join' }).click();
+    await editorOf(plain).waitFor({ timeout: 60000 }); await plainContext.close(); note('participant without the helper joins through the browser WebSocket fallback'); }
   // ---- join with the right code
   const guest = await guestContext.newPage(); guest.on('pageerror', error => { errors.push('guest: ' + error.message.slice(0, 200)); if (process.env.LAN_DEBUG) console.log('[guest pageerror]', error.stack.slice(0, 600)); });
   if (process.env.LAN_DEBUG) guest.on('console', m => { if (!/BusyTeX/.test(m.text())) console.log('[guest console]', m.text().slice(0, 300)); });
