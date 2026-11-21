@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startHost } from '../runtime/chrome-extension/lan-host.mjs';
-import { joinSession, reconcile } from '../runtime/chrome-extension/lan-guest.mjs';
+import { joinSession, reconcile, treeChanges } from '../runtime/chrome-extension/lan-guest.mjs';
 import { apply, transformX } from '../runtime/chrome-extension/lan-ot.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -222,7 +222,7 @@ test('S2-05 rejoin into a new room: unsafe files wait for an explicit choice; ke
 });
 
 // ---- S2-03: exact project transfer and file-tree changes during a session ------------------------------------------------------
-import { CHUNK, MAX_FILE, streamFiles } from '../runtime/chrome-extension/lan-transfer.mjs';
+import { CHUNK, MAX_FILE, streamFiles, ProjectTree } from '../runtime/chrome-extension/lan-transfer.mjs';
 import { settle } from './lan-transfer-harness.mjs';
 const noise = (length, seed = 1) => { const out = new Uint8Array(length); let s = seed >>> 0; for (let i = 0; i < length; i++) { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; out[i] = s >>> 24; } return out; };
 const hex = bytes => Buffer.from(bytes).toString('hex');
@@ -257,16 +257,77 @@ async function fsRoom() {
   };
   const route = ctl => (path, e) => open.find(x => x.ctl === ctl && x.path === path)?.remote(e.op, e.v);
   host = await startHost({ helper: r.helper, source, onPeers: () => {}, onRemote: (...a) => route(host)(...a) });
-  const join = async username => {
-    const seen = [], ctl = await joinSession({ link: host.link, passcode: host.passcode, username, WebSocketImpl: r.Socket, onEnd: reason => (ctl.ended = reason),
-      onRemote: (...a) => route(ctl)(...a), onFs: op => { seen.push(op); follow(ctl, op); return { seenBy: username, kind: op.kind }; } });
+  const join = async (username, options = {}) => {
+    const seen = [], ctl = await joinSession({ ...options, link: host.link, passcode: host.passcode, username, WebSocketImpl: r.Socket, onEnd: reason => (ctl.ended = reason),
+      onRemote: (...a) => route(ctl)(...a), onFs: op => { seen.push(op); follow(ctl, op); options.onFs?.(op); return { seenBy: username, kind: op.kind }; } });
     ctl.seen = seen; return ctl;
   };
   const edit = async (ctl, path) => { const e = new Editor(ctl, path, ctl === host ? host.join(path) : await ctl.join(path)); open.push(e); return e; };
   /** Every file of the owner equals the participant's bytes, and nothing else exists there. */
   const same = ctl => { assert.deepEqual(ctl.store.paths(), [...files.keys()].sort()); for (const [path, f] of files) if (!open.some(x => x.path === path)) assert.equal(hex(ctl.store.read(path)), hex(f.bytes), path); return true; }; // live-edited text is the native persist's job
-  return { r, host, join, files, folders, same, applied, edit, project };
+  return { r, host, join, files, folders, same, applied, edit, project, source };
 }
+
+/** What a native file tree would show after replaying onFs ops in order; each op must fit the tree it lands on. */
+function view(ctl) {
+  const files = new Map(ctl.store.paths().map(path => [path, ctl.docs.has(path)])), folders = new Set(ctl.folders), v = { files, folders, main: ctl.main };
+  const parent = path => path.slice(0, Math.max(0, path.lastIndexOf('/'))), inside = (path, root) => path === root || path.startsWith(root + '/');
+  v.apply = op => {
+    if (op.kind === 'main') { assert.ok(files.get(op.path), 'main is a shown text file'); v.main = op.path; return; }
+    if (op.kind === 'folder' || op.kind === 'put' || op.kind === 'doc') {
+      assert.ok(!files.has(op.path) && !folders.has(op.path), 'not shown yet: ' + op.path);
+      if (op.kind === 'folder') { assert.ok(!parent(op.path) || folders.has(parent(op.path)), 'parent shown first'); folders.add(op.path); return; }
+      if (op.kind === 'put') assert.equal(op.bytes.length, op.size);
+      files.set(op.path, op.kind === 'doc' || op.doc); for (let p = parent(op.path); p; p = parent(p)) folders.add(p); return;
+    }
+    assert.ok(files.has(op.from) || folders.has(op.from), 'shown before ' + op.kind + ': ' + op.from);
+    const to = path => op.kind === 'relocate' ? op.to + path.slice(op.from.length) : null;
+    for (const [path, doc] of [...files]) if (inside(path, op.from)) { files.delete(path); if (to(path)) files.set(to(path), doc); }
+    for (const path of [...folders]) if (inside(path, op.from)) { folders.delete(path); if (to(path)) folders.add(to(path)); }
+  };
+  v.matches = () => { assert.deepEqual([...files.keys()].sort(), ctl.store.paths()); assert.deepEqual([...folders].sort(), [...ctl.folders].sort());
+    for (const [path, doc] of files) assert.equal(doc, ctl.docs.has(path), path); assert.equal(v.main, ctl.main); return true; };
+  return v;
+}
+
+test('S2-03 tree changes made while a participant was away reach its native tree on resume, emoji paths included, then live changes follow', async () => {
+  const { r, host, join, same } = await fsRoom(); let shown = null;
+  const ada = await join('Ada', { retries: [], onFs: op => shown?.apply(op) }); shown = view(ada);
+  live(r).cut(); await until(() => ada.state === 'lost');
+  await host.fs({ kind: 'relocate', from: 'sec', to: 'chapters 😀' }); await host.fs({ kind: 'remove', from: 'out' });
+  const pic = noise(CHUNK + 17, 61); await host.fs({ kind: 'put', path: 'figs 🎉/pic 😀.png', doc: false, bytes: pic });
+  await host.fs({ kind: 'remove', from: 'figures/plot.png' }); await host.fs({ kind: 'put', path: 'figures/plot.png', doc: false, bytes: noise(99, 5) }); // replaced, other size
+  await host.fs({ kind: 'remove', from: 'empty.txt' }); await host.fs({ kind: 'put', path: 'empty.txt', doc: true, bytes: text('now text 😀') }); // binary became text
+  await host.fs({ kind: 'folder', path: 'new 🚀' }); await host.fs({ kind: 'folder', path: 'new 🚀/deep' }); await host.fs({ kind: 'main', path: 'chapters 😀/a.tex' });
+  await ada.rejoin(); await until(() => ada.state === 'live'); await settle();
+  assert.ok(same(ada) && shown.matches()); assert.equal(hex(ada.store.read('figs 🎉/pic 😀.png')), hex(pic));
+  await host.fs({ kind: 'relocate', from: 'figs 🎉/pic 😀.png', to: 'pic 🚀.png' }); await ada.fs({ kind: 'remove', from: 'figs 🎉' });
+  await ada.fs({ kind: 'relocate', from: 'pic 🚀.png', to: 'new 🚀/deep/pic 🚀.png' }); await settle();
+  assert.ok(same(ada) && shown.matches()); assert.equal(hex(ada.store.read('new 🚀/deep/pic 🚀.png')), hex(pic));
+});
+
+test('S2-03 rejoin into a new room: the native tree shows the new room\'s project', async () => {
+  const { r, host, join, files, source } = await fsRoom(); let shown = null;
+  const ada = await join('Ada', { retries: [], onFs: op => shown?.apply(op) }); shown = view(ada);
+  live(r).cut(); await until(() => ada.state === 'lost'); await host.stop();
+  files.delete('out/paper.pdf'); files.set('notes 😀/n.tex', { bytes: text('n'), doc: true, revision: 0 }); // the owner's project changed before sharing again
+  const host2 = await startHost({ helper: r.helper, source, onPeers: () => {} });
+  await ada.rejoin({ link: host2.link, passcode: host2.passcode }); await until(() => ada.state === 'live');
+  assert.ok(shown.matches()); assert.ok(ada.docs.has('notes 😀/n.tex') && !ada.store.has('out/paper.pdf'));
+  await host2.stop();
+});
+
+test('treeChanges: outermost removals first, kind or size changes re-put, folders parents-first, then the main file', () => {
+  const before = { tree: new ProjectTree({ files: [['a/b/c.tex', 3], ['a/x.bin', 4], ['k.bin', 2], ['d.tex', 0], ['f', 1]], folders: ['a/b/e'], main: 'd.tex' }), docs: new Set(['a/b/c.tex', 'd.tex']) };
+  assert.deepEqual(treeChanges(before, before), []);
+  const after = { tree: new ProjectTree({ files: [['k.bin', 5], ['d.tex', 1], ['f/g 😀.tex', 2], ['m.tex', 1]], folders: ['n 🎉/o/p'], main: 'm.tex' }), docs: new Set(['d.tex', 'f/g 😀.tex', 'm.tex']) };
+  assert.deepEqual(treeChanges(before, after), [
+    { kind: 'remove', from: 'k.bin' }, { kind: 'remove', from: 'f' }, { kind: 'remove', from: 'a' },
+    { kind: 'folder', path: 'f' }, { kind: 'folder', path: 'n 🎉' }, { kind: 'folder', path: 'n 🎉/o' }, { kind: 'folder', path: 'n 🎉/o/p' },
+    { kind: 'put', path: 'k.bin', size: 5, doc: false }, { kind: 'put', path: 'f/g 😀.tex', size: 2, doc: true }, { kind: 'put', path: 'm.tex', size: 1, doc: true },
+    { kind: 'main', path: 'm.tex' },
+  ]);
+});
 
 test('S2-03 join transfers the whole project exactly: CRLF/supplementary text, multi-chunk binaries, empty file and empty folders', async () => {
   const { join, same, folders } = await fsRoom(), ada = await join('Ada');

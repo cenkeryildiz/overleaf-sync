@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
-import { patchEditor, patchLanUuid, patchEditorUnicode } from '../runtime/browser-recovery/apply.mjs';
+import { patchEditor, patchLanUuid, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../runtime/browser-recovery/apply.mjs';
 const source = readFileSync(new URL('../runtime/browser-recovery/recovery-core.js', import.meta.url), 'utf8');
 const account = 'a'.repeat(24), project = 'b'.repeat(24), docId = 'c'.repeat(24);
 class Storage {
@@ -241,4 +241,14 @@ test('offline editor sanitation preserves valid Unicode pairs and replaces only 
   assert.throws(() => patchEditorUnicode('unknown'));
   assert.throws(() => patchEditorUnicode(source + source));
   assert.throws(() => patchEditorUnicode(patched));
+});
+
+test('native pathname checks accept emoji names and still refuse lone surrogates, slashes and controls', () => {
+  for (const name of Object.keys(pathnameAssets)) {
+    const [from] = pathnameAssets[name], patched = patchPathnameUnicode(name, 'var BAD=' + from + (from.endsWith(',') ? 'x=1;' : ';')); // each anchor as it sits in its bundle
+    const bad = vm.runInNewContext(patched + 'BAD'), clean = path => (bad.lastIndex = 0, !bad.test(path));
+    assert.equal(clean('figs 🎉/pic 😀.png'.split('/')[1]), true, name); assert.equal(clean('Ünï ğ 𝔛'), true);
+    for (const refused of ['a\uD800b', 'a\uDC00', 'a/b', 'a*b', 'a\u0001', 'a\u0085']) assert.equal(clean(refused), false, name + ' ' + JSON.stringify(refused));
+    assert.throws(() => patchPathnameUnicode(name, 'unknown')); assert.throws(() => patchPathnameUnicode(name, patched));
+  }
 });

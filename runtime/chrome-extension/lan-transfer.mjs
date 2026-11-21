@@ -9,9 +9,9 @@ export const MAX_FILES = 1000, MAX_FILE = 32 * 1024 * 1024, MAX_TOTAL = 64 * 102
 if (Math.ceil(CHUNK / 3) * 4 + 512 >= MAX_MESSAGE) throw Error('Chunk size exceeds the sealed message limit');
 const subtle = globalThis.crypto.subtle;
 const EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-// Union of project-store.js `path` and native safe_path: controls, backslash, colon, quote, backtick and shell characters are refused.
+// Union of project-store.js `path` and native safe_path: controls, backslash, colon, quote, backtick, shell characters and lone surrogates are refused.
 const FORBIDDEN = /[\\:"`$;&|<>\u0000-\u001f\u007f-\u009f]/;
-export const validPath = value => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !FORBIDDEN.test(value) &&
+export const validPath = value => typeof value === 'string' && value.length > 0 && value.length <= 1024 && value.isWellFormed() && !FORBIDDEN.test(value) &&
   value.split('/').every(part => part && part !== '.' && part !== '..');
 export const pathKey = path => path.normalize('NFC').toLowerCase();      // case-insensitive file systems must not see duplicates
 
@@ -135,6 +135,7 @@ export class ProjectTree {
   get paths() { return [...this.#files.keys()]; }
   get folders() { return [...this.#folders]; }
   isFile(path) { return this.#files.has(path); }
+  size(path) { return this.#files.get(path); }
   #addFolder(path) { for (let p = path; p && !this.#folders.has(p); p = parentOf(p)) { this.#folders.add(p); this.#keys.set(pathKey(p), p); } }
   #addFile(path, size) { this.#files.set(path, size); this.#keys.set(pathKey(path), path); this.#total += size; if (parentOf(path)) this.#addFolder(parentOf(path)); }
   #free(path, self = null) { const at = this.#keys.get(pathKey(path)); if (at !== undefined && at !== self) throw Error('A file or folder with this name already exists'); }

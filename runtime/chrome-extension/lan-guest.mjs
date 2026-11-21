@@ -103,7 +103,8 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       rekey(files, op.from, to); rekey(counters, op.from, to);
       for (const w of rekey(waiting, op.from, to)) w.reject(Error('The file was deleted'));
     }
-    const result = await (async () => onFs({ ...op, ...(bytes ? { bytes } : {}), by: typeof m.by === 'string' ? m.by : '' }))().catch(error => error);
+    // the native tree follows the adopted connection only; a connection adopted later shows its tree once, through treeChanges
+    const result = c.shown ? await (async () => onFs({ ...op, ...(bytes ? { bytes } : {}), by: typeof m.by === 'string' ? m.by : '' }))().catch(error => error) : undefined;
     if (typeof m.ref === 'string') settle(`fs:${m.ref}`, !(result instanceof Error), result);
   };
   const fsMessage = async (c, m) => {
@@ -204,10 +205,19 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     try { c = await open(t, pass || code, same ? token : undefined); }
     catch (error) { state = 'lost'; if (error.code === 'resume') end('The owner removed you from this session'); throw error; }
     if (state === 'ended') { c.dead = true; c.session.leave(); throw Error('This session has ended'); } // left while reconnecting
-    // shortcut: file-tree changes others made while we were away are in the new store and docs, but the native file tree is
-    // only told about changes from now on (onFs); replay a tree diff through onFs if participants need them shown live.
+    const before = { tree: conn.tree, docs: conn.docs };
     adopt(c); target = t; current = next || current; code = pass || code;
     onGrant(c.welcome.grant);
+    // File-tree changes made while we were away reach the native tree before any later change (both run on c.tail).
+    const shown = c.tail.then(async () => {
+      for (const op of treeChanges(before, c)) {
+        const bytes = op.kind === 'put' ? c.store.read(op.path) : undefined;
+        await (async () => onFs({ ...op, ...(bytes ? { bytes } : {}), by: '' }))().catch(() => {}); // one view entry that failed must not block the rest
+      }
+      c.shown = true;
+    });
+    c.tail = shown.catch(() => {}); await shown;
+    if (c.dead) return; // lost again meanwhile: lost() already locked editing and retries
     if (!same) { counters.clear(); for (const f of files.values()) Object.assign(f, { stale: true, hold: null }); conflicts = [...files.keys()]; }
     syncs = 1; // released by resumed() below once every file has caught up
     for (const [path, f] of files) if (!f.stale) { if (c.docs.has(path)) sync(path); else conflicts.push(path), f.stale = true; }
@@ -221,7 +231,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     return answer;
   }
   try {
-    adopt(await open(target, code));
+    adopt(await open(target, code)); conn.shown = true; // the native view is built from this first store
     state = 'live';
   return {
       cid, name, get state() { return state; }, get link() { return current; }, get store() { return conn.store; }, get session() { return conn.session; },
@@ -290,6 +300,28 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       authorize: kind => conn.gate.authorize(m => conn.session.send(m), kind),
     };
   } catch (error) { if (conn) { conn.dead = true; conn.session.leave(); conn.store.wipe(); } throw error; }
+}
+
+/**
+ * The file-tree ops that turn the view of `before` ({tree, docs}) into `after` ({tree, docs}), in an order onFs accepts:
+ * removals (outermost only), new folders (parents first), new files (put; text or binary as `after` says), then the main file.
+ * A file whose kind or size changed is removed and put again. shortcut: a rename while away shows as remove + put (an open
+ * file in it then reconciles as deleted), and a same-size binary replaced in place is not detected; send content digests in
+ * the tree message to catch both.
+ */
+export function treeChanges(before, after) {
+  const was = before.tree, now = after.tree, gone = new Set();
+  for (const path of was.paths) if (!now.isFile(path) || before.docs.has(path) !== after.docs.has(path) || (!after.docs.has(path) && was.size(path) !== now.size(path))) gone.add(path);
+  const folders = new Set(now.folders);
+  for (const path of was.folders) if (!folders.has(path)) gone.add(path);
+  const outer = path => { for (let p = path.slice(0, Math.max(0, path.lastIndexOf('/'))); p; p = p.slice(0, Math.max(0, p.lastIndexOf('/')))) if (gone.has(p)) return false; return true; };
+  const depth = path => path.split('/').length, old = new Set(was.folders);
+  return [
+    ...[...gone].filter(outer).map(from => ({ kind: 'remove', from })),
+    ...[...folders].filter(path => !old.has(path)).sort((a, b) => depth(a) - depth(b)).map(path => ({ kind: 'folder', path })),
+    ...now.paths.filter(path => !was.isFile(path) || gone.has(path)).map(path => ({ kind: 'put', path, size: now.size(path), doc: after.docs.has(path) })),
+    ...(now.main && now.main !== was.main ? [{ kind: 'main', path: now.main }] : []),
+  ];
 }
 
 /**

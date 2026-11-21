@@ -14,6 +14,18 @@ export function patchEditorUnicode(source) {
   // Unicode mode matches lone surrogates while leaving valid astral code points intact.
   return source.replace(from, from + 'u');
 }
+// The native history model (overleaf-editor-core safe_pathname) and file tree refuse every UTF-16 surrogate in a name, so an
+// emoji file name throws BadPathnameError. In Unicode mode the same class matches only lone surrogates; valid pairs pass.
+export const pathnameAssets = Object.freeze({
+  '8607-0a5113f4c48f158e90d6.js': [String.raw`/[/*\u0000-\u001F\u007F\u0080-\u009F\uD800-\uDFFF]/g,`, String.raw`/[/*\u0000-\u001F\u007F\u0080-\u009F\uD800-\uDFFF]/gu,`],
+  'pages/ide-a23d7d25788c243c5bb4.js': [String.raw`new RegExp("[\\/\\\\\\*\\u0000-\\u001F\\u007F\\u0080-\\u009F\\uD800-\\uDFFF]","g")`, String.raw`new RegExp("[\\/\\\\\\*\\u0000-\\u001F\\u007F\\u0080-\\u009F\\uD800-\\uDFFF]","gu")`],
+});
+export function patchPathnameUnicode(name, source) {
+  const [from, to] = pathnameAssets[name];
+  assert(!source.includes(to), 'Native pathname check is already patched');
+  assert.equal(source.split(from).length - 1, 1, 'Unexpected native pathname check in ' + name);
+  return source.replace(from, to);
+}
 export function patchEditor(source, core, config) {
   const patches = [
     ['let{currentDoc:o}=e;const s=r.Z9.define', 'let{currentDoc:o,recoveryDocName:recoveryName}=e;const s=r.Z9.define'],
