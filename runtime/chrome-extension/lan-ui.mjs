@@ -40,6 +40,7 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
       helper, source, onRemote: (...a) => events.onRemote?.(...a), onCursor: (...a) => events.onCursor?.(...a), onLost: gone,
       onPeers: names => { render(names); events.onPeers?.(names); },
       permission: info => events.permission?.(info) !== false,
+      network: !globalThis.LATEX_LAN_LOOPBACK, // the loopback browser fixture sets this; real use shares on the local network
     });
   } catch (error) { panel.remove(); helper.close(); throw error; }
   link.textContent = host.link; pass.textContent = host.passcode; render([]);

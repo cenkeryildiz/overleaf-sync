@@ -13,7 +13,7 @@ import { handleSnapshotRequest, streamFiles, SnapshotReceiver, ProjectTree, with
 import { ot } from './lan-ot.mjs';
 
 const LOCAL = 'owner', OWNER_CID = '0'.repeat(32), NAME = 'Owner';
-// shortcut: the listener is loopback-only until the user authorizes exposing a LAN address; then pass the address from the helper's 'addresses'.
+// network: true binds this computer's private LAN address (the helper refuses public ones); tests keep the loopback default.
 export const LOOPBACK = '127.0.0.1';
 
 /** Native-messaging helper client with the same shape the tests use for a child process. */
@@ -41,7 +41,7 @@ const ACTION = { update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view' };
  * permission(info) is the owner-permission hook (see report): info = {peer, name, action:'view'|'edit', message}; return false to deny.
  * Events: onRemote(path, {op, v, by}), onCursor({name, path, row, column}), onPeers(names[]), onLost().
  */
-export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, secrets }) {
+export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, network = false, secrets }) {
   const syncs = new Map(), waiting = new Map(), counters = new Map(), uploads = new Map(), aliases = new Map(), removed = new Set();
   let room, grants, stopped = false, fsTail = Promise.resolve(), fsSeq = 0, moving = null;
   const initial = source.tree();
@@ -162,7 +162,9 @@ export async function startHost({ helper, source, permission = () => true, onRem
     else if (event.ev === 'gone') room.disconnected(event.peer);
     else if (event.ev === 'helper-lost' && !stopped) { stopped = true; for (const w of waiting.values()) w.reject(Error('Sharing stopped')); onLost(); }
   });
-  const { port } = await helper.call('open', { bind: LOOPBACK, port: 0, room: room.roomId }).catch(error => { unsubscribe(); throw error; });
+  const bind = network ? (await helper.call('addresses').catch(error => { unsubscribe(); throw error; })).addresses?.find(a => a !== LOOPBACK) : LOOPBACK;
+  if (!bind) { unsubscribe(); throw Error('No private network address found. Connect this computer to Wi-Fi or Ethernet and try again.'); }
+  const { port } = await helper.call('open', { bind, port: 0, room: room.roomId }).catch(error => { unsubscribe(); throw error; });
   const stop = async () => {
     if (stopped) return; stopped = true; unsubscribe();
     await room.stop().catch(() => {}); await helper.call('close').catch(() => {}); helper.close();
@@ -170,7 +172,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
     waiting.clear();
   };
   return {
-    room, port, link: joinLink(LOOPBACK, port, room.roomId), passcode: room.passcode, stop, get stopped() { return stopped; },
+    room, port, link: joinLink(bind, port, room.roomId), passcode: room.passcode, stop, get stopped() { return stopped; },
     /** Current text/version for the owner's editor; the log, not the file, is authoritative while sharing. */
     text: path => syncs.get(current(path))?.text,
     /** An owner file-tree change ({kind, ...}; put carries `bytes`): checked, applied through source.apply, then sent to everyone. */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // CEX-LAN-01 loopback check: two isolated Chrome profiles, the real native editor, the real relay helper over native messaging.
-// Listener: 127.0.0.1 only. Synthetic project only. Not a physical-LAN or two-device result.
+// Listener: 127.0.0.1 by default; LAN_NETWORK=1 binds this Mac's private Wi-Fi address. Synthetic project only. Not a two-device result.
 //   cargo build --offline --release --manifest-path runtime/chrome-extension/lan/Cargo.toml   (CARGO_TARGET_DIR outside the repo is fine)
 //   PLAYWRIGHT_MODULE=<playwright> EXTENSION_CHROME_PATH=<Chrome for Testing> LATEX_EXTENSION_BASE=<built extension dir> \
 //   LATEX_LAN_HELPER=<latex-local-lan binary> node test/browser/lan-native.browser.mjs
@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const repository = resolve(import.meta.dirname, '../..'), base = resolve(process.env.LATEX_EXTENSION_BASE), helper = resolve(process.env.LATEX_LAN_HELPER);
+const HOST = process.env.LAN_NETWORK ? String.raw`(?:10\.\d+|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d+\.\d+` : String.raw`127\.0\.0\.1`; // the join link's host
 const work = mkdtempSync(join(tmpdir(), 'latex-lan-check-')), extension = join(work, 'extension');
 cpSync(base, extension, { recursive: true });
 for (const name of readdirSync(join(repository, 'runtime/browser-recovery'))) if (/\.(?:js|mjs|html|css)$/.test(name) && !['apply.mjs', 'provision-offline.mjs', 'recovery-sw.template.js'].includes(name)) cpSync(join(repository, 'runtime/browser-recovery', name), join(extension, 'recovery', name));
@@ -41,6 +42,7 @@ async function profile(name, { registerHelper = false } = {}) {
   }
   const context = await chromium.launchPersistentContext(dir, { channel: 'chromium', headless: true, executablePath: process.env.EXTENSION_CHROME_PATH, ignoreDefaultArgs: ['--disable-extensions'],
     viewport: { width: 1400, height: 900 }, args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension] });
+  if (!process.env.LAN_NETWORK) await context.addInitScript(() => { globalThis.LATEX_LAN_LOOPBACK = true; }); // LAN_NETWORK=1 shares on this Mac's Wi-Fi address instead
   context.setDefaultTimeout(20000); return context;
 }
 const editorOf = page => page.getByRole('textbox', { name: /^Source Editor/ });
@@ -96,7 +98,7 @@ try {
   await until(async () => (await panel.locator('code').nth(0).textContent()).trim() || (await owner.locator('#local-status').getAttribute('data-error')) === 'true', 'share link or error');
   assert.equal(await panel.count(), 1, await owner.locator('#local-status').textContent());
   const link = (await panel.locator('code').nth(0).textContent()).trim(), passcode = (await panel.locator('code').nth(1).textContent()).trim();
-  assert.match(link, /^chrome-extension:\/\/[a-p]{32}\/extension\/index\.html#join=127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{22}$/, await owner.locator('#local-status').textContent()); assert.doesNotMatch(link, new RegExp(passcode.replaceAll('-', '').slice(0, 8)));
+  assert.match(link, new RegExp(String.raw`^chrome-extension://[a-p]{32}/extension/index\.html#join=${HOST}:\d+/[A-Za-z0-9_-]{22}$`), await owner.locator('#local-status').textContent()); assert.doesNotMatch(link, new RegExp(passcode.replaceAll('-', '').slice(0, 8)));
   note('owner shares on loopback: link without passcode, separate passcode', link.replace(/\/[A-Za-z0-9_-]{22}$/, '/<room>'));
   // ---- wrong passcode is refused, in the participant's isolated profile
   const bad = await guestContext.newPage(); await bad.goto(link);
@@ -260,7 +262,7 @@ try {
   const copyId = await probe.evaluate(() => new Promise(resolve => { const r = indexedDB.open('overleaf-local-projects'); r.onsuccess = () => { const q = r.result.transaction('projects').objectStore('projects').getAll(); q.onsuccess = () => { r.result.close(); resolve(q.result[0].id); }; }; }));
   await probe.goto(root + '/recovery/native-workspace.html#' + copyId); await editorOf(probe).waitFor({ timeout: 60000 });
   await until(async () => (await docOf(probe)).includes('Restricted RSECRETA text.'), 'saved copy holds the shared text');
-  await insert(probe, 0, '% offline edit\n'); await until(async () => /Saved in this browser/.test(await probe.locator('#local-status').textContent()), 'offline edit saved');
+  await insert(probe, 0, '% offline edit\n'); await until(async () => /[Ss]aved in this browser/.test(await probe.locator('#local-status').textContent()), 'offline edit saved');
   await probe.reload(); await editorOf(probe).waitFor({ timeout: 60000 }); await until(async () => (await docOf(probe)).startsWith('% offline edit\n'), 'offline edit kept after reload');
   note('permitted copy reopens offline, is edited and keeps the edit across a reload');
   assert.deepEqual(errors, [], 'page errors');
