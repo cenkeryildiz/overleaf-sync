@@ -147,7 +147,10 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       tail: Promise.resolve(), early: [], dead: false };
     const transfer = new Promise((resolve, reject) => { c.project = { resolve, reject }; }); transfer.catch(() => {});
     const socket = new WebSocketImpl(t.url); socket.binaryType = 'arraybuffer';
-    await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(Error('Cannot reach the owner at this link')); });
+    await new Promise((resolve, reject) => { // a dropped SYN (firewall, isolated Wi-Fi) never fires onerror: bound the wait
+      const unreachable = () => { clearTimeout(clock); socket.close(); reject(Error('Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
+      const clock = setTimeout(unreachable, TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;
+    });
     Object.assign(c, connectStore({
       roomId: t.roomId, passcode: pass, username, resume, send: bytes => socket.send(bytes), close: () => socket.close(), onMessage: onMessage(c),
       onGrant: g => { c.gate.observeGrant(g); if (c === conn) onGrant(g); }, onProject: p => c.project.resolve(p), onTransferError: e => c.project.reject(e),
