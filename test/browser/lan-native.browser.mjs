@@ -288,7 +288,7 @@ try {
   await until(async () => /stopped/i.test(await rejoin.locator('[role=alert]').textContent()), 'participant removed on stop'); note('stop sharing ends the participant session');
   for (const id of ['#local-savecopy', '#local-zip']) { await rejoin.evaluate(sel => { const node = document.querySelector(sel); node.disabled = false; node.click(); }, id); await until(async () => /ended|not allowed/.test(await rejoin.locator('#local-status').textContent()), id + ' refused after revoke'); await rejoin.locator('#local-status').evaluate(n => { n.textContent = ''; }); }
   note('revoked session: save-copy and export are refused');
-  // ---- S2-05 lock and reconcile dialogs. Added by lane LAN-I, NOT RUN yet (another lane holds the browser fixture): two host losses with the
+  // ---- S2-05 lock and reconcile dialogs: two host losses with the
   // owner editing while the participant is away; the lock offers Rejoin/Leave and covers the editor; a new room then asks keep or discard.
   { const share = async page => {
       await page.getByRole('button', { name: 'Share on this network' }).click(); const p = page.getByRole('dialog', { name: 'Share on this network' });
@@ -314,7 +314,7 @@ try {
       assert.equal(done.split(`% unsent ${n}\n`).length - 1, n === 1 ? 1 : 0, n === 1 ? 'keep applies the unsent edit once' : 'discard drops only the unsent edit');
       await insert(away, 'end', `% after choice ${n}\n`); await until(async () => (await docOf(host)).includes(`% after choice ${n}`), 'edits flow after the choice');
     }
-    note('S2-05 lock dialog (Rejoin/Leave, covers the editor) and keep/discard reconcile dialogs after a new room [added, not yet run]');
+    note('S2-05 lock dialog (Rejoin/Leave, covers the editor) and keep/discard reconcile dialogs after a new room');
     await away.close(); await host.close(); }
   // ---- the participant device kept no project and no source text in browser storage
   const probe = await guestContext.newPage(); await probe.goto(root + '/extension/index.html');
