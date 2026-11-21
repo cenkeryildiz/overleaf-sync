@@ -1,0 +1,17 @@
+[package]
+name = "latex-local-research"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Runs one Python or R script under a macOS deny-default sandbox with hard resource limits; not registered or enabled anywhere"
+
+[dependencies]
+base64 = "=0.22.1"
+libc = "=0.2.177"
+serde_json = "=1.0.154"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
