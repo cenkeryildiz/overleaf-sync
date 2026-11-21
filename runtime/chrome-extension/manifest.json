@@ -19,5 +19,8 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' blob: ws:; worker-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'none';"
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk5e2YwRkWQBrx+kkOiitnZE0e/WVddQXaqvN/CXJPLNMVrvJAY8zAUXsUbIazjhBvkIiyl8VeuSkbH8LSMw98oS6HiRxVRNjoHwwNBF9tjXenA54GpQXNmZe/awMxdQaltB6YQ3p6DUSCCS/6CHbLSbrtpcqHLRoH+GTDI3/RPwwQ5yrBG4NX04HTPL8x+HBUB26+yjoXyMTT+/p3uW0Ek7nZ0lJgyLoHKeGeyLm0cGs4pqunO0DepTE8oPjbKTc9/hnW+fDKCBjN026AIAY5sLeUChUYR5PKg/YBqay6gP8M5eI6Ims25VpBmflo11ZraF44Em/GQV3t4vODsNjeQIDAQAB"
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk5e2YwRkWQBrx+kkOiitnZE0e/WVddQXaqvN/CXJPLNMVrvJAY8zAUXsUbIazjhBvkIiyl8VeuSkbH8LSMw98oS6HiRxVRNjoHwwNBF9tjXenA54GpQXNmZe/awMxdQaltB6YQ3p6DUSCCS/6CHbLSbrtpcqHLRoH+GTDI3/RPwwQ5yrBG4NX04HTPL8x+HBUB26+yjoXyMTT+/p3uW0Ek7nZ0lJgyLoHKeGeyLm0cGs4pqunO0DepTE8oPjbKTc9/hnW+fDKCBjN026AIAY5sLeUChUYR5PKg/YBqay6gP8M5eI6Ims25VpBmflo11ZraF44Em/GQV3t4vODsNjeQIDAQAB",
+  "host_permissions": [
+    "ws://*/*"
+  ]
 }
