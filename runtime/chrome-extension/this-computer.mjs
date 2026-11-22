@@ -2,7 +2,7 @@
 // "This computer": device-local settings as one tab of the editor's existing Settings dialog (left rail, gear).
 // Each optional tool contributes rows from its own module; nothing here talks to a helper. Add a module to ROWS to merge.
 // A row module exports `computerRows(context)` -> Promise<HTMLElement[]>, built with `settingRow` for the native look.
-export const ROWS = ['/extension/lan-compile-ui.mjs']; // lane S3-A test copy of S3-B's file: the merged list is ['/extension/research-ui.mjs', '/extension/lan-compile-ui.mjs']
+export const ROWS = ['/extension/cells-ui.mjs', '/extension/lan-compile-ui.mjs'];
 const TAB = 'ide-settings-tabs-tab-this-computer', PANE = 'ide-settings-tabs-tabpane-this-computer';
 
 /** One row in the Settings dialog's own markup: title, description, control on the right. */
@@ -34,7 +34,7 @@ export function attach(context) {
     if (!pane.hidden) return;
     for (const node of content.children) if (node !== pane && !node.hidden) { node.hidden = true; restore.push(() => { node.hidden = false; }); }
     for (const other of nav.querySelectorAll('[role=tab].active')) if (other !== tab) { other.classList.remove('active'); other.setAttribute('aria-selected', 'false'); restore.push(() => { other.classList.add('active'); other.setAttribute('aria-selected', 'true'); }); }
-    tab.classList.add('active'); tab.setAttribute('aria-selected', 'true'); pane.hidden = false; pane.classList.add('active'); // S3-A fix: Bootstrap shows only .tab-pane.active
+    tab.classList.add('active'); tab.setAttribute('aria-selected', 'true'); pane.hidden = false; pane.classList.add('active'); // Bootstrap shows only .tab-pane.active
     if (loaded) return; loaded = true;
     for (const url of ROWS) {
       try { section.append(...await (await import(url)).computerRows(context)); }

@@ -11,6 +11,7 @@ import kernel as k
 
 SCRIPT = os.path.join(HERE, "..", "runtime", "research", "kernel.py")
 CANARY = "canary-secret-value-123"
+OURS = os.path.join(tempfile.gettempdir(), "kernel-")   # this layer's connection folders; other kernels on the machine (e.g. an editor's) are not ours
 
 
 def procs_mentioning(fragment):
@@ -119,6 +120,12 @@ display({'application/x.table+json': {'columns': ['a'], 'rows': [[1]]}}, raw=Tru
         self.assertNotIn(self.conn["key"], blob); self.assertNotIn(self.conn_dir, blob); self.assertNotIn(CANARY, blob)
         for name in ("shell_port", "iopub_port", "stdin_port", "control_port", "hb_port"): self.assertNotIn(f'"{name}"', blob); self.assertNotIn(f":{self.conn[name]}", blob)
 
+    def test_printed_connection_key_is_redacted_and_table_schema_becomes_a_plain_table(self):
+        r = self.run_cell("import json\nk = json.load(open(%r))['key']\nprint(k)" % os.path.join(self.conn_dir, "k.json"))
+        self.assertEqual(r["status"], "ok"); self.assertNotIn(self.conn["key"], json.dumps(r)); self.assertIn("<REDACTED>", text_of(r))
+        t = self.run_cell("from IPython.display import display\ndisplay({'application/vnd.dataresource+json': {'schema': {'fields': [{'name': 'a'}, {'name': 'b'}]}, 'data': [{'a': 1, 'b': '<script>'}]}, 'text/html': '<table/>'}, raw=True)")
+        self.assertEqual(t["items"], [{"kind": "display", "mime": "application/x.table+json", "data": {"columns": ["a", "b"], "rows": [["1", "<script>"]]}}]); self.assertEqual(t["blocked"], ["text/html"])
+
     def test_input_validation(self):
         for cell in ["/abs/x.py", "../x.py", "a/../../x", "~/x", "", "a b", None]: self.assertRaises(k.KernelError, self.s.run, cell, "1")
         self.assertRaises(k.KernelError, self.s.run, "c", "x" * (k.MAX_CODE + 1)); self.assertRaises(k.KernelError, self.s.run, "c", None)
@@ -133,7 +140,7 @@ class Cleanup(unittest.TestCase):
             r = s.run("c", "import signal, time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\ntime.sleep(100)", timeout=1)
             self.assertEqual((r["status"], r.get("restarted")), ("timeout", True)); self.assertTrue(wait_gone(old, 5)); self.assertNotEqual(s.pid, old)
             self.assertEqual(text_of(s.run("c", "6 * 7")), "42")
-        self.assertEqual(procs_mentioning("kernel-"), [])
+        self.assertEqual(procs_mentioning(OURS), [])
 
     def test_rerun_exposes_hidden_state(self):
         c1, c2 = {"cell": "a.py", "code": "x = 2"}, {"cell": "b.py", "code": "print(x + 1)"}
@@ -153,7 +160,7 @@ class Cleanup(unittest.TestCase):
         s = k.Session("python3"); s.start(); pid = s.pid
         def broken(**kw): raise RuntimeError("shutdown failed")
         s.km.shutdown_kernel = broken; s.shutdown()
-        self.assertTrue(wait_gone(pid, 3)); self.assertEqual(procs_mentioning("kernel-"), [])
+        self.assertTrue(wait_gone(pid, 3)); self.assertEqual(procs_mentioning(OURS), [])
 
     def test_shutdown_removes_every_trace(self):
         s = k.Session("python3"); s.start(); pid, conn, work = s.pid, s.conn_dir, s.workdir; s.shutdown()
@@ -199,7 +206,25 @@ class CommandLine(unittest.TestCase):
                 for pid in kids: self.assertTrue(wait_gone(pid, 20), f"kernel {pid} survived {how}")
                 cli.p.wait(10)
             finally: cli.p.kill()
-        self.assertEqual(procs_mentioning("kernel-"), [])
+        self.assertEqual(procs_mentioning(OURS), [])
+
+
+class HostSuppliedSpecAndPorts(unittest.TestCase):
+    def test_one_kernelspec_folder_and_pinned_ports(self):
+        import socket
+        spec = os.path.join(sys.prefix, "share", "jupyter", "kernels", "python3")
+        if not os.path.isfile(os.path.join(spec, "kernel.json")): self.skipTest("no python3 kernelspec in this environment")
+        socks = [socket.socket() for _ in range(5)]
+        for x in socks: x.bind(("127.0.0.1", 0))
+        ports = [x.getsockname()[1] for x in socks]
+        for x in socks: x.close()
+        self.assertEqual(list(k.list_kernels(k.spec_manager(spec))), ["python3"])
+        for bad in ["relative/python3", "/nonexistent/python3"]: self.assertRaises(k.KernelError, k.spec_manager, bad)
+        self.assertRaises(k.KernelError, k.Session, "ir", spec_dir=spec); self.assertRaises(k.KernelError, k.Session, "python3", spec_dir=spec, ports=[1, 2, 3, 4, 5])
+        with k.Session("python3", spec_dir=spec, ports=ports) as s:
+            conn = json.load(open(os.path.join(s.conn_dir, "k.json")))
+            self.assertEqual(sorted(conn[n] for n in ("shell_port", "iopub_port", "stdin_port", "control_port", "hb_port")), sorted(ports))
+            self.assertEqual(text_of(s.run("a.py", "print(6*7)")).strip(), "42")
 
 
 @unittest.skipUnless("ir" in (k.list_kernels() if True else {}), "no R kernelspec installed")
