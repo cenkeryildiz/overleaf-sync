@@ -10,7 +10,8 @@ const HELLO = 1, CHALLENGE = 2, SEALED = 3, POINT = 65, NONCE = 16, VERSION = 'l
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 unambiguous symbols: 16 of them carry 80 bits
 const ROOM = /^[A-Za-z0-9_-]{22}$/, IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 // Participant message type -> the action the owner must allow. Unknown types end the connection.
-const ACTIONS = Object.freeze({ update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view', file: 'view', copy: 'copy', export: 'copy', download: 'copy', leave: 'view' });
+const ACTIONS = Object.freeze({ update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view', file: 'view', copy: 'copy', export: 'copy', download: 'copy', leave: 'view',
+  work: 'copy', compile: 'view' }); // stage 3: helping compile writes temporary files on that computer, so it needs the copy grant
 const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
 
 const random = length => globalThis.crypto.getRandomValues(new Uint8Array(length));

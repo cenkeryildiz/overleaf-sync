@@ -207,6 +207,11 @@ try {
     done.append(box); document.body.append(done);
   };
   lanEvents.onStopped = () => { lan = null; cursors.clear(); status('Sharing stopped. Your project is unchanged on this device.'); };
+  if (globalThis.overleafStandalone) { // stage 3 LAN-COMPILE-01: rows under Settings > This computer
+    import('/extension/lan-compile-ui.mjs').then(m => m.mount({ lan: () => lan, joined: !!joined, events: lanEvents })).catch(error => console.warn('[group] unavailable:', error.message));
+    // S3-A test hook; on merge keep S3-B's identical This computer attach line instead of this one
+    addEventListener('click', () => requestAnimationFrame(() => { if (document.querySelector('.ide-settings-tab-nav') && !document.getElementById('ide-settings-tabs-tab-this-computer')) import('/extension/this-computer.mjs').then(m => m.attach({})); }), true);
+  }
   document.querySelector('#local-share')?.addEventListener('click', async () => {
     const button = document.querySelector('#local-share');
     if (lan?.panel) { lan.panel.hidden = !lan.panel.hidden; if (!lan.panel.hidden) lan.panel.querySelector('.lan-btn')?.focus(); return; }
@@ -464,7 +469,7 @@ try {
             }
           }
           status('Compiling on this device…');
-          const result = await compiler.compile(project, saved.files, text => status(text), controller.signal);
+          const result = await (globalThis.overleafGroupCompile?.(project, saved.files, text => status(text), controller.signal) ?? compiler.compile(project, saved.files, text => status(text), controller.signal)); // stage 3: the group's TeX when chosen
           compileLog = result.log || 'Compiled locally.\n';
           await flush();
           if (controller.signal.aborted) throw Error('Source changed during compilation. Compile again.');

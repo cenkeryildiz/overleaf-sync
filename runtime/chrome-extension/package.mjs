@@ -35,7 +35,7 @@ for (const name of readdirSync(resolve(repository, 'runtime/browser-recovery')))
     cpSync(resolve(repository, 'runtime/browser-recovery', name), join(destination, 'recovery', name));
 }
 const extension = join(destination, 'extension'); mkdirSync(extension);
-for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs']) cpSync(join(source, name), join(extension, name));
+for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs']) cpSync(join(source, name), join(extension, name));
 const templatePath = join(extension, 'native-template.json'), template = JSON.parse(readFileSync(templatePath, 'utf8'));
 const languages = template.meta.find(item => item.name === 'ol-languages');
 if (languages) languages.content = JSON.stringify(JSON.parse(languages.content).filter(item => ['en', 'en_US', 'en_GB'].includes(item.code)));
@@ -69,7 +69,8 @@ function inspect(directory) {
 // Share on this network: a ready-built helper (this machine's architecture) and its installer, so no Rust toolchain is needed.
 const helperDir = join(destination, 'sharing-helper'), build = join(destination, '.helper-build'); mkdirSync(helperDir);
 execFileSync('cargo', ['build', '--offline', '--release', '--quiet', '--manifest-path', join(source, 'lan/Cargo.toml')], { env: { ...process.env, CARGO_TARGET_DIR: build }, stdio: 'pipe' });
-cpSync(join(build, 'release/latex-local-lan'), join(helperDir, 'latex-local-lan')); execFileSync('rm', ['-rf', '--', build]);
+execFileSync('cargo', ['build', '--offline', '--release', '--quiet', '--manifest-path', join(source, 'native/Cargo.toml')], { env: { ...process.env, CARGO_TARGET_DIR: build }, stdio: 'pipe' }); // stage 3 TeX helper
+cpSync(join(build, 'release/latex-local-lan'), join(helperDir, 'latex-local-lan')); cpSync(join(build, 'release/latex-local-host'), join(helperDir, 'latex-local-host')); execFileSync('rm', ['-rf', '--', build]);
 cpSync(join(repository, 'scripts/install-lan-helper.sh'), join(helperDir, 'install.sh'));
 // Double-clickable from Finder: runs the installer beside it in Terminal, so nobody types a path.
 writeFileSync(join(destination, 'Install Sharing Helper.command'), '#!/bin/sh\nsh "$(dirname "$0")/sharing-helper/install.sh"\nprintf "\\nPress Return to close."; read _\n', { mode: 0o755 });

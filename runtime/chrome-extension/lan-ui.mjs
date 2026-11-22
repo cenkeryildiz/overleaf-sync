@@ -100,7 +100,7 @@ export async function shareFlow({ source, events, helper = nativeHelper() }) {
   try {
     host = await startHost({
       helper, source, onRemote: (...a) => events.onRemote?.(...a), onCursor: (...a) => events.onCursor?.(...a), onLost: gone,
-      onPeers: names => { render(names); events.onPeers?.(names); },
+      onPeers: names => { render(names); events.onPeers?.(names); }, onPool: info => events.onPool?.(info),
       permission: info => events.permission?.(info) !== false,
       network: !globalThis.LATEX_LAN_LOOPBACK, // the loopback browser fixture sets this; real use shares on the local network
     });
@@ -136,7 +136,7 @@ export function joinForm(hash, events) {
       try {
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
           onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
-          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), WebSocketImpl: viaHelper ? helperSocket() : globalThis.WebSocket });
+          onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), onGroup: m => events.onGroup?.(m), WebSocketImpl: viaHelper ? helperSocket() : globalThis.WebSocket });
         const template = await (await fetch('/extension/native-template.json')).json();
         const { api, project, docIds } = await memoryProjects(shared, template);
         screen.remove(); resolve({ api, shared, project, docIds });
