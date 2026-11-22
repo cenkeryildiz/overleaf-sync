@@ -143,7 +143,7 @@ pub enum Feature { MathCheck, PythonAnalysis, RAnalysis, Jupyter }
 impl Feature {
     pub const ALL: [Feature; 4] = [Feature::MathCheck, Feature::PythonAnalysis, Feature::RAnalysis, Feature::Jupyter];
     pub fn name(self) -> &'static str { match self { Feature::MathCheck => "math-check", Feature::PythonAnalysis => "python-analysis", Feature::RAnalysis => "r-analysis", Feature::Jupyter => "jupyter" } }
-    fn from_name(n: &str) -> Option<Feature> { Feature::ALL.into_iter().find(|f| f.name() == n) }
+    pub fn from_name(n: &str) -> Option<Feature> { Feature::ALL.into_iter().find(|f| f.name() == n) }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Python, R }
@@ -500,7 +500,7 @@ pub fn select_kernel(rec: &mut Record, d: &Discovery, name: &str) -> Result<(), 
     rec.enabled.remove(&Feature::Jupyter); Ok(())
 }
 /// Everything that must hold right now for a feature to run: selection verified, readiness from disk, kernel re-read.
-fn ready(rec: &Record, roots: &Roots, f: Feature) -> Result<PathBuf, String> {
+pub fn ready(rec: &Record, roots: &Roots, f: Feature) -> Result<PathBuf, String> {
     let (id, kind) = if f == Feature::RAnalysis { (rec.r.as_ref().ok_or("No R installation is selected")?, Kind::R) } else { (rec.python.as_ref().ok_or("No Python environment is selected")?, Kind::Python) };
     let path = verify(id).map_err(|e| format!("The selected {} {e}", if kind == Kind::R { "R" } else { "Python" }))?;
     let rt = inspect(roots, &id.path, kind, false)?;

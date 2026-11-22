@@ -1,5 +1,6 @@
 #!/bin/sh
-# Installs the "Share on this network" helper on macOS for every Chrome-family browser that is present.
+# Installs the "Share on this network" helper, and the research helper for Run cells / Settings > This computer, on macOS
+# for every Chrome-family browser that is present.
 # Every computer that shares or joins needs it once. From the extension package double-click "Install Sharing Helper",
 # or run  sh sharing-helper/install.sh   (repository: sh scripts/install-lan-helper.sh)   [--uninstall]
 set -eu
@@ -8,6 +9,8 @@ EXTENSION_ID=oekjjadnainlmdbgbdjokegaikafafke
 SUPPORT="$HOME/Library/Application Support"
 APP_DIR="$SUPPORT/LaTeX Local"
 BINARY="$APP_DIR/latex-local-lan"
+RESEARCH_NAME=com.cenker.latex_research
+RESEARCH="$APP_DIR/latex-local-research"
 FIREWALL=/usr/libexec/ApplicationFirewall/socketfilterfw
 # Each browser reads native-messaging hosts from <its support folder>/NativeMessagingHosts.
 BROWSERS="Google/Chrome
@@ -25,25 +28,28 @@ BraveSoftware/Brave-Browser-Beta
 Vivaldi"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  echo "$BROWSERS" | while IFS= read -r browser; do rm -f -- "$SUPPORT/$browser/NativeMessagingHosts/$NAME.json"; done
-  rm -f -- "$BINARY"; rmdir -- "$APP_DIR" 2>/dev/null || true
+  echo "$BROWSERS" | while IFS= read -r browser; do rm -f -- "$SUPPORT/$browser/NativeMessagingHosts/$NAME.json" "$SUPPORT/$browser/NativeMessagingHosts/$RESEARCH_NAME.json"; done
+  rm -f -- "$BINARY" "$RESEARCH"; rmdir -- "$APP_DIR" 2>/dev/null || true
   echo "Removed the sharing helper and its browser registrations."
   exit 0
 fi
 
 [ "$(uname -s)" = Darwin ] || { echo "This installer is for macOS." >&2; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
-if [ -f "$HERE/latex-local-lan" ]; then SOURCE="$HERE/latex-local-lan"   # ready-built copy shipped with the extension
+if [ -f "$HERE/latex-local-lan" ]; then SOURCE="$HERE/latex-local-lan"; RESEARCH_SOURCE="$HERE/latex-local-research"   # ready-built copies shipped with the extension
 else
   [ -f runtime/chrome-extension/lan/Cargo.toml ] || { echo "Run this from the extension's sharing-helper folder or the repository root." >&2; exit 1; }
   BUILD_DIR=$(mktemp -d); trap 'rm -rf -- "$BUILD_DIR"' EXIT
   CARGO_TARGET_DIR="$BUILD_DIR" cargo build --offline --release --quiet --manifest-path runtime/chrome-extension/lan/Cargo.toml
   SOURCE="$BUILD_DIR/release/latex-local-lan"
+  CARGO_TARGET_DIR="$BUILD_DIR" cargo build --offline --release --quiet --manifest-path runtime/chrome-extension/research-host/Cargo.toml
+  RESEARCH_SOURCE="$BUILD_DIR/release/latex-local-research"
 fi
 mkdir -p -- "$APP_DIR"
 cp -- "$SOURCE" "$BINARY"
 chmod 755 "$BINARY"
 xattr -d com.apple.quarantine "$BINARY" 2>/dev/null || true   # copied via AirDrop/ZIP: macOS would refuse to start it
+if [ -f "$RESEARCH_SOURCE" ]; then cp -- "$RESEARCH_SOURCE" "$RESEARCH"; chmod 755 "$RESEARCH"; xattr -d com.apple.quarantine "$RESEARCH" 2>/dev/null || true; fi
 
 count=0
 for browser in $(echo "$BROWSERS" | tr ' ' '\001'); do
@@ -53,6 +59,11 @@ for browser in $(echo "$BROWSERS" | tr ' ' '\001'); do
   printf '{"name":"%s","description":"LaTeX Local: Share on this network","path":"%s","type":"stdio","allowed_origins":["chrome-extension://%s/"]}\n' \
     "$NAME" "$BINARY" "$EXTENSION_ID" > "$SUPPORT/$browser/NativeMessagingHosts/$NAME.json"
   chmod 644 "$SUPPORT/$browser/NativeMessagingHosts/$NAME.json"
+  if [ -f "$RESEARCH" ]; then
+    printf '{"name":"%s","description":"LaTeX Local: Python, R and Jupyter on this computer","path":"%s","type":"stdio","allowed_origins":["chrome-extension://%s/"]}\n' \
+      "$RESEARCH_NAME" "$RESEARCH" "$EXTENSION_ID" > "$SUPPORT/$browser/NativeMessagingHosts/$RESEARCH_NAME.json"
+    chmod 644 "$SUPPORT/$browser/NativeMessagingHosts/$RESEARCH_NAME.json"
+  fi
   echo "Registered for $browser"; count=$((count + 1))
 done
 [ "$count" -gt 0 ] || { echo "No Chrome-family browser found. Open Chrome once, then run this again." >&2; exit 1; }

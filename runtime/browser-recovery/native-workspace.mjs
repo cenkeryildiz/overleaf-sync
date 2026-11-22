@@ -226,7 +226,7 @@ try {
       };
       const host = await (await import('/extension/lan-ui.mjs')).shareFlow({ source, events: lanEvents });
       for (const file of files.values()) if (file.doc && editors.get(file.doc)?.container.doc) host.join(file.path); // freeze open documents' state before any edit
-      lan = host; status('Sharing on this network.');
+      lan = host; status('Sharing on this network.'); lanEvents.onSharing?.();
     } catch (error) { status(error.message, true); }
     finally { button.disabled = false; }
   });
@@ -248,6 +248,19 @@ try {
     get savingHeld() { return !!failure; },
     file: doc => [...files.values()].find(file => file.doc === doc),
     attach(facade, container) { active = { facade, container }; editors.set(container.doc_id, active); } });
+  if (globalThis.overleafStandalone) { // DOCEXEC-01: nothing research-related loads or connects until the person asks for it
+    const research = () => import('/extension/cells-ui.mjs');
+    const current = () => { const file = active && [...files.values()].find(item => item.doc === active.container.doc_id); return file && { path: file.path }; };
+    const context = { project: () => project.id, clientProject: () => clientProject, shared: () => !!lan || !!joined, file: current, view: () => document.querySelector('.cm-content')?.cmView?.view,
+      text: path => { const file = files.get(path); return file?.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined; } };
+    const inCode = event => event.target instanceof Element && !!event.target.closest('.cm-editor') && /\.(?:py|r)$/i.test(current()?.path ?? '');
+    addEventListener('contextmenu', event => { if (inCode(event)) { event.preventDefault(); research().then(m => m.cellMenu(context, event)); } }, true);
+    addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && inCode(event)) { event.preventDefault(); event.stopPropagation(); research().then(m => m.runCell(context)); } }, true);
+    addEventListener('click', () => requestAnimationFrame(() => { if (document.querySelector('.ide-settings-tab-nav') && !document.getElementById('ide-settings-tabs-tab-this-computer')) import('/extension/this-computer.mjs').then(m => m.attach(context)); }), true);
+    lanEvents.onSharing = () => research().then(m => m.revoke(project.id));
+    // transport for research-ui.mjs (math check, analyses); the helper is reached only when that UI runs something
+    globalThis.overleafResearchRun = (job, options) => research().then(m => m.researchRun(context, job, options));
+  }
   // Native reference completion reads the current snapshot through history-shaped endpoints, even offline.
   let snapshotVersion = 0, snapshotFiles = new Map();
   const snapshot = async () => {

@@ -67,6 +67,38 @@ pub fn policy(kind: Kind, interpreter: &Path, tree: &Path, job: &Path, extra: &[
         meta.join(" "), read.join(" "), read.join(" "), q(job)?))
 }
 
+/// One interpreter a kernel session launches: the listed path, its canonical file and its installation tree.
+pub struct Launch { pub path: PathBuf, pub canonical: PathBuf, pub tree: PathBuf, pub kind: Kind }
+impl Launch {
+    pub fn of(listed: &Path, kind: Kind) -> Result<Launch, String> {
+        let canonical = fs::canonicalize(listed).map_err(|_| "Interpreter not found")?;
+        Ok(Launch { path: listed.to_path_buf(), tree: install_tree(&canonical)?, canonical, kind })
+    }
+}
+/// Kernel session (DOCEXEC-01): the broker (kernel.py on the selected Python) and the kernel it launches share one
+/// deny-default profile. Same reads as `policy` plus the kernel's tree and kernelspec; both may fork (jupyter_client
+/// spawns the kernel). Network: everything denied except the five loopback ports this session's ZMQ channels use.
+pub fn kernel_policy(broker: &Launch, kernel: &Launch, spec: &Path, job: &Path, ports: &[u16]) -> Result<String, String> {
+    let mut read: Vec<String> = SYSTEM_READ.iter().map(|p| format!("(subpath \"{p}\")")).collect();
+    read.extend(DEVICES.iter().map(|p| format!("(literal \"{p}\")")));
+    read.extend(["(literal \"/private/etc/localtime\")".to_string(), "(subpath \"/private/var/select\")".to_string()]);
+    for tree in [&broker.tree, &kernel.tree, &spec.to_path_buf(), &job.to_path_buf()] { read.push(format!("(subpath {})", q(tree)?)); }
+    let mut exec: Vec<String> = [&broker.path, &broker.canonical, &kernel.path, &kernel.canonical].iter().map(|p| q(p).map(|s| format!("(literal {s})"))).collect::<Result<_, _>>()?;
+    if kernel.kind == Kind::R {
+        exec.push(format!("(subpath {})", q(&kernel.tree)?));
+        for p in R_LAUNCHER { exec.push(format!("(literal \"{p}\")")); read.push(format!("(literal \"{p}\")")); }
+    }
+    let anchors: Vec<&Path> = vec![&broker.canonical, &broker.path, &kernel.canonical, &kernel.path, &broker.tree, &kernel.tree, spec, job];
+    let meta: Vec<String> = ancestors(&anchors).iter().map(|p| q(p).map(|s| format!("(literal {s})"))).collect::<Result<_, _>>()?;
+    if ports.len() != 5 || ports.iter().any(|p| *p < 1024) { return Err("Invalid kernel ports".into()); }
+    let net: String = ports.iter().map(|p| format!("(allow network-bind network-inbound (local ip \"localhost:{p}\"))\n(allow network-outbound (remote ip \"localhost:{p}\"))\n")).collect();
+    Ok(format!("(version 1)\n(deny default)\n(allow process-exec {})\n(allow process-fork)\n(allow sysctl-read)\n(allow signal (target self) (target children))\n\
+(allow file-read-metadata {} {})\n(allow file-read-data (literal \"/\"))\n\
+(allow mach-lookup (global-name \"com.apple.system.logger\") (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n\
+(allow file-read* {})\n(allow file-write* (subpath {}) (literal \"/dev/null\"))\n(deny network*)\n{net}",
+        exec.join(" "), meta.join(" "), read.join(" "), read.join(" "), q(job)?))
+}
+
 /// Applied in the child between fork and exec. NPROC is per user on macOS, so it is relative to the current process count.
 pub fn limits(cpu_seconds: u64, nproc: u64, alarm_seconds: u32) -> io::Result<()> {
     for (resource, limit) in [(libc::RLIMIT_CPU, cpu_seconds), (libc::RLIMIT_FSIZE, 32 * 1024 * 1024), (libc::RLIMIT_NOFILE, 512), (libc::RLIMIT_NPROC, nproc), (libc::RLIMIT_CORE, 0)] {
@@ -133,12 +165,25 @@ pub fn survivors(found: &[i32], group: i32, marker: Option<&str>) -> usize {
     alive.extend(marker.map(|m| tagged(m, unsafe { libc::getpid() })).unwrap_or_default().into_iter().filter(|p| bsd_info(*p).is_some_and(|i| i.pbi_status != 5)));
     alive.len()
 }
-pub fn group_memory(group: i32) -> Result<u64, String> {
+pub fn group_memory(group: i32) -> Result<u64, String> { memory_of(&group_pids(group)?) }
+/// The session's processes: its group plus every descendant by parent link (jupyter_client starts the kernel in a new
+/// session, so it leaves the group but keeps the broker as parent).
+pub fn tree_pids(root: i32) -> Vec<i32> {
+    let infos: Vec<(i32, i32, i32)> = all_pids().into_iter().filter_map(|p| bsd_info(p).map(|i| (p, i.pbi_ppid as i32, i.pbi_pgid as i32))).collect();
+    let mut found: BTreeSet<i32> = BTreeSet::from([root]);
+    for _ in 0..16 {
+        let before = found.len();
+        for (pid, ppid, pgid) in &infos { if *pgid == root || found.contains(ppid) { found.insert(*pid); } }
+        if found.len() == before { break; }
+    }
+    found.into_iter().collect()
+}
+pub fn memory_of(pids: &[i32]) -> Result<u64, String> {
     let mut bytes = 0u64;
-    for pid in group_pids(group)? {
-        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
-        let read = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTASKINFO, 0, (&mut info as *mut libc::proc_taskinfo).cast(), std::mem::size_of_val(&info) as i32) };
-        if read == std::mem::size_of_val(&info) as i32 { bytes = bytes.saturating_add(info.pti_resident_size); }
+    for &pid in pids {
+        // physical footprint, not resident size: compressible pages (b"\1" * n) barely count as resident
+        let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+        if unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, (&mut info as *mut libc::rusage_info_v2).cast()) } == 0 { bytes = bytes.saturating_add(info.ri_phys_footprint); }
         else if io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) { return Err("memory_unavailable".into()); }
     }
     Ok(bytes)
@@ -168,6 +213,16 @@ pub fn group_memory(group: i32) -> Result<u64, String> {
         let r = policy(Kind::R, Path::new("/Library/Frameworks/R.framework/Versions/4.6/Resources/bin/Rscript"), Path::new("/Library/Frameworks/R.framework"), Path::new("/private/tmp/job"), &[]).unwrap();
         assert!(r.contains("(allow process-fork)") && r.contains("(literal \"/bin/sh\")") && !r.contains("(subpath \"/bin\")") && !r.contains("(subpath \"/usr/bin\")"));
     }
+    #[test] fn kernel_profile_grants_only_both_trees_the_spec_the_job_and_five_loopback_ports() {
+        let b = Launch { path: "/Users/u/e/bin/python".into(), canonical: "/Users/u/e/bin/python3.15".into(), tree: "/Users/u/e".into(), kind: Kind::Python };
+        let k = Launch { path: "/Library/Frameworks/R.framework/Resources/bin/R".into(), canonical: "/Library/Frameworks/R.framework/Versions/4.6/Resources/bin/R".into(), tree: "/Library/Frameworks/R.framework".into(), kind: Kind::R };
+        let p = kernel_policy(&b, &k, Path::new("/Users/u/Library/Jupyter/kernels/ir"), Path::new("/private/tmp/job"), &[50001, 50002, 50003, 50004, 50005]).unwrap();
+        assert!(p.starts_with("(version 1)\n(deny default)\n") && p.contains("(allow process-fork)") && p.contains("(subpath \"/Users/u/Library/Jupyter/kernels/ir\")"));
+        let deny = p.find("(deny network*)").unwrap();
+        assert_eq!(p.matches("network-outbound (remote ip \"localhost:").count(), 5); assert!(p.find("localhost:50001").unwrap() > deny);
+        assert!(!p.contains("(remote ip \"*") && !p.contains("(subpath \"/Users/u\")") && !p.contains("(subpath \"/Users\")"));
+        assert!(kernel_policy(&b, &k, Path::new("/s"), Path::new("/j"), &[1, 2, 3, 4, 5]).is_err() && kernel_policy(&b, &k, Path::new("/s"), Path::new("/j"), &[5000]).is_err());
+    }
     #[test] fn extra_reads_are_never_broad_or_the_home() {
         let home = fs::canonicalize(std::env::temp_dir()).unwrap();
         for bad in ["/", "/Users", "/etc", "/private/etc/hosts", "/System"] { assert!(extra_read(bad, &home).is_err(), "{bad}"); }
@@ -186,5 +241,6 @@ pub fn group_memory(group: i32) -> Result<u64, String> {
     #[test] fn process_accounting_sees_this_process_group() {
         assert!(process_total() > 1);
         assert!(group_memory(unsafe { libc::getpgrp() }).unwrap() > 0);
+        assert!(tree_pids(unsafe { libc::getpgrp() }).contains(&(std::process::id() as i32)));
     }
 }

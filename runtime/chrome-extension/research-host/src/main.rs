@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! latex-local-research: run ONE script with ONE Python or R interpreter under a macOS sandbox. Not registered or
-//! enabled anywhere. Protocol: one JSON request line on stdin, then optionally {"op":"cancel"}; stdin EOF also cancels.
-//! Output: JSON lines {"ev":"started","pid":n} and {"ev":"result",...}. Confinement claims live in test/research_confinement.test.mjs.
+//! latex-local-research. Started by Chrome (argument: the extension origin) it is the editor's native-messaging host for
+//! device-local research settings and confined Jupyter sessions (session.rs). Started any other way it runs ONE script
+//! with ONE Python or R interpreter under a macOS sandbox. Protocol: one JSON request line on stdin, then optionally
+//! {"op":"cancel"}; stdin EOF also cancels. Output: JSON lines {"ev":"started","pid":n} and {"ev":"result",...}.
+//! Confinement claims live in test/research_confinement.test.mjs and test/research_session.test.mjs.
+#[allow(dead_code)] mod discover;
 mod sandbox;
+mod session;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use sandbox::Kind;
 use serde_json::{json, Value};
@@ -67,7 +71,9 @@ fn tail(path: &Path, max: usize) -> (String, bool) {
 }
 fn emit(value: Value) { let mut out = io::stdout().lock(); let _ = writeln!(out, "{value}"); let _ = out.flush(); }
 
-fn run(request: &Value, cancel: &Arc<AtomicBool>) -> Result<Value, String> {
+/// `embedded`: the script's bytes when the caller supplies them (the editor's tools) instead of `request.script`;
+/// `on_start` receives the job's process group.
+fn run(request: &Value, cancel: &Arc<AtomicBool>, embedded: Option<&[u8]>, on_start: &dyn Fn(i32)) -> Result<Value, String> {
     if request["op"] != "run" { return Err("Unknown operation".into()); }
     let interpreter = fs::canonicalize(request["interpreter"].as_str().filter(|p| Path::new(p).is_absolute()).ok_or("Interpreter must be an absolute path")?).map_err(|_| "Interpreter not found")?;
     if !fs::metadata(&interpreter).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0) { return Err("Interpreter is not an executable file".into()); }
@@ -78,7 +84,8 @@ fn run(request: &Value, cancel: &Arc<AtomicBool>) -> Result<Value, String> {
     if extra.len() > 32 { return Err("Too many extra read paths".into()); }
     let timeout = number(request, "timeout_s", 30, 300)?; let max_output = number(request, "max_output", 1 << 20, 8 << 20)? as usize;
     let max_job = number(request, "max_job_bytes", 64 << 20, 256 << 20)?; let max_mem = number(request, "max_memory_mb", 1024, 4096)? << 20;
-    let script = fs::read(request["script"].as_str().filter(|p| Path::new(p).is_absolute()).ok_or("Script must be an absolute path")?).map_err(|_| "Script unreadable")?;
+    let script = match embedded { Some(bytes) => bytes.to_vec(),
+        None => fs::read(request["script"].as_str().filter(|p| Path::new(p).is_absolute()).ok_or("Script must be an absolute path")?).map_err(|_| "Script unreadable")? };
     let input = request["stdin"].as_str().unwrap_or("").as_bytes();
     if script.len() > 1 << 20 { return Err("Script exceeds 1 MiB".into()); }
 
@@ -99,7 +106,7 @@ fn run(request: &Value, cancel: &Arc<AtomicBool>) -> Result<Value, String> {
     unsafe { command.pre_exec(move || sandbox::limits(timeout + 5, nproc, (timeout + 5) as u32)); }
     let started = Instant::now();
     let mut child = command.spawn().map_err(|e| format!("Interpreter did not start (OS error {})", e.raw_os_error().unwrap_or(0)))?;
-    let group = child.id() as i32; emit(json!({"ev": "started", "pid": group}));
+    let group = child.id() as i32; on_start(group);
     let (mut status, mut exit): (&str, Option<std::process::ExitStatus>) = ("ok", None);
     loop {
         let reason = if cancel.load(Ordering::Relaxed) { Some("canceled") }
@@ -120,13 +127,14 @@ fn run(request: &Value, cancel: &Arc<AtomicBool>) -> Result<Value, String> {
     Ok(result)
 }
 fn main() {
+    if std::env::args().nth(1).is_some_and(|origin| origin.starts_with("chrome-extension://")) { session::serve(); std::process::exit(0); }
     if !cfg!(target_os = "macos") || !Path::new("/usr/bin/sandbox-exec").is_file() { emit(json!({"ev": "result", "status": "unavailable", "reason": "A supported macOS sandbox is required"})); return; }
     let mut input = io::BufReader::new(io::stdin());
     let mut line = String::new();
     if input.by_ref().take(MAX_REQUEST).read_line(&mut line).unwrap_or(0) == 0 { emit(json!({"ev": "result", "status": "error", "reason": "No request"})); return; }
     let cancel = Arc::new(AtomicBool::new(false)); let flag = Arc::clone(&cancel);
     thread::spawn(move || { let mut next = String::new(); loop { next.clear(); match input.read_line(&mut next) { Ok(0) | Err(_) => break, Ok(_) if next.contains("\"cancel\"") => break, Ok(_) => () } } flag.store(true, Ordering::Relaxed); });
-    let reply = match serde_json::from_str::<Value>(&line) { Ok(request) => run(&request, &cancel), Err(_) => Err("Malformed request".into()) };
+    let reply = match serde_json::from_str::<Value>(&line) { Ok(request) => run(&request, &cancel, None, &|group| emit(json!({"ev": "started", "pid": group}))), Err(_) => Err("Malformed request".into()) };
     emit(reply.unwrap_or_else(|reason| json!({"ev": "result", "status": "error", "reason": reason})));
     std::process::exit(0); // the stdin watcher may still be blocked in read
 }

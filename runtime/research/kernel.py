@@ -1,24 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Jupyter kernel adapter (DOCEXEC-01 kernel layer): one kernel, explicit cells, bounded safe outputs, provenance.
 
-!! UNCONFINED. The kernel runs with the user's own privileges: it can read the home directory, use the network and
-!! spawn processes. The only controls here are an environment allowlist (no inherited API keys), a private working
-!! directory, wall-clock and output bounds, and child cleanup. TeX's sandbox does not qualify general code. Keep this
-!! path unavailable to users until RESEARCH-RUNTIME-01 qualifies a real sandbox. Memory/process limits are not applied.
+Run directly, this layer is UNCONFINED: only an environment allowlist, a private working directory, wall-clock and
+output bounds and child cleanup apply. The editor reaches it only through the research host (research-host/src/session.rs),
+which runs this file and the kernel under a deny-default sandbox with no home/network access and memory limits.
 
 Uses installed jupyter_client only for protocol operations (no server, no notebook UI). The kernel is launched by
 jupyter_client from the installed kernelspec argv, never through a shell string built from document text; its
 connection file (0600, in a 0700 temp dir, 127.0.0.1 only) is deleted on shutdown and its keys/ports never appear in
 any result. Library: `Session`. CLI (JSON lines on stdin/stdout, run with `python -B -I kernel.py`):
-  {"op":"list"} {"op":"start","kernel":"python3","packages":["numpy"]} {"op":"run","cell":"a.py","code":"1+1","seed":1,"timeout":30}
+  {"op":"list"} {"op":"start","kernel":"python3","packages":["numpy"],"spec_dir":"/abs/kernels/python3","ports":[5 loopback ports]} {"op":"run","cell":"a.py","code":"1+1","seed":1,"timeout":30}
   {"op":"interrupt"} {"op":"restart"} {"op":"rerun","cells":[{"cell":..,"code":..}],"previous":[provenance..]} {"op":"shutdown"}
 Output items use only the MIME set that outputs.mjs renders: text/plain, image/png, application/x.table+json.
 """
-import base64, hashlib, json, os, queue, re, shutil, signal, subprocess, sys, tempfile, threading, time
+import base64, hashlib, json, os, queue, re, shutil, signal, subprocess, sys, tempfile, threading, time, traceback
 from importlib.util import find_spec
 
 MAX_CODE, MAX_CELLS, MAX_ITEMS, MAX_OUT, MAX_TEXT, MAX_PNG, MAX_TIMEOUT = 1 << 20, 500, 100, 256 << 10, 64 << 10, 2 << 20, 600
-SAFE_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME"}   # nothing secret-shaped is inherited
+SAFE_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME", "MPLCONFIGDIR", "IPYTHONDIR", "JUPYTER_CONFIG_DIR",
+            "JUPYTER_DATA_DIR", "JUPYTER_RUNTIME_DIR", "PYTHONNOUSERSITE", "LATEX_LOCAL_JOB"}   # nothing secret-shaped is inherited
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
@@ -36,11 +36,24 @@ def sha256(data): return hashlib.sha256(data if isinstance(data, bytes) else dat
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def list_kernels():
-    """Installed kernelspecs as {name: {display, language}}; filesystem locations are not exposed."""
+def spec_manager(spec_dir=None):
+    """All installed kernelspecs, or only the one directory the research host validated (its parent is the search path)."""
     if find_spec("jupyter_client") is None: raise KernelError("jupyter_client is not installed in the selected Python environment")
     from jupyter_client.kernelspec import KernelSpecManager
-    manager, out = KernelSpecManager(), {}
+    if spec_dir is None: return KernelSpecManager()
+    if not isinstance(spec_dir, str) or not os.path.isabs(spec_dir) or not os.path.isfile(os.path.join(spec_dir, "kernel.json")): raise KernelError("Kernelspec folder not found")
+    name = os.path.basename(spec_dir)
+    class One(KernelSpecManager):   # exactly this kernelspec: its parent folder is never listed (the sandbox does not grant it)
+        def find_kernel_specs(self): return {name: spec_dir}
+        def get_kernel_spec(self, kernel_name):
+            if kernel_name != name: raise KernelError("Unknown kernel")
+            return self.kernel_spec_class.from_resource_dir(spec_dir)
+    return One()
+
+
+def list_kernels(manager=None):
+    """Installed kernelspecs as {name: {display, language}}; filesystem locations are not exposed."""
+    manager, out = manager or spec_manager(), {}
     for name in manager.find_kernel_specs():
         try: spec = manager.get_kernel_spec(name); out[name] = {"display": spec.display_name, "language": spec.language}
         except Exception: continue
@@ -48,8 +61,11 @@ def list_kernels():
 
 
 class Session:
-    def __init__(self, kernel, packages=(), workdir=None):
-        if not isinstance(kernel, str) or kernel not in list_kernels(): raise KernelError("Unknown kernel")
+    def __init__(self, kernel, packages=(), workdir=None, spec_dir=None, ports=None):
+        self.ksm = spec_manager(spec_dir)
+        if not isinstance(kernel, str) or kernel not in list_kernels(self.ksm) or (spec_dir and os.path.basename(spec_dir) != kernel): raise KernelError("Unknown kernel")
+        if ports is not None and (not isinstance(ports, list) or len(ports) != 5 or any(isinstance(p, bool) or not isinstance(p, int) or not 1024 <= p < 65536 for p in ports)): raise KernelError("Invalid ports")
+        self.ports = ports
         if len(packages) > 50 or any(not isinstance(p, str) or not PACKAGE.match(p) for p in packages): raise KernelError("Invalid package name")
         self.kernel, self.packages_requested, self.cancel = kernel, list(packages), threading.Event()
         self.keep_workdir, self.workdir_arg = workdir is not None, workdir
@@ -64,10 +80,14 @@ class Session:
             self.conn_dir = tempfile.mkdtemp(prefix="kernel-"); os.chmod(self.conn_dir, 0o700)    # mkdtemp is 0700; explicit for clarity
             self.workdir = self.workdir_arg or tempfile.mkdtemp(prefix="kernel-work-")
             self.cancel.clear()
-            self.km = KernelManager(kernel_name=self.kernel); self.km.ip = "127.0.0.1"
+            self.km = KernelManager(kernel_name=self.kernel, kernel_spec_manager=self.ksm); self.km.ip = "127.0.0.1"
+            if self.ports:   # the sandbox allows exactly these loopback ports
+                self.km.cache_ports = False
+                self.km.shell_port, self.km.iopub_port, self.km.stdin_port, self.km.control_port, self.km.hb_port = self.ports
             self.km.connection_file = os.path.join(self.conn_dir, "k.json")
             env = {k: v for k, v in os.environ.items() if k in SAFE_ENV}
             self.km.start_kernel(cwd=self.workdir, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.secret = (self.km.session.key or b"").decode("ascii", "replace")   # redacted from every output, even if code prints it
             self.client = self.km.client(); self.client.start_channels(); self.client.wait_for_ready(timeout=60)
             self.client.kernel_info(); info = self._shell_reply(None, 15)["content"].get("language_info", {})
             self.language, self.runtime = str(info.get("name", "")), str(info.get("version", ""))
@@ -100,7 +120,7 @@ class Session:
         if work and not self.keep_workdir: shutil.rmtree(work, ignore_errors=True)
         self.workdir = None if not self.keep_workdir else self.workdir
 
-    def restart(self): self.shutdown(); self.start()
+    def restart(self): self.shutdown(); self.start(); self.order = 0
     def __enter__(self): self.start(); return self
     def __exit__(self, *exc): self.shutdown()
 
@@ -125,6 +145,7 @@ class Session:
 
     def _redact(self, text):
         text = ANSI.sub("", text)
+        if len(getattr(self, "secret", "")) >= 8: text = text.replace(self.secret, "<REDACTED>")
         for path in {self.workdir, self.conn_dir, *(os.path.realpath(p) for p in (self.workdir, self.conn_dir) if p)} - {None}:
             text = text.replace(path, "<work>")
         text = re.sub(r"/(?:private/)?var/folders/[^\s'\"]+", "<tmp>", text)
@@ -143,6 +164,11 @@ class Session:
             if len(png) <= MAX_PNG * 4 // 3 + 4 and raw.startswith(PNG_MAGIC) and len(raw) <= MAX_PNG: return {"mime": "image/png", "data": png}, blocked
             blocked.append("image/png")
         table = bundle.get("application/x.table+json")
+        resource = bundle.get("application/vnd.dataresource+json")      # pandas with display.html.table_schema: plain cells only
+        if table is None and isinstance(resource, dict) and isinstance(resource.get("data"), list) and isinstance(resource.get("schema"), dict):
+            fields = [str(f.get("name", ""))[:200] for f in resource["schema"].get("fields", [])[:20] if isinstance(f, dict)]
+            table = {"columns": fields, "rows": [[str(row.get(f, ""))[:200] for f in fields] for row in resource["data"][:200] if isinstance(row, dict)]}
+            blocked.remove("application/vnd.dataresource+json")
         if isinstance(table, (dict, str)) and len(canonical(table)) <= MAX_TEXT: return {"mime": "application/x.table+json", "data": table}, blocked
         text = bundle.get("text/plain")
         if isinstance(text, str): return {"mime": "text/plain", "data": self._redact(text)[:MAX_TEXT]}, blocked
@@ -185,6 +211,8 @@ class Session:
             elif kind == "error":
                 add({"kind": "error", "ename": self._redact(str(body.get("ename", "")))[:200], "evalue": self._redact(str(body.get("evalue", "")))[:2000],
                      "traceback": self._redact("\n".join(map(str, body.get("traceback", []))))[:MAX_TEXT]})
+        for item in items:                         # a key split across stream chunks is whole again after merging
+            if isinstance(item.get("data"), str) and item.get("mime") == "text/plain": item["data"] = self._redact(item["data"])
         reply = self._shell_reply(mid, 10)["content"]
         return {"status": status or {"ok": "ok", "error": "error"}.get(reply.get("status"), "aborted"), "items": items, "blocked": sorted(blocked),
                 "truncated": truncated, "execution_count": reply.get("execution_count") if store_history else None}
@@ -217,6 +245,9 @@ class Session:
 
 
 def _alive(pid):
+    try:
+        if os.waitpid(pid, os.WNOHANG)[0] == pid: return False      # our own child, now reaped (no `ps` inside the sandbox)
+    except ChildProcessError: pass
     try: os.kill(pid, 0)
     except ProcessLookupError: return False
     except PermissionError: return True
@@ -247,7 +278,7 @@ def main():
                 if op == "list": reply({"status": "ok", "kernels": list_kernels()}, rid)
                 elif op == "start":
                     if s: raise KernelError("Kernel already started")
-                    session["s"] = s = Session(request.get("kernel"), request.get("packages", [])); s.start()
+                    session["s"] = s = Session(request.get("kernel"), request.get("packages", []), spec_dir=request.get("spec_dir"), ports=request.get("ports")); s.start()
                     reply({"status": "ok", "language": s.language, "runtime": s.runtime, "packages": s.packages}, rid)
                 elif op in ("run", "restart", "rerun") and s:
                     if op == "run": reply({"status": "ok", **s.run(request.get("cell"), request.get("code"), request.get("seed"), request.get("timeout", 30))}, rid)
@@ -259,7 +290,9 @@ def main():
                 else: reply({"status": "unsupported", "reason": "Unknown operation or no kernel started"}, rid)
             except (KernelError, KeyError, TypeError, ValueError) as error:
                 reply({"status": "error", "reason": (s._redact(str(error)) if s else str(error))[:300]}, rid)
-            except Exception as error: reply({"status": "error", "reason": type(error).__name__}, rid)
+            except Exception as error:
+                traceback.print_exc()      # stderr stays in the host's private job directory
+                reply({"status": "error", "reason": type(error).__name__}, rid)
     finally:
         if session["s"]: session["s"].shutdown()
 

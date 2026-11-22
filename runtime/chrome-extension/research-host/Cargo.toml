@@ -3,7 +3,7 @@ name = "latex-local-research"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-description = "Runs one Python or R script under a macOS deny-default sandbox with hard resource limits; not registered or enabled anywhere"
+description = "Device-local research settings and confined Python/R scripts and Jupyter sessions under a macOS deny-default sandbox"
 
 [dependencies]
 base64 = "=0.22.1"
