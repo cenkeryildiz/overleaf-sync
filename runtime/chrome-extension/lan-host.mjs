@@ -5,12 +5,13 @@
 // {t:'snapshot',req:true} -> {t:'tree',docs,folders,seq} + the verified project transfer (lan-transfer.mjs);
 // {t:'fs',k:'blob',m} (a one-file transfer) and {t:'fs',k:'op',ref,op} -> checked here, applied by the owner, then broadcast in order as
 // [{t:'fs',k:'blob',m}...] {t:'fs',k:'change',seq,by,ref,op,xfer} or answered {t:'fs',k:'refused',ref,reason}.
-// Nothing else is served: no compile, no filesystem access beyond the project the owner passed in.
+// Stage 3 {t:'work'|'compile'} go to lan-compile.mjs (shared compile jobs on opted-in participants). No filesystem access beyond the project the owner passed in.
 import { OwnerRoom, MAX_MESSAGE, joinLink } from './lan-room.mjs';
 import { GrantAuthority } from './lan-grants.mjs';
 import { OwnerSync } from './lan-sync.mjs';
 import { handleSnapshotRequest, streamFiles, SnapshotReceiver, ProjectTree, within, rekey } from './lan-transfer.mjs';
 import { ot } from './lan-ot.mjs';
+import { ownerGroup } from './lan-compile.mjs';
 
 const LOCAL = 'owner', OWNER_CID = '0'.repeat(32), NAME = 'Owner';
 // network: true binds this computer's private LAN address (the helper refuses public ones); tests keep the loopback default.
@@ -67,9 +68,9 @@ const ACTION = { update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view' };
  * permission(info) is the owner-permission hook (see report): info = {peer, name, action:'view'|'edit', message}; return false to deny.
  * Events: onRemote(path, {op, v, by}), onCursor({name, path, row, column}), onPeers(names[]), onLost().
  */
-export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, network = false, secrets }) {
+export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, onPool = () => {}, network = false, secrets }) {
   const syncs = new Map(), waiting = new Map(), counters = new Map(), uploads = new Map(), aliases = new Map(), removed = new Set();
-  let room, grants, stopped = false, fsTail = Promise.resolve(), fsSeq = 0, moving = null;
+  let room, grants, group, stopped = false, fsTail = Promise.resolve(), fsSeq = 0, moving = null;
   const initial = source.tree();
   const tree = new ProjectTree({ files: initial.files.map(file => ({ path: file.path, size: file.bytes.length })), folders: initial.folders ?? [], main: initial.main });
   const current = path => aliases.get(path) ?? path; // a participant may still use a name the owner has just changed
@@ -146,6 +147,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
   const deny = (peer, m) => room.sendTo(peer, { t: 'denied', request: m.t, ref: m.ref ?? null });
   const onMessage = (peer, m, name) => {
     if (grants.onMessage(room, peer, m, name)) return; // copy/export/download: owner-signed tickets (lan-grants.mjs); the room already refused non-grantees
+    if (m.t === 'work' || m.t === 'compile') return group.onMessage(peer, name, m);
     const action = ACTION[m.t];
     if (!action || permission({ peer, name, action, message: m }) === false) return deny(peer, m);
     if (m.t === 'cursor') {
@@ -178,10 +180,14 @@ export async function startHost({ helper, source, permission = () => true, onRem
     send: (peer, bytes) => helper.send({ op: 'send', peer, data: b64(bytes) }),
     admit: peer => helper.call('admit', { peer }).catch(() => {}),
     drop: peer => helper.call('drop', { peer }).catch(() => {}),
-    onJoin: peer => { grants.onJoin(room, peer); presence(); }, onLeave: presence,
+    onJoin: peer => { grants.onJoin(room, peer); group.announce(peer); presence(); }, onLeave: peer => { group.leave(peer, 'gone'); presence(); },
     onMessage: (peer, m, name) => { try { return onMessage(peer, m, name); } catch { room.revoke(peer); } },
   }, secrets);
   grants = await GrantAuthority.create(room.roomId);
+  group = ownerGroup({ room, onChange: onPool, current: async () => { // the logs, not the saved files, hold the shared text
+    const { files } = source.tree();
+    return files.map(file => syncs.has(file.path) ? { path: file.path, bytes: new TextEncoder().encode(syncs.get(file.path).text) } : file);
+  } });
   const unsubscribe = helper.subscribe(event => {
     if (event.ev === 'peer') { uploads.delete(event.peer); room.connected(event.peer); }
     else if (event.ev === 'data' && typeof event.data === 'string') { const bytes = unb64(event.data); if (bytes.length <= MAX_MESSAGE) room.receive(event.peer, bytes); }
@@ -192,7 +198,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
   if (!bind) { unsubscribe(); throw Error('No private network address found. Connect this computer to Wi-Fi or Ethernet and try again.'); }
   const { port } = await helper.call('open', { bind, port: 0, room: room.roomId }).catch(error => { unsubscribe(); throw error; });
   const stop = async () => {
-    if (stopped) return; stopped = true; unsubscribe();
+    if (stopped) return; stopped = true; unsubscribe(); group.stop();
     await room.stop().catch(() => {}); await helper.call('close').catch(() => {}); helper.close();
     for (const w of waiting.values()) w.reject(Error('Sharing stopped'));
     waiting.clear();
@@ -215,7 +221,8 @@ export async function startHost({ helper, source, permission = () => true, onRem
     },
     cursor(c) { return room.broadcast({ t: 'cursor', name: NAME, ...c }).catch(() => {}); },
     participants: () => room.participants,
-    setGrant: (peer, grant) => room.setGrant(peer, grant),
+    setGrant: async (peer, grant) => { await room.setGrant(peer, grant); group.grant(peer, grant); },
+    group,
     revoke: peer => room.revoke(peer),
     /** Remove one participant: their session ends and new joins need the new passcode this returns. */
     async remove(peer) { await room.revoke(peer); return room.rotatePasscode(); },

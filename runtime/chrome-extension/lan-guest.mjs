@@ -29,7 +29,7 @@ const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
  * onResumed(conflicts); `reconcile` below settles those explicitly. Revoke, stop and leave end everything.
  */
 export async function joinSession({ link, passcode, username, onRemote = () => {}, onCursor = () => {}, onEnd = () => {}, onGrant = () => {}, onPresence = () => {}, onFs = () => {},
-  onLost = () => {}, onResumed = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket }) {
+  onLost = () => {}, onResumed = () => {}, onGroup = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket }) {
   let target = parseJoinLink(link), current = link, code = passcode; // the passcode stays in this closure for the bounded rejoin; never logged or stored
   const name = validUsername(username), cid = randomHex(16), waiting = new Map(), cursors = new Map(), files = new Map(), byKey = new Map(), counters = new Map();
   let conn = null, state = 'joining', token = null, timer = null, syncs = 0, conflicts = [];
@@ -125,6 +125,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     }
     if (m.t === 'fs') return fsMessage(c, m);
     if (c !== conn) return; // replies to a connection still being opened; the rejoin catches up from the log
+    if (m.t === 'work' || m.t === 'compiled' || m.t === 'pool' || (m.t === 'denied' && m.request === 'work')) { onGroup(m); return; } // stage 3 (lan-compile.mjs); not awaited: a compile must not hold up edits
     switch (m.t) {
       case 'doc': if (typeof m.path === 'string' && typeof m.text === 'string' && Number.isSafeInteger(m.v)) settle(`${m.path}\0join`, true, { text: m.text, v: m.v }); break;
       case 'ack': { const o = byKey.get(`${m.path}\0${m.id}`), f = files.get(m.path); if (o && f && Number.isSafeInteger(m.v)) { f.known = Math.max(f.known, m.v); finish(o, m.v - 1 - f.off); } break; }
