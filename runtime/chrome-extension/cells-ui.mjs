@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // DOCEXEC-01 / RESEARCH-RUNTIME-01 in the native editor: "This computer" rows (Python, R, Jupyter kernel, Run cells,
-// Math check), Run cell from the editor (right-click or Cmd/Ctrl+Enter in .py/.R files), and the results panel under the
-// editor with Stop / Restart / Rerun and an explicit Insert. Code runs only in the research helper's confined kernel
+// Math check), Run cell from the editor (right-click or Cmd/Ctrl+Enter in .py/.R files), and the one results panel under the
+// editor (sharedPanel, also used by research-ui.mjs) with Insert / Stop / Restart / Rerun. Code runs only in the research helper's confined kernel
 // (research-host/src/session.rs), never because a file was opened, imported, synced or joined. Outputs are untrusted:
 // they pass outputs.mjs and are shown as text, <img> blobs and plain tables, never as HTML.
 import { renderOutput, latexText, sha256 } from './research/outputs.mjs';
@@ -55,7 +55,7 @@ function host() {
     call: (op, args = {}) => new Promise((resolve, reject) => { if (closed) return reject(closed); const id = next++; pending.set(id, { resolve, reject }); try { port.postMessage({ id, op, ...args }); } catch (error) { pending.delete(id); reject(error); } }),
     on: listener => listeners.add(listener),
   };
-  helper.on(event => { if (event.ev === 'ended') { kernel = null; panelState?.('Kernel stopped' + (event.reason && event.reason !== 'stopped' && event.reason !== 'helper' ? ` (${event.reason.replace('_', ' ')})` : '')); } });
+  helper.on(event => { if (event.ev === 'ended') { kernel = null; panelState('Kernel stopped' + (event.reason && event.reason !== 'stopped' && event.reason !== 'helper' ? ` (${event.reason.replace('_', ' ')})` : '')); } });
   return helper;
 }
 
@@ -108,35 +108,63 @@ export async function computerRows(context) {
   return [...rows, note];
 }
 
-// ---------------------------------------------------------------- Run cell results panel (research-ui.mjs keeps its own #research-results)
-let panelNode = null, panelState = null;
-const STYLE = `.olx-results{flex:0 0 auto;max-height:42%;display:flex;flex-direction:column;border-top:1px solid var(--border-divider,#d0d5dd);background:var(--bg-light-primary,#fff);font-size:13px}
-.olx-results header{display:flex;gap:6px;align-items:center;padding:4px 8px;border-bottom:1px solid var(--border-divider,#e4e7ec)}.olx-results header strong{margin-right:auto}
-.olx-results header span{color:var(--content-secondary,#475467)}.olx-results ol{list-style:none;margin:0;padding:0;overflow:auto}
-.olx-results li{padding:6px 10px;border-bottom:1px solid var(--border-divider,#f2f4f7)}.olx-results pre{white-space:pre-wrap;margin:4px 0;max-height:16em;overflow:auto;font-size:12px}
-.olx-results img{max-width:100%;max-height:22em;display:block;margin:4px 0}.olx-results table{border-collapse:collapse;margin:4px 0}.olx-results td,.olx-results th{border:1px solid #d0d5dd;padding:1px 6px}
-.olx-results [data-status=error],.olx-results [data-status=failed],.olx-results [data-status=stale]{color:#b42318}.olx-results details{color:var(--content-secondary,#475467);font-size:12px}
-.olx-results button{font-size:12px}.olx-cell-menu{position:fixed;z-index:2000;background:#fff;border:1px solid #d0d5dd;border-radius:6px;box-shadow:0 4px 12px #0002;padding:4px 0}
-.olx-cell-menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 16px}.olx-cell-menu button:hover,.olx-cell-menu button:focus{background:#f2f4f7}`;
+// ---------------------------------------------------------------- the one results panel under the editor (research-ui.mjs uses it too)
+const STYLE = `#research-results{flex:none;max-height:42vh;overflow:auto;border-top:1px solid var(--border-divider,#c9ccd1);background:var(--bg-light-primary,#fff);color:#1b222c;font:13px/1.45 system-ui,sans-serif;padding:0 12px 8px}
+#research-results[hidden]{display:none}#research-results header{position:sticky;top:0;z-index:1;background:inherit;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:4px 0;border-bottom:1px solid var(--border-divider,#e4e7ec)}
+#research-results h2{font-size:14px;margin:0 auto 0 0}#research-results button{font-size:12px}
+#research-results [data-state]{border-radius:10px;padding:1px 8px;font-weight:600;background:#eef0f3}#research-results [data-state=issue_found],#research-results [data-state=stale],#research-results [data-state=refused],#research-results [data-state=error]{background:#fdecea;color:#8a1c11}
+#research-results [data-state=no_issue_found],#research-results [data-state=computed],#research-results [data-state=fresh]{background:#e6f4ea;color:#14532d}
+#research-results code,#research-results pre{font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}#research-results pre{margin:4px 0;max-height:16em;overflow:auto}
+#research-results table{border-collapse:collapse;margin:6px 0}#research-results td,#research-results th{border:1px solid #d6d8dc;padding:2px 6px;text-align:right}
+#research-results img{max-width:100%;max-height:22em;display:block;margin:4px 0;border:1px solid #d6d8dc}
+#research-results ol{list-style:none;margin:0;padding:0}#research-results li{padding:6px 0;border-bottom:1px solid var(--border-divider,#f2f4f7)}
+#research-results li[data-status^=error],#research-results li[data-status^=failed],#research-results li[data-status^=stale]{color:#b42318}#research-results details{color:#475467;font-size:12px}
+#research-results ul{margin:4px 0;padding-left:18px}#research-results .rr-row{display:flex;gap:8px;align-items:center;margin:2px 0}#research-results fieldset{border:0;padding:0;margin:4px 0}
+.olx-cell-menu,#research-menu{position:fixed;z-index:10000;background:#fff;border:1px solid #c9ccd1;border-radius:6px;box-shadow:0 4px 14px #0003;padding:4px 0;font:13px system-ui,sans-serif}
+.olx-cell-menu button,#research-menu button{display:flex;gap:16px;justify-content:space-between;width:100%;border:0;background:none;padding:6px 14px;text-align:left;cursor:pointer}
+.olx-cell-menu button:hover,.olx-cell-menu button:focus,#research-menu button:hover,#research-menu button:focus{background:#eef0f3}`;
+export const ensureStyle = () => { if (!document.getElementById('olx-results-style')) document.head.append(node('style', { id: 'olx-results-style', textContent: STYLE })); };
 const small = (label, onclick) => node('button', { type: 'button', className: 'btn btn-secondary btn-sm', textContent: label, onclick });
-/** The panel under the editor, created on first use. `show(item)` adds a result and returns {update(item)}; item fields:
+let shared = null, owner = null;
+/** The single results panel under the editor, created on first use: header (title, status, Insert, Stop, Restart, Rerun,
+ *  close), body and the analyses list. The feature that last showed something is its `owner` ({insert, stop, rerun,
+ *  restart?}) and receives the header buttons; Restart shows only for an owner that has one. Returns {root, title, state,
+ *  body, list, buttons}; enabling the buttons is the owner's job. */
+export function sharedPanel(next) {
+  ensureStyle();
+  if (!shared?.root.isConnected) {
+    const button = (label, name) => small(label, () => owner?.[name]?.());
+    const buttons = { insert: button('Insert', 'insert'), stop: button('Stop', 'stop'), restart: button('Restart', 'restart'), rerun: button('Rerun', 'rerun') };
+    const title = node('h2', { id: 'rr-title', textContent: 'Results' }), state = node('span', { role: 'status' }), body = node('div', { id: 'rr-body' }), list = node('div', { id: 'rr-list' });
+    const hide = () => { root.hidden = true; document.querySelector('.cm-content')?.cmView?.view?.focus(); };
+    const root = node('section', { id: 'research-results', ariaLabel: 'Results' }, node('header', {}, title, state, buttons.insert, buttons.stop, buttons.restart, buttons.rerun,
+      node('button', { type: 'button', className: 'btn-close', ariaLabel: 'Close results', title: 'Close results', onclick: hide })), body, list);
+    root.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    const editor = document.querySelector('.ide-redesign-editor-content');
+    if (editor) editor.after(root); else (document.querySelector('.cm-editor')?.parentElement ?? document.body).append(root);
+    shared = { root, title, state, body, list, buttons }; owner = null;
+  }
+  if (next && next !== owner) { owner = next; shared.buttons.restart.hidden = !next.restart; }
+  shared.root.hidden = false; return shared;
+}
+export const ownsPanel = candidate => !!shared && owner === candidate;
+
+// Run cell's view in that panel: its result list in the body; header Insert takes the newest insertable output.
+let cellControls = {}, cellList = null, lastInsert = null;
+const cellsOwner = { stop: () => cellControls.stop?.(), restart: () => cellControls.restart?.(), rerun: () => cellControls.rerun?.(), insert: () => lastInsert?.() };
+const syncCells = () => { if (!ownsPanel(cellsOwner)) return; const b = shared.buttons; b.insert.disabled = !lastInsert; b.insert.title = lastInsert ? 'Insert the newest output at the cursor' : 'No output to insert yet'; b.stop.disabled = b.restart.disabled = b.rerun.disabled = false; };
+const panelState = text => { if (!ownsPanel(cellsOwner)) return; delete shared.state.dataset.state; shared.state.textContent = text; };
+/** `show(item)` adds a result and returns {update(item)}; item fields:
  *  {title, status, message?, outputs?: [{mime, data}], provenance?, actions?: [{label, run}]} (outputs go through outputs.mjs). */
 export function resultsPanel(controls = {}) {
-  const container = document.querySelector('.ide-redesign-editor-content')?.parentElement ?? document.querySelector('.cm-editor')?.parentElement;
-  if (!panelNode || !panelNode.isConnected) {
-    if (!document.getElementById('olx-results-style')) document.head.append(node('style', { id: 'olx-results-style', textContent: STYLE }));
-    const state = node('span', { role: 'status' }), list = node('ol', { ariaLabel: 'Result list' });
-    const bar = node('header', {}, node('strong', { textContent: 'Results' }), state, small('Stop', () => controls.stop?.()), small('Restart', () => controls.restart?.()), small('Rerun', () => controls.rerun?.()),
-      node('button', { type: 'button', className: 'btn-close', ariaLabel: 'Close results', title: 'Close results', onclick: () => { panelNode.remove(); panelNode = null; } }));
-    panelNode = node('section', { className: 'olx-results', ariaLabel: 'Results' }, bar, list);
-    panelState = text => { state.textContent = text; };
-    container?.append(panelNode);
-  }
-  const list = panelNode.querySelector('ol');
+  cellControls = controls; cellList ??= node('ol', { ariaLabel: 'Result list' });
+  const p = sharedPanel(cellsOwner);
+  if (p.body.firstChild !== cellList) { p.title.textContent = 'Results'; p.state.textContent = ''; delete p.state.dataset.state; p.body.replaceChildren(cellList); }
+  syncCells();
   return {
     state: text => panelState(text),
     show(item) {
-      const entry = node('li'); list.append(entry); entry.scrollIntoView?.({ block: 'nearest' });
+      const entry = node('li'); cellList.append(entry); entry.scrollIntoView?.({ block: 'nearest' });
       const draw = next => { entry.replaceChildren(...renderItem(next)); entry.dataset.status = next.status ?? ''; };
       draw(item); return { update: draw, node: entry };
     },
@@ -187,7 +215,7 @@ async function ready(context, language, panel) {
 }
 async function execute(context, panel, path, cell) {
   const id = cellId(path, cell.index), title = `${path} · ${cell.index === 'selection' ? 'selection' : 'cell ' + (cell.index + 1)}`;
-  const entry = panel.show({ title, status: 'running' });
+  const entry = panel.show({ title, status: 'running' }); lastInsert = null; syncCells();
   let reply; try { reply = await host().call('run', { project: context.project(), cell: id, code: cell.code, timeout: TIMEOUT_S }); }
   catch (error) { entry.update({ title, status: 'failed', message: error.message }); return null; }
   if (!reply.provenance) { entry.update({ title, status: reply.status ?? 'failed', message: reply.reason ?? 'The kernel did not run this cell' }); return null; }
@@ -197,6 +225,8 @@ async function execute(context, panel, path, cell) {
   const result = { title, status: reply.status + (reply.execution_count ? ` [${reply.execution_count}]` : ''), outputs, provenance: reply.provenance };
   result.insert = (view, output) => insert(context, panel, path, cell, reply.provenance, view, output, () => entry.update({ ...result, status: 'stale: the code changed after this run; rerun before inserting' }));
   entry.update(result); history.set(id, reply.provenance);
+  const pick = outputs.map(output => [output, renderOutput(output.mime, output.data)]).findLast(([output, view]) => output.insertable !== false && view.kind !== 'blocked');
+  lastInsert = pick ? () => result.insert(pick[1], pick[0]) : null; syncCells();
   return reply.provenance;
 }
 async function insert(context, panel, path, cell, provenance, view, output, stale) {
@@ -274,7 +304,7 @@ export async function revoke(project) { try { await host().call('consent', { pro
 /** Right-click menu with the one command, shown only in .py/.R files; Escape or any outside click closes it. */
 export function cellMenu(context, event) {
   document.querySelector('.olx-cell-menu')?.remove();
-  if (!document.getElementById('olx-results-style')) document.head.append(node('style', { id: 'olx-results-style', textContent: STYLE }));
+  ensureStyle();
   const selection = context.view()?.state.selection.main, menu = node('div', { className: 'olx-cell-menu', role: 'menu' });
   const item = node('button', { type: 'button', role: 'menuitem', textContent: selection && !selection.empty ? 'Run selection' : 'Run cell', onclick: () => { close(); runCell(context); } });
   item.setAttribute('aria-keyshortcuts', 'Meta+Enter Control+Enter'); menu.append(item);

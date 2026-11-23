@@ -1,24 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // MATH-CHECK-01 and ANALYSIS-01 in the native editor. Triggers: right-click in the editor, Ctrl+Alt+M (check equation) and
-// Ctrl+Alt+R (run the `% analysis` line at the cursor). Results render into #research-results under the editor, with
-// Insert / Stop / Rerun. A check never changes the source; an analysis result enters the manuscript only through Insert.
+// Ctrl+Alt+R (run the `% analysis` line at the cursor). Results render into the one results panel under the editor, owned by
+// cells-ui.mjs (sharedPanel), whose Insert / Stop / Rerun act on the current check or analysis. A check never changes the source; an analysis result enters the manuscript only through Insert.
 // Execution goes through the `run` transport supplied at registration (the native research host): nothing runs on open.
 import { mathSnippets, snippetAt, trimSelection, mathRequest, declarations, contextFor, ASSUMPTIONS, analysisSpecs, resultBlocks, resultBlock, parseCsv, buildRequest, renderLatex, projectState } from './research/manuscript.mjs';
 import { renderOutput, provenance } from './research/outputs.mjs';
 import { coalescer } from './research/deps.mjs';
+import { sharedPanel, ownsPanel, ensureStyle } from './cells-ui.mjs';
 
 const LABEL = { issue_found: 'Issue found', no_issue_found: 'No issue found in the supported check', inconclusive: 'Inconclusive', unsupported: 'Unsupported notation',
   computed: 'Computed', unavailable: 'Unavailable', error: 'Could not run', canceled: 'Stopped', fresh: 'Up to date', stale: 'Stale', new: 'Not inserted', refused: 'Refused' };
 const COMPUTE = { diff: 'Derivative', integrate: 'Integral', limit: 'Limit', solve: 'Solve', optimize: 'Optimize' };
-const CSS = `#research-results{flex:none;max-height:42vh;overflow:auto;border-top:1px solid #c9ccd1;background:#fff;color:#1b222c;font:13px/1.45 system-ui,sans-serif;padding:8px 12px}
-#research-results[hidden]{display:none}#research-results header{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#research-results h2{font-size:14px;margin:0 auto 0 0}
-#research-results [data-state]{border-radius:10px;padding:1px 8px;font-weight:600;background:#eef0f3}#research-results [data-state=issue_found],#research-results [data-state=stale],#research-results [data-state=refused],#research-results [data-state=error]{background:#fdecea;color:#8a1c11}
-#research-results [data-state=no_issue_found],#research-results [data-state=computed],#research-results [data-state=fresh]{background:#e6f4ea;color:#14532d}#research-results code,#research-results pre{font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}
-#research-results table{border-collapse:collapse;margin:6px 0}#research-results td,#research-results th{border:1px solid #d6d8dc;padding:2px 6px;text-align:right}#research-results img{max-width:100%;border:1px solid #d6d8dc}
-#research-results ul{margin:4px 0;padding-left:18px}#research-results .rr-row{display:flex;gap:8px;align-items:center;margin:2px 0}#research-results fieldset{border:0;padding:0;margin:4px 0}
-#research-menu{position:fixed;z-index:10000;background:#fff;border:1px solid #c9ccd1;border-radius:6px;box-shadow:0 4px 14px #0003;padding:4px 0;font:13px system-ui,sans-serif}
-#research-menu button{display:flex;gap:16px;justify-content:space-between;width:100%;border:0;background:none;padding:6px 14px;text-align:left;cursor:pointer}#research-menu button:hover,#research-menu button:focus{background:#eef0f3}`;
-
 const el = (tag, props = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) if (k.includes('-')) node.setAttribute(k, v); else node[k] = v;
@@ -46,31 +38,21 @@ export async function renderReadiness(container, run) {
 export function registerResearch({ run, trusted = () => false, readiness = null }) {
   if (typeof run !== 'function' || globalThis.overleafResearchRegistered) return;
   globalThis.overleafResearchRegistered = true;
-  document.head.append(el('style', { textContent: CSS }));
+  ensureStyle();
   if (readiness) renderReadiness(readiness, run);
   let current = null, controller = null, staged = new Map(), states = new Map(), previousKeys = null, list = null;
 
   // ---- panel
   const parts = {};
+  const owner = { insert: () => insert(), stop: () => stop(), rerun: () => rerun() };
   function panel() {
-    let root = document.getElementById('research-results');
-    if (!root) {
-      root = el('section', { id: 'research-results' }); root.setAttribute('aria-label', 'Research results');
-      const anchor = view()?.dom.closest('.ide-redesign-editor-content');
-      if (anchor) anchor.after(root); else document.body.append(root);
-    }
-    if (!root.querySelector('#rr-title')) {
-      parts.title = el('h2', { id: 'rr-title' }); parts.state = el('span', { role: 'status' });
-      parts.insert = el('button', { type: 'button', textContent: 'Insert', onclick: insert }); parts.stop = el('button', { type: 'button', textContent: 'Stop', onclick: stop });
-      parts.rerun = el('button', { type: 'button', textContent: 'Rerun', onclick: () => rerun() });
-      parts.body = el('div', { id: 'rr-body' }); list = el('div', { id: 'rr-list' });
-      root.replaceChildren(el('header', {}, parts.title, parts.state, parts.insert, parts.stop, parts.rerun), parts.body, list);
-      root.addEventListener('keydown', e => { if (e.key === 'Escape') { root.hidden = true; view()?.focus(); } });
-    }
-    root.hidden = false; return root;
+    const p = sharedPanel(owner);
+    Object.assign(parts, { title: p.title, state: p.state, insert: p.buttons.insert, stop: p.buttons.stop, rerun: p.buttons.rerun, body: p.body }); list = p.list;
+    return p.root;
   }
   const setState = (status, text = LABEL[status] ?? status) => { panel(); parts.state.dataset.state = status; parts.state.textContent = text; };
   const buttons = () => {
+    if (!ownsPanel(owner)) return;   // Run cell holds the panel now; its own state stays
     parts.stop.disabled = !controller; parts.rerun.disabled = !!controller || !current;
     const stage = current?.kind === 'analysis' ? staged.get(current.id) : null;
     parts.insert.disabled = !!controller || !stage?.latex || !!stage.blocked;
