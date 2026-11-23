@@ -684,5 +684,16 @@ try {
 
   status('Native editor — Local only. Compile and export on this device.');
   // MATH-CHECK-01 / ANALYSIS-01: only when a research transport (the native research host bridge) is present; nothing runs on open.
-  if (globalThis.overleafStandalone && typeof globalThis.overleafResearchRun === 'function') import('/extension/research-ui.mjs').then(ui => ui.registerResearch({ run: globalThis.overleafResearchRun, trusted: () => globalThis.overleafResearchTrusted?.(project.id) === true })).catch(() => {});
+  // The UI modules load on the first right-click or Ctrl+Alt+M/R in the editor, not on open (S3-16: unused tools cost nothing).
+  if (globalThis.overleafStandalone && typeof globalThis.overleafResearchRun === 'function') {
+    let loading = null;
+    const first = event => {
+      if (loading || event.defaultPrevented || !(event.target instanceof Element) || !event.target.closest('.cm-content')) return;   // .py/.R right-clicks are Run cell's
+      if (event.type === 'keydown' && !(event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey && (event.code === 'KeyM' || event.code === 'KeyR'))) return;
+      event.preventDefault(); event.stopPropagation();   // shortcut: this one right-click shows no browser menu even where research offers none
+      loading = import('/extension/research-ui.mjs').then(ui => ui.registerResearch({ run: globalThis.overleafResearchRun, trusted: () => globalThis.overleafResearchTrusted?.(project.id) === true }))
+        .then(handlers => handlers?.[event.type]?.(event)).catch(() => { loading = null; });
+    };
+    addEventListener('contextmenu', first, true); addEventListener('keydown', first, true);
+  }
 } catch (error) { status(error.message + '. Existing local files are retained.', true); }

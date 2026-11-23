@@ -231,23 +231,26 @@ export function registerResearch({ run, trusted = () => false, readiness = null 
     if (analysisSpecs(doc.lineAt(pos).text).length) items.push(['Run analysis', 'Ctrl+Alt+R', () => startAnalysis(pos)]);
     return items;
   };
-  document.addEventListener('contextmenu', e => {
+  const contextmenu = e => {
     const v = view(); if (!v || !v.contentDOM.contains(e.target)) return;
     const pos = v.posAtCoords({ x: e.clientX, y: e.clientY }) ?? v.state.selection.main.head, items = actions(pos);
     if (!items.length) return;   // the browser's own menu stays for everything else
     e.preventDefault(); closeMenu();
     menu = el('div', { id: 'research-menu', role: 'menu' }, ...items.map(([label, keys, act]) => el('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); act(); } }, el('span', { textContent: label }), el('kbd', { textContent: keys }))));
     menu.style.left = `${Math.min(e.clientX, innerWidth - 220)}px`; menu.style.top = `${Math.min(e.clientY, innerHeight - 90)}px`; document.body.append(menu); menu.querySelector('button').focus();
-  }, true);
+  };
+  document.addEventListener('contextmenu', contextmenu, true);
   document.addEventListener('pointerdown', e => { if (menu && !menu.contains(e.target)) closeMenu(); }, true);
-  document.addEventListener('keydown', e => {
+  const keydown = e => {
     if (menu && e.key === 'Escape') { closeMenu(); view()?.focus(); return; }
     if (!e.ctrlKey || !e.altKey || e.metaKey || e.shiftKey || !['KeyM', 'KeyR'].includes(e.code)) return;
     const v = view(); if (!v?.hasFocus) return;
     e.preventDefault(); e.stopPropagation();
     const sel = v.state.selection.main;
     if (e.code === 'KeyM') startMath(sel.from, sel.to); else startAnalysis(sel.head);
-  }, true);
+  };
+  document.addEventListener('keydown', keydown, true);
   document.addEventListener('input', e => { if (view()?.contentDOM.contains(e.target) && states.size) refreshSoon.touch('edit'); }, true);
-  setInterval(() => { if (states.size && !controller && !document.getElementById('research-results')?.hidden) refreshSoon.touch('poll'); }, 4000);   // shortcut: polls for data-file changes made outside the editor (uploads); an editor/file-tree change event would replace it
+  setInterval(() => { if (states.size && !controller && !document.getElementById('research-results')?.hidden) refreshSoon.touch('poll'); }, 4000);
+  return { contextmenu, keydown };   // the loader in native-workspace.mjs replays the gesture that loaded this module   // shortcut: polls for data-file changes made outside the editor (uploads); an editor/file-tree change event would replace it
 }
