@@ -100,7 +100,10 @@ pub fn kernel_policy(broker: &Launch, kernel: &Launch, spec: &Path, job: &Path, 
 }
 
 /// Applied in the child between fork and exec. NPROC is per user on macOS, so it is relative to the current process count.
+/// The job leads a new session (and so a group with its own pid): `set -m`/setpgid cannot leave a session, only setsid can,
+/// and the sandbox lets no job exec a program that calls it. Do not also set `process_group(0)`: setsid then fails (EPERM).
 pub fn limits(cpu_seconds: u64, nproc: u64, alarm_seconds: u32) -> io::Result<()> {
+    if unsafe { libc::setsid() } < 0 { return Err(io::Error::last_os_error()); }
     for (resource, limit) in [(libc::RLIMIT_CPU, cpu_seconds), (libc::RLIMIT_FSIZE, 32 * 1024 * 1024), (libc::RLIMIT_NOFILE, 512), (libc::RLIMIT_NPROC, nproc), (libc::RLIMIT_CORE, 0)] {
         let value = libc::rlimit { rlim_cur: limit, rlim_max: limit };
         if unsafe { libc::setrlimit(resource, &value) } != 0 { return Err(io::Error::last_os_error()); }
@@ -127,7 +130,9 @@ fn all_pids() -> Vec<i32> {
     pids.truncate(bytes.max(0) as usize); pids.retain(|p| *p > 1); pids
 }
 /// Processes of this user whose environment carries `marker` (inherited by every descendant, so it finds processes that
-/// left both the process group and the parent chain). Shortcut: a descendant that clears its environment is not found.
+/// left both the process group and the parent chain). Shortcut: a descendant that clears its environment is not found, and
+/// macOS 15 (Darwin 24) returns no other process's environment at all; the session id (`in_session`) is the sweep that works there.
+fn in_session(pid: i32, root: i32) -> bool { (unsafe { libc::getsid(pid) }) == root }
 fn tagged(marker: &str, me: i32) -> Vec<i32> {
     let (needle, mut found, mut buffer) = (marker.as_bytes(), Vec::new(), vec![0u8; 1 << 20]);
     for pid in all_pids() {
@@ -149,7 +154,7 @@ pub fn kill_tree(root: i32, marker: Option<&str>) -> Vec<i32> {
         for pid in all_pids() {
             if pid == me || seen.contains(&pid) { continue; }
             let Some(info) = bsd_info(pid) else { continue };
-            if info.pbi_pgid as i32 == root || seen.contains(&(info.pbi_ppid as i32)) { seen.insert(pid); unsafe { libc::kill(pid, libc::SIGSTOP); } grew = true; }
+            if info.pbi_pgid as i32 == root || in_session(pid, root) || seen.contains(&(info.pbi_ppid as i32)) { seen.insert(pid); unsafe { libc::kill(pid, libc::SIGSTOP); } grew = true; }
         }
         for pid in marker.map(|m| tagged(m, me)).unwrap_or_default() { if seen.insert(pid) { unsafe { libc::kill(pid, libc::SIGSTOP); } grew = true; } }
         if !grew { break; }
@@ -163,13 +168,14 @@ pub fn survivors(found: &[i32], group: i32, marker: Option<&str>) -> usize {
     let mut alive: BTreeSet<i32> = found.iter().copied().filter(|p| bsd_info(*p).is_some_and(|i| i.pbi_status != 5 && i.pbi_status != 0)).collect();
     alive.extend(group_pids(group).unwrap_or_else(|_| vec![-1]).into_iter().filter(|p| bsd_info(*p).is_none_or(|i| i.pbi_status != 5)));
     alive.extend(marker.map(|m| tagged(m, unsafe { libc::getpid() })).unwrap_or_default().into_iter().filter(|p| bsd_info(*p).is_some_and(|i| i.pbi_status != 5)));
+    alive.extend(all_pids().into_iter().filter(|p| in_session(*p, group) && bsd_info(*p).is_some_and(|i| i.pbi_status != 5)));
     alive.len()
 }
 pub fn group_memory(group: i32) -> Result<u64, String> { memory_of(&group_pids(group)?) }
 /// The session's processes: its group plus every descendant by parent link (jupyter_client starts the kernel in a new
 /// session, so it leaves the group but keeps the broker as parent).
 pub fn tree_pids(root: i32) -> Vec<i32> {
-    let infos: Vec<(i32, i32, i32)> = all_pids().into_iter().filter_map(|p| bsd_info(p).map(|i| (p, i.pbi_ppid as i32, i.pbi_pgid as i32))).collect();
+    let infos: Vec<(i32, i32, i32)> = all_pids().into_iter().filter_map(|p| bsd_info(p).map(|i| (p, i.pbi_ppid as i32, if in_session(p, root) { root } else { i.pbi_pgid as i32 }))).collect();
     let mut found: BTreeSet<i32> = BTreeSet::from([root]);
     for _ in 0..16 {
         let before = found.len();
@@ -229,14 +235,19 @@ pub fn memory_of(pids: &[i32]) -> Result<u64, String> {
         assert!(extra_read("/nonexistent/path/x", &home).is_err());
         assert!(extra_read(std::env::temp_dir().to_str().unwrap(), &home).is_err()); // the (fake) home and its parents
     }
-    #[test] fn environment_marker_finds_a_process_outside_the_group_and_lineage() {
-        // setsid-style escape: the child gets its own session/group and is orphaned by a short-lived parent.
-        let marker = format!("LATEX_LOCAL_JOB=unit-{}", std::process::id());
-        let status = std::process::Command::new("/bin/sh").arg("-c").arg("(set -m; sleep 30 & ) ; exit 0").env(&marker[..15], &marker[16..]).status().unwrap();
-        assert!(status.success()); std::thread::sleep(std::time::Duration::from_millis(300));
-        let found = tagged(&marker, unsafe { libc::getpid() });
-        assert!(!found.is_empty(), "marker not found: environment reads of other processes may be blocked in this context");
-        for pid in found { unsafe { libc::kill(pid, libc::SIGKILL); } }
+    #[test] fn kill_tree_finds_a_job_control_escape_by_session() {
+        // `set -m` gives the background job its own group, and the short-lived parent orphans it: no group or parent link is left.
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("/bin/sh"); command.arg("-c").arg("(set -m; sleep 30 & ) ; exit 0");
+        let nproc = process_total() + 64; unsafe { command.pre_exec(move || limits(60, nproc, 0)); }
+        let mut child = command.spawn().unwrap(); let root = child.id() as i32;
+        assert!(child.wait().unwrap().success()); std::thread::sleep(std::time::Duration::from_millis(300));
+        let escaped: Vec<i32> = all_pids().into_iter().filter(|p| in_session(*p, root)).collect();
+        assert_eq!(escaped.len(), 1, "the escaped sleep is in the job's session");
+        assert!(bsd_info(escaped[0]).is_some_and(|i| i.pbi_pgid as i32 != root), "it left the job's process group");
+        let found = kill_tree(root, None); assert!(found.contains(&escaped[0]));
+        for _ in 0..100 { if survivors(&found, root, None) == 0 { break; } std::thread::sleep(std::time::Duration::from_millis(10)); }
+        assert_eq!(survivors(&found, root, None), 0);
     }
     #[test] fn process_accounting_sees_this_process_group() {
         assert!(process_total() > 1);

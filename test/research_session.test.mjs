@@ -171,7 +171,10 @@ test('editor tools (research-ui transport): probe without consent, analysis only
     assert.match((await script({ op: 'version' })).error, /No Python environment/i, 'nothing runs before a selection');
     await host.ok('select', { kind: 'python', path: ENV_PYTHON });
     const status = await host.ok('status', { project: PROJECT });
-    assert.equal(status.features['python-analysis'].ready, true); assert.match(String(status.features['math-check'].ready), /sympy/, 'math check reports the missing package');
+    // the environment decides: math check is ready exactly when SymPy imports there (it was absent from myproject before 2026-11-23)
+    const hasSympy = spawnSync(ENV_PYTHON, ['-I', '-c', 'import sympy']).status === 0;
+    assert.equal(status.features['python-analysis'].ready, true);
+    if (hasSympy) assert.equal(status.features['math-check'].ready, true); else assert.match(String(status.features['math-check'].ready), /^sympy is not installed in the selected Python environment$/, 'math check reports the missing package');
     assert.equal(typeof (await script({ op: 'version' })).result, 'object', 'the readiness probe needs no consent');
     assert.match((await script(describe)).error, /turned off/);
     await host.ok('feature', { name: 'python-analysis', on: true });

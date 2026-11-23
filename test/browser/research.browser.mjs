@@ -1,50 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // MATH-CHECK-01 / ANALYSIS-01 browser check: the real native editor, right-click and Ctrl+Alt shortcuts, the results panel,
 // Insert / Stop / Rerun, stale marking and reload without autorun. Execution is real: each run goes through the
-// latex-local-research host (macOS sandbox) with the user's selected interpreters. The page↔host link here is a test
-// binding standing in for the native-messaging bridge (lane S3-B); everything else is product code. Synthetic data only.
+// latex-local-research host (macOS sandbox) reached through the product's native-messaging bridge (cells-ui.mjs), with the
+// Python and R selected through the helper's own ops; a page spy only counts runs. Settings go to a temporary file. Synthetic data only.
 //   CARGO_TARGET_DIR=<dir> cargo build --offline --release --manifest-path runtime/chrome-extension/research-host/Cargo.toml
 //   PLAYWRIGHT_MODULE=<playwright> EXTENSION_CHROME_PATH=<Chrome for Testing> LATEX_EXTENSION_BASE=<built extension dir> \
-//   LATEX_RESEARCH_HELPER=<latex-local-research> MATH_PYTHON=<python with SymPy> ANALYSIS_PYTHON=<python with statsmodels> RSCRIPT=<Rscript> \
+//   LATEX_RESEARCH_HELPER=<latex-local-research> RESEARCH_PYTHON=<python with SymPy and statsmodels> RSCRIPT=<Rscript> \
+//   [RESEARCH_PYTHON_NO_SYMPY=<a discovered python without SymPy>]  (default: the first one the helper reports without SymPy)
 //   node test/browser/research.browser.mjs
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const repository = resolve(import.meta.dirname, '../..'), base = resolve(process.env.LATEX_EXTENSION_BASE), helper = resolve(process.env.LATEX_RESEARCH_HELPER);
-const interpreters = { math: process.env.MATH_PYTHON, python: process.env.ANALYSIS_PYTHON, r: process.env.RSCRIPT };
-const scripts = { math: 'runtime/math-check/mathcheck.py', python: 'runtime/research/analysis.py', r: 'runtime/research/analysis.R' };
+const python = realpathSync(process.env.RESEARCH_PYTHON), rscript = realpathSync(process.env.RSCRIPT);
 const work = mkdtempSync(join(tmpdir(), 'latex-research-check-')), extension = join(work, 'extension');
 cpSync(base, extension, { recursive: true });   // the base package is this branch's parent build: overlay only what this lane changes
 cpSync(join(repository, 'runtime/browser-recovery/native-workspace.mjs'), join(extension, 'recovery/native-workspace.mjs'));
-cpSync(join(repository, 'runtime/chrome-extension/research-ui.mjs'), join(extension, 'extension/research-ui.mjs'));
+for (const name of ['research-ui.mjs', 'cells-ui.mjs', 'this-computer.mjs']) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));   // research-ui imports the shared panel
 mkdirSync(join(extension, 'extension/research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 const manifest = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8'));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 const results = [], timings = {}, note = (name, detail = '') => { results.push(name); console.log('ok -', name, detail); };
 const until = async (check, what, ms = 30000) => { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await check(); if (last) return last; } catch (error) { last = error; } await new Promise(r => setTimeout(r, 50)); } throw Error('Timed out: ' + what + (last instanceof Error ? ' (' + last.message + ')' : last ? ' (last: ' + String(last).slice(0, 300) + ')' : '')); };
 
-// ---- the host link: one latex-local-research process per run, cancel on Stop
-const jobs = new Map(), calls = [];
-function runOnHost(job, tool, request) {
-  calls.push({ tool, op: request.op });
-  return new Promise(resolveRun => {
-    const child = spawn(helper, [], { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME, TMPDIR: tmpdir() } }); jobs.set(job, child);
-    let buffer = '';
-    child.stdout.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\n')) >= 0) { const event = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1);
-      if (event.ev !== 'result') continue;
-      jobs.delete(job); child.stdin.end();
-      if (event.status === 'canceled') resolveRun({ status: 'canceled', host: 'canceled' });
-      else if (event.status !== 'ok') resolveRun({ status: 'error', reason: `The research host stopped the run (${event.status})` });
-      else { try { resolveRun(JSON.parse(event.stdout)); } catch { resolveRun({ status: 'error', reason: 'The script returned no result' }); } }
-    } });
-    child.stdin.write(JSON.stringify({ op: 'run', interpreter: interpreters[tool], script: join(repository, scripts[tool]), stdin: JSON.stringify(request), timeout_s: 60 }) + '\n');
-  });
-}
+// ---- the real host: Chromium starts latex-local-research for the extension origin; settings live in a temp file
+const profile = join(work, 'profile'), calls = []; let inflight = 0;
+mkdirSync(join(profile, 'NativeMessagingHosts'), { recursive: true });
+writeFileSync(join(profile, 'NativeMessagingHosts', 'com.cenker.latex_research.json'), JSON.stringify({ name: 'com.cenker.latex_research', description: 'Research helper (test)', path: helper, type: 'stdio', allowed_origins: [`chrome-extension://${id}/`] }));
+const helperCall = (page, op, args = {}) => page.evaluate(([op, args]) => new Promise((resolve, reject) => {
+  const port = chrome.runtime.connectNative('com.cenker.latex_research');
+  port.onMessage.addListener(m => { if (m.id !== 1) return; port.disconnect(); m.error ? reject(Error(m.error)) : resolve(m.result); });
+  port.onDisconnect.addListener(() => reject(Error(chrome.runtime.lastError?.message ?? 'helper closed'))); port.postMessage({ id: 1, op, ...args });
+}), [op, args]);
+const pick = (list, path, what) => { const hit = list.find(r => { try { return realpathSync(r.path) === path; } catch { return false; } }); if (!hit) throw Error(`${what} ${path} is not discovered by the helper: ${list.map(r => r.label).join(', ')}`); return hit.path; };
 
 const editorOf = page => page.getByRole('textbox', { name: /^Source Editor/ });
 const docOf = page => editorOf(page).evaluate(node => node.cmView.view.state.doc.toString());
@@ -85,14 +77,21 @@ Constraints: $t > 2, \quad t < 1$. Function: $x^3 - 3x$. Ratio: $\frac{\sin(x)}{
 
 let context; const errors = [];
 try {
-  context = await chromium.launchPersistentContext(join(work, 'profile'), { channel: 'chromium', headless: true, executablePath: process.env.EXTENSION_CHROME_PATH, ignoreDefaultArgs: ['--disable-extensions'],
+  context = await chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true, executablePath: process.env.EXTENSION_CHROME_PATH, ignoreDefaultArgs: ['--disable-extensions'],
+    env: { ...process.env, LATEX_LOCAL_RESEARCH_SETTINGS: join(work, 'research.json') },
     viewport: { width: 1400, height: 900 }, args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension] });
   context.setDefaultTimeout(30000);
-  await context.exposeBinding('__researchRun', (_, job, tool, request) => runOnHost(job, tool, request));
-  await context.exposeBinding('__researchCancel', (_, job) => { const child = jobs.get(job); if (child) child.stdin.write('{"op":"cancel"}\n'); });
-  await context.addInitScript(() => { globalThis.overleafResearchRun = ({ tool, request }, { signal }) => { const job = crypto.randomUUID(); signal.addEventListener('abort', () => globalThis.__researchCancel(job), { once: true }); return globalThis.__researchRun(job, tool, request); }; });
+  // spy around the product transport: records each run and whether it is still in flight; it never answers for the host
+  await context.exposeBinding('__researchCall', (_, tool, op) => { calls.push({ tool, op }); inflight++; });
+  await context.exposeBinding('__researchDone', () => { inflight--; });
+  await context.addInitScript(() => { let real; const spy = (job, options) => { globalThis.__researchCall(job?.tool, job?.request?.op); return Promise.resolve().then(() => real(job, options)).finally(() => globalThis.__researchDone()); };
+    Object.defineProperty(globalThis, 'overleafResearchRun', { configurable: true, get: () => real && spy, set: fn => { real = fn; } }); });
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message.slice(0, 200))); if (process.env.RESEARCH_DEBUG) page.on('console', m => console.log('[console]', m.text().slice(0, 300)));
   await page.goto(`chrome-extension://${id}/extension/index.html`);
+  // device-local choices through the helper's ops (what Settings › This computer sends); consent is asked by the real dialog later
+  const status = await helperCall(page, 'status');
+  await helperCall(page, 'select', { kind: 'python', path: pick(status.python, python, 'Python') }); await helperCall(page, 'select', { kind: 'r', path: pick(status.r, rscript, 'R') });
+  for (const name of ['math-check', 'python-analysis', 'r-analysis']) await helperCall(page, 'feature', { name, on: true });
   await page.getByRole('link', { name: 'Work offline', exact: true }).click();
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic research project');
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
@@ -111,6 +110,8 @@ try {
   let point = await select(page, String.raw`\sqrt{y^2} = y`);
   await page.mouse.click(point.x, point.y, { button: 'right' });
   await page.getByRole('menuitem', { name: /Check equation/ }).click();
+  await page.getByRole('dialog', { name: 'Allow this project to run code' }).getByRole('button', { name: 'Allow on this computer' }).click();   // first run asks consent once
+  note('first run asks per-project consent; the probe did not');
   timings.sqrt = await settle(page, 'sqrt check');
   assert.equal(await state(page), 'Issue found'); let text = await body(page);
   assert.match(text, /Counterexample at y = -[\d./]+/); assert.match(text, /line 7:/); assert.match(text, /Read as:\n?\s*\\sqrt\{y\^\{2\}\} = y|sqrt/);
@@ -155,7 +156,7 @@ try {
   // ---- Stop during a run, then Rerun
   await select(page, '(a+b)^2 = a^2 + b^2'); await page.keyboard.press('Control+Alt+KeyM');
   await panel(page).getByRole('button', { name: 'Stop', exact: true }).click();
-  assert.equal(await state(page), 'Stopped'); await until(() => jobs.size === 0, 'host process ended after Stop');
+  assert.equal(await state(page), 'Stopped'); await until(() => inflight === 0, 'host process ended after Stop');
   await panel(page).getByRole('button', { name: 'Rerun', exact: true }).click(); await settle(page, 'rerun');
   assert.equal(await state(page), 'Issue found'); note('Stop cancels the host run; Rerun repeats it');
 
@@ -220,7 +221,7 @@ try {
   const mainBefore = (await files(page))['main.tex'], runsBefore = calls.length, setData = async values => { await tree('wages.csv').click(); await until(async () => (await docOf(page)).startsWith('educ,wage'), 'data file open');
     await editorOf(page).evaluate((node, text) => { const view = node.cmView.view; view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); }, csv(educ, values)); };
   await setData(changed.map((v, i) => i === 1 ? v + 1 : v));
-  await until(() => calls.slice(runsBefore).filter(c => c.tool === 'python').length >= 2 && jobs.size === 0, 'trusted refresh ran wages and fig', 60000);
+  await until(() => calls.slice(runsBefore).filter(c => c.tool === 'python').length >= 2 && inflight === 0, 'trusted refresh ran wages and fig', 60000);
   assert.deepEqual(calls.slice(runsBefore).map(c => c.op), ['ols', 'figure'], 'dependants recomputed once each, in plan order');
   assert.equal((await files(page))['main.tex'], mainBefore, 'a refresh stages results; it never inserts');
   await page.evaluate(() => { globalThis.overleafResearchTrusted = () => false; });
@@ -238,13 +239,14 @@ try {
   note('reload starts nothing; statuses come back from the stored keys (wages, scores up to date; fig stale)');
 
   // ---- missing SymPy in the selected Python: readiness says so, check is unavailable (nothing installed)
-  interpreters.math = process.env.ANALYSIS_PYTHON_NO_SYMPY || interpreters.python;
+  const pythons = (await helperCall(page, 'status')).python, noSympy = process.env.RESEARCH_PYTHON_NO_SYMPY ? pick(pythons, realpathSync(process.env.RESEARCH_PYTHON_NO_SYMPY), 'Python') : pythons.find(p => p.support['math-check'])?.path;
+  if (!noSympy) throw Error('No discovered Python without SymPy; set RESEARCH_PYTHON_NO_SYMPY');
+  await helperCall(page, 'select', { kind: 'python', path: noSympy });
   const unavailable = await page.evaluate(async () => { const box = document.createElement('div'); document.body.append(box); const row = await (await import('/extension/research-ui.mjs')).renderReadiness(box, globalThis.overleafResearchRun); const text = row.textContent; box.remove(); return text; });
-  assert.match(unavailable, /Math check: unavailable — SymPy is not installed in the selected Python environment/); note('environment without SymPy reports unavailable', unavailable);
+  assert.match(unavailable, /^Math check: unavailable — sympy is not installed in the selected Python environment$/); note('environment without SymPy reports unavailable', unavailable);
   assert.deepEqual(errors, [], 'no page errors');
   console.log(JSON.stringify({ researchBrowser: { passed: results.length, timingsMs: timings, hostRuns: calls.length } }));
 } catch (error) { console.log('page errors:', errors); throw error; } finally {
-  for (const child of jobs.values()) child.kill('SIGKILL');
   await context?.close().catch(() => {});
   rmSync(work, { recursive: true, force: true });
 }

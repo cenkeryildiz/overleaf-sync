@@ -7,7 +7,7 @@
 //! candidate (absolute path, cleared environment, no shell, 3 s limit). Reads Jupyter kernelspecs as data
 //! (kernel.json is parsed, never executed) and accepts only two exact launch shapes: the ipykernel Python
 //! launcher and IRkernel. Judges readiness from package directories and dist-info/DESCRIPTION files on disk,
-//! with a plain "unavailable because X is not installed" reason. Stores a per-user, per-device selection
+//! with a plain "X is not installed in the selected … environment" reason. Stores a per-user, per-device selection
 //! (interpreter, R, kernel, four feature toggles that default OFF, per-project consent) in one atomic 0600
 //! file, and re-verifies the recorded identity (canonical path, size, mtime) every time something would run.
 //!
@@ -283,7 +283,8 @@ pub fn inspect(roots: &Roots, listed: &Path, kind: Kind, probe: bool) -> Result<
 // ------------------------------------------------------------------ readiness
 fn missing(rt: &Runtime, names: &[&str]) -> Result<(), String> {
     let gone: Vec<&str> = names.iter().copied().filter(|n| !rt.packages.contains_key(*n)).collect();
-    if gone.is_empty() { Ok(()) } else { Err(format!("unavailable because {} {} not installed in {}", gone.join(", "), if gone.len() == 1 { "is" } else { "are" }, rt.prefixes.first().map(|p| p.display().to_string()).unwrap_or_default())) }
+    // callers prefix "Unavailable:"; no absolute path here, it reaches the page (Settings shows the selection's ~ label)
+    if gone.is_empty() { Ok(()) } else { Err(format!("{} {} not installed in the selected {} environment", gone.join(", "), if gone.len() == 1 { "is" } else { "are" }, if rt.kind == Kind::R { "R" } else { "Python" })) }
 }
 /// What each integration needs from this runtime (the kernel itself is judged separately).
 pub fn runtime_support(rt: &Runtime) -> Vec<(Feature, Result<(), String>)> {
@@ -588,7 +589,7 @@ mod tests {
         assert_eq!(find("envs/full").packages.get("numpy").map(String::as_str), Some("1.2.3"));
         let bare = runtime_support(find("envs/bare"));
         let e = bare.iter().find(|(f, _)| *f == Feature::MathCheck).unwrap().1.clone().unwrap_err();
-        assert!(e.starts_with("unavailable because sympy is not installed in "), "{e}");
+        assert_eq!(e, "sympy is not installed in the selected Python environment");
         assert!(bare.iter().find(|(f, _)| *f == Feature::PythonAnalysis).unwrap().1.clone().unwrap_err().contains("pandas, statsmodels are not installed"));
         assert_eq!(optional_notes(find("envs/bare")).len(), 2); assert!(optional_notes(find("envs/full")).is_empty());
         let none = discover(&roots(&t), false); assert!(none.runtimes.is_empty());
@@ -711,7 +712,7 @@ mod tests {
     #[test] fn feature_cannot_be_enabled_when_packages_are_missing() {
         let t = Tmp::new(); let c = conda(&t, &[("lean", &["numpy"])]); let py = c.join("envs/lean/bin/python"); let mut r = roots(&t); r.conda = vec![c];
         let d = discover(&r, false); let mut rec = Record::default(); select_runtime(&mut rec, &d, Kind::Python, &py).unwrap();
-        let e = set_feature(&mut rec, &r, Feature::MathCheck, true).unwrap_err(); assert!(e.starts_with("unavailable because sympy is not installed"), "{e}"); assert!(rec.enabled.is_empty());
+        let e = set_feature(&mut rec, &r, Feature::MathCheck, true).unwrap_err(); assert!(e.starts_with("sympy is not installed in the selected Python environment"), "{e}"); assert!(rec.enabled.is_empty());
         assert!(set_feature(&mut rec, &r, Feature::Jupyter, true).is_err());
     }
 

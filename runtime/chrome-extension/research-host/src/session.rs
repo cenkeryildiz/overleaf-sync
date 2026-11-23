@@ -95,7 +95,7 @@ fn start(rec: &d::Record, roots: &d::Roots, project: &str, id: &Value) -> Result
         .env("PATH", "/usr/bin:/bin").env("LANG", "en_US.UTF-8").env("LC_ALL", "en_US.UTF-8").env("HOME", &job.job).env("TMPDIR", job.job.join("tmp"))
         .env("MPLCONFIGDIR", job.job.join("mpl")).env("IPYTHONDIR", job.job.join("ipython")).env("JUPYTER_CONFIG_DIR", job.job.join("jupyter"))
         .env("JUPYTER_DATA_DIR", job.job.join("jupyter")).env("JUPYTER_RUNTIME_DIR", job.job.join("tmp")).env("PYTHONNOUSERSITE", "1").env("LATEX_LOCAL_JOB", &marker)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).process_group(0);
+        .stdin(Stdio::piped()).stdout(Stdio::piped());
     if std::env::var_os("LATEX_RESEARCH_DEBUG").is_some() { command.stderr(Stdio::inherit()); } else { command.stderr(stderr); } // kernel.py tracebacks, for diagnosis only
     unsafe { command.pre_exec(move || sandbox::limits(3600, nproc, 0)); }
     let mut child = command.spawn().map_err(|e| format!("The kernel did not start (OS error {})", e.raw_os_error().unwrap_or(0)))?;

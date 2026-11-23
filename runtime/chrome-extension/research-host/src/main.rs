@@ -102,7 +102,7 @@ fn run(request: &Value, cancel: &Arc<AtomicBool>, embedded: Option<&[u8]>, on_st
     command.arg("-f").arg(&profile).arg(&interpreter).args(args).arg(job.job.join(script_name)).current_dir(&job.job).env_clear()
         .env("PATH", "/usr/bin:/bin").env("LANG", "en_US.UTF-8").env("LC_ALL", "en_US.UTF-8").env("HOME", &job.job).env("TMPDIR", job.job.join("tmp"))
         .env("MPLCONFIGDIR", job.job.join("mpl")).env("PYTHONDONTWRITEBYTECODE", "1").env("PYTHONNOUSERSITE", "1").env("LATEX_LOCAL_JOB", &id)
-        .stdin(File::open(job.ctl.join("stdin")).map_err(|_| "Job input unavailable")?).stdout(stdout).stderr(stderr).process_group(0);
+        .stdin(File::open(job.ctl.join("stdin")).map_err(|_| "Job input unavailable")?).stdout(stdout).stderr(stderr);
     unsafe { command.pre_exec(move || sandbox::limits(timeout + 5, nproc, (timeout + 5) as u32)); }
     let started = Instant::now();
     let mut child = command.spawn().map_err(|e| format!("Interpreter did not start (OS error {})", e.raw_os_error().unwrap_or(0)))?;
