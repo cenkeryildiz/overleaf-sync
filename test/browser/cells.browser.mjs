@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -19,7 +20,7 @@ const work = mkdtempSync(join(tmpdir(), 'latex-cells-check-')), extension = join
 cpSync(base, extension, { recursive: true });   // the base package is the parent build: overlay this branch's editor modules
 cpSync(join(repository, 'runtime/browser-recovery/native-workspace.mjs'), join(extension, 'recovery/native-workspace.mjs'));
 for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^(lan-.*|research-ui|cells-ui|this-computer)\.mjs$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
-mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
+mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 const manifest = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8'));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 mkdirSync(join(profile, 'NativeMessagingHosts'), { recursive: true });
@@ -77,7 +78,7 @@ HTML("<script>window.pwned = 1</script><b>bold</b>")
 import matplotlib.pyplot as plt
 plt.plot([0, 1], [0, 1]); plt.show()
 `;
-const slow = '# %% slow\nimport time\ntime.sleep(40)\nprint("finished")\n', model = '# %% r\nv <- c(1, 2, 3)\nmean(v)\n';
+const slow = '# %% slow\nimport time\ntime.sleep(40)\nprint("finished")\n# %% short\nimport time\ntime.sleep(3)\nprint("done")\n', model = '# %% r\nv <- c(1, 2, 3)\nmean(v)\n';
 const manuscript = '\\documentclass{article}\n\\usepackage{graphicx}\n\\begin{document}\nResults here.\n\\end{document}\n';
 
 let context;
@@ -147,10 +148,60 @@ try {
   out = await until(async () => { const t = await entries(page).last().innerText(); return !/· running/.test(t) && t; }, 'interrupted', 15000); timings.interruptMs = Date.now() - stopAt;
   assert.match(out, /KeyboardInterrupt/); assert.doesNotMatch(out, /^finished$/m); note('Stop interrupts a running cell', `${timings.interruptMs} ms`);
 
+  // ---- the source changes while its cell runs: the result shows what ran, and Insert refuses it as stale
+  { const before = await entries(page).count(); await place(page, 'time.sleep(3)'); await page.keyboard.press('Control+Enter');
+    await until(async () => (await entries(page).count()) > before && /· running/.test(await entries(page).last().innerText()), 'short cell running');
+    await replace(page, 'print("done")', 'print("edited")');
+    const ran = await until(async () => { const t = await entries(page).last().innerText(); return !/· running/.test(t) && t; }, 'short cell finished', 20000);
+    assert.match(ran, /^done$/m, 'the run used the code as it was sent');
+    await until(async () => (await files(page))['slow.py']?.includes('print("edited")'), 'edit saved during the run');
+    await open(page, 'main.tex', '\\documentclass'); const kept = await docOf(page); await place(page, 'Results here.');
+    await entries(page).last().getByRole('button', { name: 'Insert' }).click();
+    await until(async () => /stale: the code changed after this run/.test(await entries(page).last().innerText()), 'stale after a mid-run edit'); assert.equal(await docOf(page), kept);
+    note('editing a cell while it runs: the output is what ran, the edit is saved, and Insert refuses the stale result'); await open(page, 'model.R', '# %% r'); }
+
   // ---- language mismatch, then the R kernel
   await open(page, 'model.R', '# %% r'); out = await runAt(page, 'mean(v)', 'mismatch'); assert.match(out, /runs Python, but this is an R file/); note('an .R file with a Python kernel is refused with the reason');
   close = await thisComputer(page); await pickKernel(page, 'ir'); await runCells(page, true); await close();
   out = await runAt(page, 'mean(v)', 'r cell'); assert.match(out, /model\.R · cell 1 · ok/); assert.match(out, /\[1\] 2/); note('R cell runs in the ir kernel', `${timings['r cell']} ms incl. kernel switch`);
+
+  // ---- notebooks: explicit export and convert from the right-click menu; never overwrites, never runs, outputs not imported
+  const menu = async (file, start, label) => { await open(page, file, start); await page.locator('.cm-content').click({ button: 'right' }); await page.getByRole('menuitem', { name: label, exact: true }).click(); };
+  const opsAtNotebook = ops.length;
+  await menu('analysis.py', '# %% setup', 'Export as notebook');
+  const exported = await until(async () => (await files(page))['analysis.ipynb'], 'analysis.ipynb saved');
+  const nb = JSON.parse(exported); assert.equal(nb.nbformat, 4); assert.equal(nb.metadata.kernelspec.name, 'python3'); assert.equal(nb.cells.length, 5); assert.ok(nb.cells.every(c => c.cell_type !== 'code' || c.outputs.length === 0));
+  assert.match(await entries(page).last().innerText(), /Exported to analysis\.ipynb, without outputs/); note('right-click › Export as notebook writes analysis.ipynb beside the script, without outputs');
+  await menu('analysis.ipynb', '{', 'Convert to script');
+  await until(async () => /analysis\.py already exists\. Rename or delete it first; nothing was overwritten/.test(await entries(page).last().innerText()), 'overwrite refused');
+  assert.equal((await files(page))['analysis.py'].includes('print(x * 3)'), true, 'analysis.py unchanged'); note('Convert to script refuses to overwrite an existing file');
+  const foreign = JSON.stringify({ nbformat: 4, nbformat_minor: 5, metadata: { kernelspec: { name: 'ir', language: 'R' } }, cells: [{ cell_type: 'markdown', metadata: {}, source: ['# Imported'] },
+    { cell_type: 'code', execution_count: 3, metadata: {}, source: ['w <- 2\n', 'w * 21'], outputs: [{ output_type: 'display_data', data: { 'text/html': '<script>window.pwned = 2</script>' }, metadata: {} }] }] });
+  assert.match(await upload(page, 'imported.ipynb', foreign), /^200 /);
+  await menu('imported.ipynb', '{"nbformat"', 'Convert to script');
+  const script = await until(async () => (await files(page))['imported.R'], 'imported.R saved');
+  assert.equal(script, '# %% [markdown]\n# # Imported\n# %%\nw <- 2\nw * 21\n'); assert.match(await entries(page).last().innerText(), /1 saved output was not carried over/);
+  assert.equal(await page.evaluate(() => globalThis.pwned), undefined);
+  assert.ok(!ops.slice(opsAtNotebook).some(op => ['start', 'run', 'script'].includes(op)), 'conversion runs nothing'); note('an R notebook converts to imported.R; its output is dropped and nothing ran');
+
+  // ---- export and reopen: the ZIP holds every file exactly; importing it runs nothing
+  const saved = await files(page), opsAtExport = ops.length;
+  const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
+  const zip = join(work, 'export.zip'); await (await download).saveAs(zip);
+  const listed = execFileSync('/usr/bin/unzip', ['-Z1', zip], { encoding: 'utf8' }).trim().split('\n').filter(p => !p.endsWith('/')).sort();
+  assert.deepEqual(listed, Object.keys(saved).sort(), 'the ZIP holds exactly the project files');
+  for (const [path, value] of Object.entries(saved)) if (!value.startsWith('hash:')) assert.equal(execFileSync('/usr/bin/unzip', ['-p', zip, path], { encoding: 'utf8' }), value, path);
+  const png = execFileSync('/usr/bin/unzip', ['-p', zip, graphic]); assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'figure bytes are a PNG');
+  assert.equal(createHash('sha1').update(png).digest('hex'), saved[graphic].slice(5), 'figure bytes match the project file (history hash = sha1)');
+  note('Download project (.zip) holds every script, notebook, data and generated file exactly', `${listed.length} files`);
+  await page.goto(`chrome-extension://${id}/recovery/project-workspace.html`);   // the saved-projects page, where ZIPs are imported
+  await page.getByLabel('Open source files or a ZIP project', { exact: true }).setInputFiles(zip);
+  await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Reopened cells project');
+  await page.getByRole('button', { name: 'Import local project', exact: true }).click(); await editorOf(page).waitFor({ timeout: 60000 });
+  await until(async () => { const now = await files(page); return Object.keys(now).length === Object.keys(saved).length && Object.keys(saved).every(k => now[k] === saved[k]); }, 'reopened project matches');
+  { const now = await files(page); for (const k of Object.keys(saved)) assert.equal(now[k], saved[k], 'reopened ' + k); assert.equal(Object.keys(now).length, Object.keys(saved).length); }
+  await page.waitForTimeout(1000); assert.ok(!ops.slice(opsAtExport).some(op => ['start', 'run', 'script'].includes(op)), 'nothing ran on export or import');
+  note('the exported ZIP reopens as a new project with identical files; nothing ran');
 
   // ---- reload starts nothing
   const opsBefore = ops.length; await page.reload(); await editorOf(page).waitFor({ timeout: 60000 }); await page.waitForTimeout(2000);

@@ -363,5 +363,55 @@ class CommandLine(unittest.TestCase):
         self.assertEqual((done.returncode, json.loads(done.stdout)["status"]), (0, "unavailable"))
 
 
+
+class SeveralVariables(unittest.TestCase):
+    """optimize_multi: Hessian classification, and box extrema checked against an independent brute-force grid."""
+    def kinds(self, text, var="x, y"): return [(p["x"], p["kind"]) for p in mc.handle({"op": "optimize", "text": text, "var": var})["critical_points"]]
+
+    def grid(self, fn, lo, hi, n, steps=41):
+        import itertools, numpy as np
+        axis = np.linspace(lo, hi, steps); vals = [fn(*p) for p in itertools.product(axis, repeat=n)]; return min(vals), max(vals)
+
+    def test_hessian_classification(self):
+        self.assertEqual(self.kinds("x^2 + y^2"), [(r"\left( 0, \  0\right)", "local_min")])
+        self.assertEqual(self.kinds("x^2 - y^2")[0][1], "saddle")
+        self.assertEqual(self.kinds("-(x^2) - 2y^2 + 2y")[0][1], "local_max")
+        self.assertEqual(self.kinds("x^4 + y^4")[0][1], "inconclusive")
+        self.assertEqual(sorted(k for _, k in self.kinds("x^3 - 3x + y^2")), ["local_min", "saddle"])
+        r = mc.handle({"op": "optimize", "text": "x^2 + y^2"}| {"var": "x, y"}); self.assertIn("not claimed", r["global"]); self.assertNotIn("extrema", r)
+
+    def test_box_extrema_match_a_brute_force_grid(self):
+        cases = [("xy", lambda x, y: x * y, "x, y", -1, 1), ("(x-1)^2 + (y-1)^2", lambda x, y: (x - 1) ** 2 + (y - 1) ** 2, "x, y", 0, 2),
+                 ("x^3 - 3x + y^2", lambda x, y: x ** 3 - 3 * x + y ** 2, "x, y", -2, 2),
+                 ("x^2 + y^2 + z^2 - 2x", lambda x, y, z: x * x + y * y + z * z - 2 * x, "x, y, z", -1, 2)]
+        for text, fn, var, lo, hi in cases:
+            r = mc.handle({"op": "optimize", "text": text, "var": var, "interval": [str(lo), str(hi)]}); self.assertEqual(r["status"], "computed", (text, r))
+            gmin, gmax = self.grid(fn, lo, hi, var.count(",") + 1)
+            vmin, vmax = float(sp.sympify(r["extrema"]["min"]["value"])), float(sp.sympify(r["extrema"]["max"]["value"]))
+            self.assertLessEqual(vmin, gmin + 1e-12, text); self.assertGreaterEqual(vmax, gmax - 1e-12, text)   # exact extrema bound every grid value
+            self.assertAlmostEqual(vmin, gmin, delta=0.02, msg=text); self.assertAlmostEqual(vmax, gmax, delta=0.02, msg=text)
+            for label in ("min", "max"):
+                for at in r["extrema"][label]["at"]:
+                    pt = [float(sp.sympify(v)) for v in at.replace("\\left(", "").replace("\\right)", "").replace("\\ ", "").split(",")]
+                    self.assertAlmostEqual(fn(*pt), (vmin if label == "min" else vmax), places=12, msg=(text, at))
+        r = mc.handle({"op": "optimize", "text": "xy", "var": "x, y", "interval": ["-1", "1"]})
+        self.assertEqual(sorted(r["extrema"]["max"]["at"]), sorted([r"\left( -1, \  -1\right)", r"\left( 1, \  1\right)"]))
+
+    def test_an_expression_reports_its_variables_for_the_compute_row(self):
+        r = mc.check("x^2 + y^2 - 2y", {"symbols": {"x": ["positive"]}}); self.assertEqual(r["status"], "unsupported"); self.assertEqual(r["assumptions"], {"x": ["positive"], "y": []})
+
+    def test_unsupported_and_inconclusive_states(self):
+        h = lambda **kw: mc.handle({"op": "optimize", "var": "x, y", **kw})
+        self.assertEqual(h(text=r"\sqrt{x} + y")["status"], "inconclusive")
+        self.assertEqual(h(text="(x - y)^2")["status"], "inconclusive"); self.assertIn("not isolated", h(text="(x - y)^2")["reason"])
+        self.assertEqual(h(text="x + a y")["status"], "inconclusive")
+        self.assertEqual(h(text="x^2")["status"], "inconclusive")
+        r = h(text=r"\frac{1}{x^2 + y^2 + 1}"); self.assertEqual(r["critical_points"][0]["kind"], "local_max")
+        self.assertIn("polynomials only", h(text=r"\frac{1}{x^2 + y^2 + 1}", interval=["-1", "1"])["reason"])
+        self.assertEqual(mc.handle({"op": "optimize", "text": "x + y", "var": "x, x"})["status"], "unsupported")
+        self.assertEqual(mc.handle({"op": "optimize", "text": "x + y + z + w", "var": "x, y, z, w"})["status"], "unsupported")
+        self.assertEqual(h(text="x y", interval=["1", "0"])["status"], "unsupported")
+
+
 if __name__ == "__main__":
     unittest.main()

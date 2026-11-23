@@ -6,6 +6,7 @@
 // they pass outputs.mjs and are shown as text, <img> blobs and plain tables, never as HTML.
 import { renderOutput, latexText, sha256 } from './research/outputs.mjs';
 import { settingRow } from './this-computer.mjs';
+import { toNotebook, fromNotebook, convertedPath } from './research/notebook.mjs';
 
 export const HOST = 'com.cenker.latex_research';
 export const HINT = 'Install the helper once on this computer: in the folder you loaded this extension from, double-click "Install Sharing Helper", then quit and reopen the browser.';
@@ -301,13 +302,35 @@ export async function researchRun(context, { tool, request } = {}, { signal } = 
 /** Sharing started: consent is asked again before code edited by others can run, and the kernel stops. */
 export async function revoke(project) { try { await host().call('consent', { project, granted: false }); } catch {} kernel = null; }
 
-/** Right-click menu with the one command, shown only in .py/.R files; Escape or any outside click closes it. */
+/** Notebook <-> script, as VS Code's "Export as Jupyter Notebook" / "Export to Python script": an explicit command that writes a
+ *  new sibling file through the guarded upload route. Never overwrites, never runs anything, never imports outputs. */
+export async function convertNotebook(context) {
+  const panel = resultsPanel(controls(context)), file = context.file(), editor = context.view();
+  try {
+    if (!file || !editor) throw Error('Open a .py, .R or .ipynb file first');
+    const source = editor.state.doc.toString(), notebook = /\.ipynb$/i.test(file.path);
+    let path, content, message;
+    if (notebook) { const r = fromNotebook(source); path = convertedPath(file.path, r.language); content = r.text;
+      message = `Converted to ${path}.` + (r.dropped ? ` ${r.dropped} saved output${r.dropped === 1 ? ' was' : 's were'} not carried over: outputs are never imported; run the cells to recreate them.` : ''); }
+    else { const language = languageOf(file.path); path = convertedPath(file.path, 'notebook'); content = toNotebook(source, language); message = `Exported to ${path}, without outputs.`; }
+    if (context.exists(path)) throw Error(`${path} already exists. Rename or delete it first; nothing was overwritten.`);
+    const name = path.split('/').pop(), form = new FormData(); form.append('qqfile', new File([content], name, { type: notebook ? 'text/plain' : 'application/x-ipynb+json' }));
+    form.append('relativePath', path); form.append('name', name);
+    const response = await fetch(`/project/${context.clientProject()}/upload`, { method: 'POST', body: form }), body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.success) throw Error('The file was not saved: ' + (body.error ?? response.status));
+    panel.show({ title: notebook ? 'Convert to script' : 'Export as notebook', status: 'saved', message });
+  } catch (error) { panel.show({ title: 'Notebook', status: 'failed', message: error.message }); }
+}
+
+/** Right-click menu in .py/.R files (Run cell, Export as notebook) and .ipynb files (Convert to script); Escape or any outside click closes it. */
 export function cellMenu(context, event) {
   document.querySelector('.olx-cell-menu')?.remove();
   ensureStyle();
-  const selection = context.view()?.state.selection.main, menu = node('div', { className: 'olx-cell-menu', role: 'menu' });
-  const item = node('button', { type: 'button', role: 'menuitem', textContent: selection && !selection.empty ? 'Run selection' : 'Run cell', onclick: () => { close(); runCell(context); } });
-  item.setAttribute('aria-keyshortcuts', 'Meta+Enter Control+Enter'); menu.append(item);
+  const selection = context.view()?.state.selection.main, menu = node('div', { className: 'olx-cell-menu', role: 'menu' }), notebook = /\.ipynb$/i.test(context.file()?.path ?? '');
+  const entry = (label, run) => node('button', { type: 'button', role: 'menuitem', textContent: label, onclick: () => { close(); run(); } });
+  const item = notebook ? entry('Convert to script', () => convertNotebook(context)) : entry(selection && !selection.empty ? 'Run selection' : 'Run cell', () => runCell(context));
+  if (!notebook) item.setAttribute('aria-keyshortcuts', 'Meta+Enter Control+Enter'); menu.append(item);
+  if (!notebook) menu.append(entry('Export as notebook', () => convertNotebook(context)));
   menu.style.left = Math.min(event.clientX, innerWidth - 180) + 'px'; menu.style.top = Math.min(event.clientY, innerHeight - 60) + 'px';
   const close = () => { menu.remove(); removeEventListener('pointerdown', outside, true); removeEventListener('keydown', escape, true); };
   const outside = e => { if (!menu.contains(e.target)) close(); }, escape = e => { if (e.key === 'Escape') { e.preventDefault(); close(); context.view()?.focus(); } };

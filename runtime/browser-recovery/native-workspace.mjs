@@ -255,9 +255,10 @@ try {
     const research = () => import('/extension/cells-ui.mjs');
     const current = () => { const file = active && [...files.values()].find(item => item.doc === active.container.doc_id); return file && { path: file.path }; };
     const context = { project: () => project.id, clientProject: () => clientProject, shared: () => !!lan || !!joined, file: current, view: () => document.querySelector('.cm-content')?.cmView?.view,
-      text: path => { const file = files.get(path); return file?.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined; } };
-    const inCode = event => event.target instanceof Element && !!event.target.closest('.cm-editor') && /\.(?:py|r)$/i.test(current()?.path ?? '');
-    addEventListener('contextmenu', event => { if (inCode(event)) { event.preventDefault(); research().then(m => m.cellMenu(context, event)); } }, true);
+      text: path => { const file = files.get(path); return file?.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined; }, exists: path => files.has(path) };
+    const inFile = pattern => event => event.target instanceof Element && !!event.target.closest('.cm-editor') && pattern.test(current()?.path ?? '');
+    const inCode = inFile(/\.(?:py|r)$/i), inCells = inFile(/\.(?:py|r|ipynb)$/i);   // .ipynb: right-click converts; it never runs
+    addEventListener('contextmenu', event => { if (inCells(event)) { event.preventDefault(); research().then(m => m.cellMenu(context, event)); } }, true);
     addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && inCode(event)) { event.preventDefault(); event.stopPropagation(); research().then(m => m.runCell(context)); } }, true);
     addEventListener('click', () => requestAnimationFrame(() => { if (document.querySelector('.ide-settings-tab-nav') && !document.getElementById('ide-settings-tabs-tab-this-computer')) import('/extension/this-computer.mjs').then(m => m.attach(context)); }), true);
     lanEvents.onSharing = () => research().then(m => m.revoke(project.id));

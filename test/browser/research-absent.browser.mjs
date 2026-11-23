@@ -20,7 +20,7 @@ const work = mkdtempSync(join(tmpdir(), 'latex-absent-check-')), extension = joi
 cpSync(base, extension, { recursive: true });
 cpSync(join(repository, 'runtime/browser-recovery/native-workspace.mjs'), join(extension, 'recovery/native-workspace.mjs'));
 for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^(lan-.*|research-ui|cells-ui|this-computer)\.mjs$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
-mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
+mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 const manifest = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8'));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 const results = [], measures = {}, errors = [], note = (name, detail = '') => { results.push(name); console.log('ok -', name, detail); };

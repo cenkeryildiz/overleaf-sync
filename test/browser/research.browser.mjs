@@ -21,7 +21,7 @@ const work = mkdtempSync(join(tmpdir(), 'latex-research-check-')), extension = j
 cpSync(base, extension, { recursive: true });   // the base package is this branch's parent build: overlay only what this lane changes
 cpSync(join(repository, 'runtime/browser-recovery/native-workspace.mjs'), join(extension, 'recovery/native-workspace.mjs'));
 for (const name of ['research-ui.mjs', 'cells-ui.mjs', 'this-computer.mjs']) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));   // research-ui imports the shared panel
-mkdirSync(join(extension, 'extension/research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
+mkdirSync(join(extension, 'extension/research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 const manifest = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8'));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 const results = [], timings = {}, note = (name, detail = '') => { results.push(name); console.log('ok -', name, detail); };
@@ -68,7 +68,7 @@ const manuscript = String.raw`\documentclass{article}
 % assume: y real
 Cancellation at zero: $\frac{u^2}{u} = u$. Cancellation: $\frac{x^2 - 1}{x - 1} = x + 1$.
 Root: $\sqrt{y^2} = y$. Wrong: $(a+b)^2 = a^2 + b^2$. Sum: $\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$.
-Constraints: $t > 2, \quad t < 1$. Function: $x^3 - 3x$. Ratio: $\frac{\sin(x)}{x}$. Macro: $\foo{x} = 1$.
+Constraints: $t > 2, \quad t < 1$. Function: $x^3 - 3x$. Surface: $x^2 + y^2 - 2y$. Ratio: $\frac{\sin(x)}{x}$. Macro: $\foo{x} = 1$.
 % analysis wages python ols data=data/wages.csv y=wage x=educ caption="Wages and schooling"
 % analysis scores r ttest data=data/scores.csv x=score mu=50
 % analysis fig python figure data=data/wages.csv y=wage x=educ caption="Fit"
@@ -149,6 +149,11 @@ try {
   assert.match(await compute('solve'), /Result: \\left\\\{\\sqrt\{3\}\\right\\\}/);   // x is declared positive (% assume:), so 0 and -sqrt(3) are not solutions
   const opt = await compute('optimize', { 'Interval start': '-2', 'Interval end': '2' });
   assert.match(opt, /Minimum -2 at (-2, 1|1, -2); maximum 2 at (-1, 2|2, -1)/); note('derivative, integral, solve and optimization on [-2, 2]');
+  await select(page, 'x^2 + y^2 - 2y'); await page.keyboard.press('Control+Alt+KeyM'); await settle(page, 'surface');
+  await panel(page).getByLabel('Computation').selectOption('optimize'); await panel(page).getByLabel('Variable').selectOption('x, y');
+  const surface = await compute('optimize', { 'Interval start': '-1', 'Interval end': '1' });
+  assert.match(surface, /Critical points: \\left\( 0, \\ ?\s*1\\right\) \(local min, value -1\)/); assert.match(surface, /Minimum -1 at \\left\( 0, \\ ?\s*1\\right\); maximum 4 at /);
+  assert.match(surface, /\\left\( -1, \\ ?\s*-1\\right\)/); assert.match(surface, /on the box \[-1, 1\]\^2/); note('optimization over x and y on the box [-1, 1]^2');
   await select(page, String.raw`\frac{\sin(x)}{x}`); await page.keyboard.press('Control+Alt+KeyM'); await settle(page, 'ratio');
   assert.match(await compute('limit', { 'Limit point': '0' }), /Result: 1/); note('limit sin(x)/x at 0');
   assert.equal(await docOf(page), before, 'math checks never change the source'); note('source unchanged by every check and computation');

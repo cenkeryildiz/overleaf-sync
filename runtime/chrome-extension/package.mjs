@@ -36,7 +36,7 @@ for (const name of readdirSync(resolve(repository, 'runtime/browser-recovery')))
 }
 const extension = join(destination, 'extension'); mkdirSync(extension);
 for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'research-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs', 'cells-ui.mjs']) cpSync(join(source, name), join(extension, name));
-mkdirSync(join(extension, 'research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs']) cpSync(resolve(repository, 'runtime/research', name), join(extension, 'research', name));
+mkdirSync(join(extension, 'research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(resolve(repository, 'runtime/research', name), join(extension, 'research', name));
 const templatePath = join(extension, 'native-template.json'), template = JSON.parse(readFileSync(templatePath, 'utf8'));
 const languages = template.meta.find(item => item.name === 'ol-languages');
 if (languages) languages.content = JSON.stringify(JSON.parse(languages.content).filter(item => ['en', 'en_US', 'en_GB'].includes(item.code)));

@@ -125,8 +125,10 @@ export function registerResearch({ run, trusted = () => false, readiness = null 
   function computeRow() {
     const c = current.compute, vars = Object.keys(current.result?.assumptions ?? {});
     const name = el('select', { 'aria-label': 'Computation', onchange: e => { c.name = e.target.value; renderMath(); } }, ...Object.entries(COMPUTE).map(([k, v]) => el('option', { value: k, textContent: v, selected: k === c.name })));
-    const variable = el('select', { 'aria-label': 'Variable', onchange: e => { c.var = e.target.value; } }, ...(vars.length ? vars : ['x']).map(v => el('option', { value: v, textContent: v, selected: v === c.var })));
-    c.var = vars.includes(c.var) ? c.var : vars[0] ?? 'x';
+    const all = c.name === 'optimize' && vars.length >= 2 && vars.length <= 3 ? vars.join(', ') : null;   // optimization over every variable at once
+    const options = [...(vars.length ? vars : ['x']), ...(all ? [all] : [])];
+    const variable = el('select', { 'aria-label': 'Variable', onchange: e => { c.var = e.target.value; renderMath(); } }, ...options.map(v => el('option', { value: v, textContent: v === all ? `${v} (all)` : v, selected: v === c.var })));
+    c.var = options.includes(c.var) ? c.var : vars[0] ?? 'x';
     const point = el('input', { 'aria-label': 'Limit point', placeholder: 'point, e.g. 0 or \\infty', value: c.point ?? '', size: 12, oninput: e => { c.point = e.target.value; } });
     const lo = el('input', { 'aria-label': 'Interval start', placeholder: 'from', value: c.interval?.[0] ?? '', size: 5, oninput: e => { c.interval = [e.target.value, c.interval?.[1] ?? '']; } });
     const hi = el('input', { 'aria-label': 'Interval end', placeholder: 'to', value: c.interval?.[1] ?? '', size: 5, oninput: e => { c.interval = [c.interval?.[0] ?? '', e.target.value]; } });
@@ -135,7 +137,7 @@ export function registerResearch({ run, trusted = () => false, readiness = null 
       const request = c.name === 'optimize' ? { op: 'optimize', text, var: c.var, interval: c.interval?.[0] && c.interval?.[1] ? c.interval : null } : { op: 'compute', name: c.name, text, var: c.var, context, point: c.point || '0' };
       c.request = request; runMath(request);
     } });
-    const out = current.computed, row = el('div', {}, el('div', { className: 'rr-row' }, name, ' with respect to ', variable, c.name === 'limit' ? point : null, c.name === 'optimize' ? el('span', {}, 'on [', lo, ', ', hi, '] (optional)') : null, go));
+    const out = current.computed, row = el('div', {}, el('div', { className: 'rr-row' }, name, ' with respect to ', variable, c.name === 'limit' ? point : null, c.name === 'optimize' ? el('span', {}, c.var.includes(',') ? 'each on [' : 'on [', lo, ', ', hi, '] (optional)') : null, go));
     if (out) {
       const lines = out.status === 'computed' ? [out.result !== undefined ? `Result: ${out.result}` : null, out.critical_points ? `Critical points: ${out.critical_points.map(p => `${p.x} (${p.kind.replaceAll('_', ' ')}, value ${p.value})`).join('; ') || 'none'}` : null,
         out.extrema ? `Minimum ${out.extrema.min.value} at ${out.extrema.min.at.join(', ')}; maximum ${out.extrema.max.value} at ${out.extrema.max.at.join(', ')}` : null, out.global ? `Global extrema: ${out.global}` : null, out.domain ? `Domain: ${out.domain}` : null,

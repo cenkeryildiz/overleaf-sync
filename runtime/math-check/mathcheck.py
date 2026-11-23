@@ -392,7 +392,8 @@ def check(text, context=None, base=0):
     context = context or {}
     try: parts, rels, parser = parse(text, context)
     except Unsupported as error: return {"status": "unsupported", "reason": error.reason, "range": [base + error.span[0], base + error.span[1]]}
-    if not rels: return {"status": "unsupported", "reason": "No equation found: expected a = b", "range": [base, base + len(text)]}
+    if not rels: return {"status": "unsupported", "reason": "No equation found: expected a = b", "range": [base, base + len(text)],
+                         "assumptions": {n: sorted(parser.decl.get(n, [])) for n in parser.used}}   # the compute row offers these variables
     if any(kind != "eq" for kind, _, _ in rels):
         s, e = next((s, e) for kind, s, e in rels if kind != "eq")
         return {"status": "unsupported", "reason": "Only equalities are compared here; use constraints for inequalities", "range": [base + s, base + e]}
@@ -593,6 +594,73 @@ def optimize(text, var="x", interval=None):
     except (NotImplementedError, ValueError, TypeError): return {"status": "inconclusive", "reason": "This optimization is outside the supported cases"}
 
 
+def optimize_multi(text, names, interval=None):
+    """Two or three real variables. Exact critical points with Hessian (Sylvester) classification for polynomial or rational f.
+    Global extrema are claimed only for a polynomial on a closed box (the interval for every variable): the candidates are the
+    critical points of f on every face, each variable either free or at an end, the n-variable form of checking endpoints."""
+    import itertools
+    try:
+        if not 2 <= len(names) <= 3 or len(set(names)) != len(names) or not all(re.fullmatch(r"[A-Za-z]", n) for n in names): return {"status": "unsupported", "reason": "Optimize over two or three distinct one-letter variables, e.g. x, y"}
+        parts, rels, parser = parse(text, {"symbols": {n: ["real"] for n in names}})
+        if len(parts) != 1: return {"status": "unsupported", "reason": "Expected a single expression"}
+        xs = [sp.Symbol(n, real=True) for n in names]; f = parts[0][0]
+        if f.has(sp.Sum, sp.Integral): return {"status": "unsupported", "reason": "Optimization of sums and integrals is not supported"}
+        if f.free_symbols - set(xs): return {"status": "inconclusive", "reason": f"Only functions of {', '.join(names)} are optimized; other symbols: {sorted(s.name for s in f.free_symbols - set(xs))}"}
+        if absent := [n for n, x in zip(names, xs) if x not in f.free_symbols]: return {"status": "inconclusive", "reason": f"{', '.join(absent)} does not appear in the expression"}
+        num, den = sp.fraction(sp.together(f))
+        if not (num.is_polynomial(*xs) and den.is_polynomial(*xs)): return {"status": "inconclusive", "reason": "In several variables only polynomial and rational functions are optimized"}
+        ends = None
+        if interval is not None:
+            if not isinstance(interval, (list, tuple)) or len(interval) != 2: return {"status": "unsupported", "reason": "The interval needs two endpoints"}
+            ends = [parse(str(raw), {"symbols": {}})[0][0][0] for raw in interval]
+            if any(v.free_symbols or not v.is_real for v in ends) or not sp.N(ends[0]) < sp.N(ends[1]): return {"status": "unsupported", "reason": "The interval needs two real numeric endpoints with a < b"}
+        with budget():
+            hess, points, notes = sp.hessian(f, xs), [], []
+            sols = sp.solve([sp.diff(f, x) for x in xs], xs, dict=True)
+            for sol in sols:
+                if len(sol) != len(xs) or any(v.free_symbols for v in sol.values()): return {"status": "inconclusive", "reason": "The critical points are not isolated (a whole curve or surface is critical)"}
+                vals = [sp.simplify(sol[x]) for x in xs]
+                if any(v.is_real is False for v in vals): continue
+                if any(v.is_real is None for v in vals): return {"status": "inconclusive", "reason": "A critical point could not be shown to be real"}
+                if sp.simplify(den.subs(sol)) == 0: notes.append(f"critical point {latex(sp.Tuple(*vals))} is outside the domain and was dropped"); continue
+                h = hess.subs(sol); minors = [sp.simplify(h[:k, :k].det()) for k in range(1, len(xs) + 1)]
+                if any(not m.is_number for m in minors): return {"status": "inconclusive", "reason": "The Hessian could not be evaluated exactly"}
+                if all(m > 0 for m in minors): kind = "local_min"
+                elif all((-1) ** k * m > 0 for k, m in enumerate(minors, 1)): kind = "local_max"
+                elif minors[-1] != 0: kind = "saddle"
+                else: kind = "inconclusive"
+                points.append({"x": latex(sp.Tuple(*vals)), "value": latex(sp.simplify(f.subs(sol))), "kind": kind, "hessian": latex(h),
+                               **({"reason": "the Hessian is singular there: the second-derivative test does not decide"} if kind == "inconclusive" else {})})
+            result = {"status": "computed", "function": latex(f), "assumptions": {n: ["real"] for n in names}, "critical_points": points, "notes": notes}
+            if ends is None: result["global"] = "not claimed: no box was given"; return result
+            if den.free_symbols: return {**result, "status": "inconclusive", "reason": "Global extrema on a box are computed for polynomials only", "global": "not claimed"}
+            lo, hi = ends; cands = []
+            for choice in itertools.product((None, lo, hi), repeat=len(xs)):
+                fixed = {x: c for x, c in zip(xs, choice) if c is not None}; free = [x for x, c in zip(xs, choice) if c is None]; g = sp.expand(f.subs(fixed))
+                face = sp.solve([sp.diff(g, x) for x in free], free, dict=True) if free else [{}]
+                for sol in face:
+                    if any(v.free_symbols for v in sol.values()): return {**result, "status": "inconclusive", "reason": "The critical set on a face of the box is not isolated", "global": "not claimed"}
+                    for x in free:
+                        if x not in sol:
+                            if sp.diff(g, x).subs(sol) != 0: return {**result, "status": "inconclusive", "reason": "A face could not be solved exactly", "global": "not claimed"}
+                            sol[x] = lo   # g does not depend on x on this set: any value gives the same candidate value
+                    pt = tuple(sp.simplify(fixed.get(x, sol.get(x))) for x in xs)
+                    if any(v.is_real is not True for v in pt): continue
+                    inside = [sp.simplify(v - lo) >= 0 and sp.simplify(hi - v) >= 0 for v in pt]
+                    if any(c not in (sp.true, sp.false) for c in inside): return {**result, "status": "inconclusive", "reason": "Could not decide whether a candidate lies in the box", "global": "not claimed"}
+                    if all(c == sp.true for c in inside) and pt not in cands: cands.append(pt)
+            values = [(pt, sp.simplify(f.subs(dict(zip(xs, pt))))) for pt in cands]
+            ordered = sorted(values, key=lambda cv: sp.N(cv[1], 30)); out = {}
+            for label, target in (("min", ordered[0][1]), ("max", ordered[-1][1])):
+                if any(sp.simplify(v - target) != 0 and abs(sp.N(v - target, 30)) < 1e-12 for _, v in values): return {**result, "status": "inconclusive", "reason": "Two candidate values are too close to separate exactly", "global": "not claimed"}
+                out[label] = {"value": latex(target), "at": [latex(sp.Tuple(*pt)) for pt, v in values if sp.simplify(v - target) == 0]}
+            box = f"[{latex(lo)}, {latex(hi)}]^{len(xs)}"
+            return {**result, "interval": box, "extrema": out, "global": f"minimum and maximum on the box {box} (closed, f polynomial)"}
+    except Unsupported as error: return {"status": "unsupported", "reason": error.reason, "range": list(error.span)}
+    except Timeout: return {"status": "inconclusive", "reason": "The optimization took too long"}
+    except (NotImplementedError, ValueError, TypeError): return {"status": "inconclusive", "reason": "This optimization is outside the supported cases"}
+
+
 def compute(op, text, var="x", context=None, point=None, direction="+"):
     """Derivative, antiderivative, limit or real solutions of one expression; unevaluated results are inconclusive."""
     try:
@@ -626,7 +694,10 @@ def handle(request):
     if op == "constraints": return constraints([str(t) for t in request.get("texts", [])][:50], request.get("context"))
     if op == "compute": return compute(str(request.get("name", "")), str(request.get("text", "")), str(request.get("var", "x")), request.get("context"), request.get("point"), request.get("direction", "+"))
     if op == "notation": return notation(request.get("declarations", []), request.get("snippets", []), request.get("aliases", []))
-    if op == "optimize": return optimize(str(request.get("text", "")), str(request.get("var", "x")), request.get("interval"))
+    if op == "optimize":
+        var = str(request.get("var", "x"))
+        if "," in var: return optimize_multi(str(request.get("text", "")), [n.strip() for n in var.split(",")][:4], request.get("interval"))
+        return optimize(str(request.get("text", "")), var, request.get("interval"))
     return {"status": "unsupported", "reason": "Unknown operation"}
 
 
