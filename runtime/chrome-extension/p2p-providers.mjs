@@ -11,11 +11,9 @@ export const BROKERS = Object.freeze([
   'wss://test.mosquitto.org:8081/mqtt',
 ]);
 
-// CONNECTION PATHS: a public STUN server finds each computer's public address; the free Open Relay TURN service relays the
-// (DTLS-encrypted) data when no direct path exists, including over TLS on port 443 for networks that block other traffic
-// (for example eduroam). Its username/password are published openly by the service for public use: they are not a secret and
-// no account or billing exists, so no spending cap applies. Availability of the free tier is not verified; replace it here.
+// CONNECTION PATHS: STUN discovers candidate public addresses. TURN remains unconfigured: Open Relay's current documented
+// JavaScript flow requires an account/API-issued iceServers list. Do not ship legacy shared credentials or a private API key.
+// Restrictive networks may therefore have no connection path until an approved, scoped TURN credential mechanism exists.
 export const ICE_SERVERS = Object.freeze([
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'], username: 'openrelayproject', credential: 'openrelayproject' },
 ]);
