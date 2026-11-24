@@ -10,7 +10,7 @@ const HELLO = 1, CHALLENGE = 2, SEALED = 3, POINT = 65, NONCE = 16, VERSION = 'l
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 unambiguous symbols: 16 of them carry 80 bits
 const ROOM = /^[A-Za-z0-9_-]{22}$/, IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 // Participant message type -> the action the owner must allow. Unknown types end the connection.
-const ACTIONS = Object.freeze({ update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view', file: 'view', copy: 'copy', export: 'copy', download: 'copy', leave: 'view',
+const ACTIONS = Object.freeze({ update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view', file: 'view', copy: 'copy', export: 'copy', download: 'copy', leave: 'view', member: 'view', // member: stage 4 signed membership documents (p2p-membership.mjs), verified by the receiver
   work: 'copy', compile: 'view' }); // stage 3: helping compile writes temporary files on that computer, so it needs the copy grant
 const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
 
@@ -86,6 +86,8 @@ class Channel {
     return message;
   }
 }
+/** What a stage 4 member signs to join: room, the coordinator's ephemeral point and nonce of this connection, and its name. */
+export const joinBinding = (roomId, ownerPoint, nonce, name) => encoder.encode(JSON.stringify(['latex-p2p-join-v1', roomId, base64url(ownerPoint), base64url(nonce), name]));
 /** Serializes async handling so each connection's state machine sees frames one at a time. */
 const serial = () => { let tail = Promise.resolve(); return task => { const run = tail.then(task); tail = run.catch(() => {}); return run; }; }; // a failed task must not poison the later ones (e.g. the close handler)
 
@@ -97,10 +99,13 @@ const serial = () => { let tail = Promise.resolve(); return task => { const run 
 export class OwnerRoom {
   #peers = new Map(); #stopped = false; #resume = new Map(); // name -> { token, grant }: an authenticated rejoin keeps the owner's latest grant (memory only)
   #retired = []; // passcodes replaced by rotatePasscode(): they still open a resume, never a new join
-  constructor({ send, admit, drop, onJoin = () => {}, onMessage = () => {}, onLeave = () => {} }, secrets = newRoomSecrets()) {
-    Object.assign(this, { roomId: secrets.roomId, passcode: secrets.passcode, transport: { send, admit, drop }, onJoin, onMessage, onLeave });
+  constructor({ send, admit, drop, onJoin = () => {}, onMessage = () => {}, onLeave = () => {}, checkJoin = null }, secrets = newRoomSecrets()) {
+    Object.assign(this, { roomId: secrets.roomId, passcode: secrets.passcode, transport: { send, admit, drop }, onJoin, onMessage, onLeave, checkJoin });
+    if (Array.isArray(secrets.retired)) this.#retired = secrets.retired.filter(normalizePasscode).slice(0, 8);
   }
-  get participants() { return [...this.#peers].filter(([, p]) => p.state === 'joined').map(([peer, p]) => ({ peer, name: p.name, grant: p.grant })); }
+  /** Passcodes this room still accepts for members resuming (stage 4 successors inherit them). */
+  get retired() { return [...this.#retired]; }
+  get participants() { return [...this.#peers].filter(([, p]) => p.state === 'joined').map(([peer, p]) => ({ peer, name: p.name, grant: p.grant, id: p.id ?? null })); }
   connected(peer) {
     if (this.#stopped || this.#peers.has(peer)) { this.transport.drop(peer); return; }
     this.#peers.set(peer, { state: 'hello', queue: serial() });
@@ -164,7 +169,7 @@ export class OwnerRoom {
         const keys = await deriveKeys(pair.privateKey, theirs, this.roomId, normalizePasscode(code), theirs, own, nonce);
         return new Channel(keys.toParticipant, keys.toOwner, this.roomId, 'to-participant', 'to-owner');
       }));
-      Object.assign(entry, { state: 'joining', channel: channels[0], older: channels.slice(1), retired: false });
+      Object.assign(entry, { state: 'joining', channel: channels[0], older: channels.slice(1), retired: false, binding: { owner: own, nonce } });
       this.transport.send(peer, concat([CHALLENGE], own, nonce));
       return;
     }
@@ -172,15 +177,18 @@ export class OwnerRoom {
     if (entry.state === 'joining') {
       const name = message.t === 'join' && validUsername(message.name);
       if (!name) throw Error('Invalid join');
+      // Stage 4: checkJoin verifies a signed identity against the signed member list; a listed member resumes on any coordinator.
+      const verdict = this.checkJoin ? await this.checkJoin({ name, id: message.id, proof: message.proof, roomId: this.roomId, binding: entry.binding, retired: entry.retired }) : null;
+      if (verdict?.refuse) { await this.#send(peer, entry, { t: 'refused', code: verdict.code === 'resume' ? 'resume' : undefined, reason: String(verdict.refuse) }); throw Error('Refused member'); }
       // A rejoin proves the token from its last welcome; revoke and leave delete it, so a removed participant cannot resume.
-      const resuming = 'resume' in message, valid = resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name)?.token;
+      const resuming = 'resume' in message, valid = !!verdict?.grant || (resuming && typeof message.resume === 'string' && message.resume === this.#resume.get(name)?.token);
       if (resuming && !valid) { await this.#send(peer, entry, { t: 'refused', code: 'resume', reason: 'This session can no longer be resumed' }); throw Error('Stale resume'); }
       if (entry.retired && !valid) { await this.#send(peer, entry, { t: 'refused', reason: 'This passcode was replaced. Ask the owner for the current one' }); throw Error('Retired passcode'); }
       const held = this.participants.find(p => p.name === name);
       if (held && valid) this.#remove(held.peer, true); // the same participant on a new connection: the old one is stale
       else if (held) { await this.#send(peer, entry, { t: 'refused', reason: 'That name is already in use in this session' }); throw Error('Name in use'); }
-      const resume = base64url(random(16)), grant = valid ? this.#resume.get(name).grant : 'online'; this.#resume.set(name, { token: resume, grant });
-      Object.assign(entry, { state: 'joined', name, grant });
+      const resume = base64url(random(16)), grant = verdict?.grant ?? (valid ? this.#resume.get(name).grant : 'online'); this.#resume.set(name, { token: resume, grant });
+      Object.assign(entry, { state: 'joined', name, grant, id: verdict?.grant ? message.id : null });
       this.transport.admit(peer);
       await this.#send(peer, entry, { t: 'welcome', grant: entry.grant, participants: this.participants.map(p => p.name), resume });
       this.onJoin(peer, name);
@@ -199,7 +207,7 @@ export class OwnerRoom {
  * message to `receive` and the socket's close to `closed`. `joined` settles once the owner admits or refuses.
  * Session state stays in memory: this module never persists anything.
  */
-export function joinRoom({ roomId, passcode, username, resume, send, close, onMessage = () => {}, onGrant = () => {}, onEnd = () => {} }) {
+export function joinRoom({ roomId, passcode, username, resume, send, close, onMessage = () => {}, onGrant = () => {}, onEnd = () => {}, identity = null }) {
   const code = normalizePasscode(passcode), name = validUsername(username);
   if (!ROOM.test(String(roomId))) throw Error('This is not a valid join link');
   if (!code) throw Error('Enter the passcode exactly as shown by the owner');
@@ -220,7 +228,9 @@ export function joinRoom({ roomId, passcode, username, resume, send, close, onMe
       const keys = await deriveKeys(pair.privateKey, bytes.slice(1, 1 + POINT), roomId, code, own, bytes.slice(1, 1 + POINT), bytes.slice(1 + POINT));
       channel = new Channel(keys.toOwner, keys.toParticipant, roomId, 'to-owner', 'to-participant');
       state = 'welcome';
-      send(await channel.seal({ t: 'join', name, ...(resume ? { resume } : {}) }));
+      // Stage 4: the identity signs this connection's own key exchange, so a captured proof cannot open another connection.
+      const proof = identity ? { id: identity.key, proof: await identity.sign(joinBinding(roomId, bytes.slice(1, 1 + POINT), bytes.slice(1 + POINT), name)) } : {};
+      send(await channel.seal({ t: 'join', name, ...(resume ? { resume } : {}), ...proof }));
       return;
     }
     if (state !== 'welcome' && state !== 'joined') return;

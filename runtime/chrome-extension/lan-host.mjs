@@ -13,7 +13,7 @@ import { handleSnapshotRequest, streamFiles, SnapshotReceiver, ProjectTree, with
 import { ot } from './lan-ot.mjs';
 import { ownerGroup } from './lan-compile.mjs';
 
-const LOCAL = 'owner', OWNER_CID = '0'.repeat(32), NAME = 'Owner';
+const LOCAL = 'owner';
 // network: true binds this computer's private LAN address (the helper refuses public ones); tests keep the loopback default.
 export const LOOPBACK = '127.0.0.1';
 
@@ -68,7 +68,15 @@ const ACTION = { update: 'edit', cursor: 'edit', fs: 'edit', snapshot: 'view' };
  * permission(info) is the owner-permission hook (see report): info = {peer, name, action:'view'|'edit', message}; return false to deny.
  * Events: onRemote(path, {op, v, by}), onCursor({name, path, row, column}), onPeers(names[]), onLost().
  */
-export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, onPool = () => {}, network = false, secrets }) {
+/**
+ * Stage 4 options (p2p-room.mjs): `client` {cid, name} replaces the fixed owner identity, so a successor coordinator's own ids never
+ * collide with the previous coordinator's; `seed` {path: {text, version, log}} continues each document's numbering and log;
+ * `checkJoin` admits members by signed identity (lan-room.mjs); `onMember(peer, m, name)` receives membership documents;
+ * `fillable(peer, name)` opens the handover catch-up window (lan-sync.mjs #fill).
+ */
+export async function startHost({ helper, source, permission = () => true, onRemote = () => {}, onCursor = () => {}, onPeers = () => {}, onLost = () => {}, onPool = () => {}, network = false, secrets,
+  client = { cid: '0'.repeat(32), name: 'Owner' }, seed = {}, checkJoin = null, onMember = () => {}, fillable = () => false }) {
+  const OWNER_CID = client.cid, NAME = client.name;
   const syncs = new Map(), waiting = new Map(), counters = new Map(), uploads = new Map(), aliases = new Map(), removed = new Set();
   let room, grants, group, stopped = false, fsTail = Promise.resolve(), fsSeq = 0, moving = null;
   const initial = source.tree();
@@ -87,10 +95,11 @@ export async function startHost({ helper, source, permission = () => true, onRem
   const sync = path => {
     let entry = syncs.get(path);
     if (!entry) {
-      const current = source.text(path); // null: not a text file of this project
+      const seeded = Object.hasOwn(seed, path) ? seed[path] : null, current = seeded ? { text: seeded.text, version: seeded.version } : source.text(path); // null: not a text file of this project
       if (!current) return null;
       const ref = { path };
-      entry = new OwnerSync({ room: hub(ref), ot, text: current.text, version: current.version }); entry.ref = ref;
+      entry = new OwnerSync({ room: hub(ref), ot, text: current.text, version: current.version, log: seeded?.log ?? [], headId: seeded?.headId ?? null }); entry.ref = ref;
+      entry.fillable = fillable;
       syncs.set(path, entry);
     }
     return entry;
@@ -148,6 +157,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
   const onMessage = (peer, m, name) => {
     if (grants.onMessage(room, peer, m, name)) return; // copy/export/download: owner-signed tickets (lan-grants.mjs); the room already refused non-grantees
     if (m.t === 'work' || m.t === 'compile') return group.onMessage(peer, name, m);
+    if (m.t === 'member') return onMember(peer, m, name);
     const action = ACTION[m.t];
     if (!action || permission({ peer, name, action, message: m }) === false) return deny(peer, m);
     if (m.t === 'cursor') {
@@ -171,7 +181,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
     if (m.k === 'join') {
       if (!entry) return room.sendTo(peer, { t: 'refused', reason: 'no_such_file', path: m.path });
       if (entry.text.length > entry.limits.snapshotBytes / 2) return room.sendTo(peer, { t: 'refused', reason: 'too_large', path: m.path });
-      return room.sendTo(peer, { t: 'doc', path: m.path, v: entry.version, text: entry.text });
+      return room.sendTo(peer, { t: 'doc', path: m.path, v: entry.version, text: entry.text, at: entry.headId });
     }
     if (!entry) throw Error('Unknown file');
     entry.handle(peer, m, name);
@@ -181,8 +191,9 @@ export async function startHost({ helper, source, permission = () => true, onRem
     admit: peer => helper.call('admit', { peer }).catch(() => {}),
     drop: peer => helper.call('drop', { peer }).catch(() => {}),
     onJoin: peer => { grants.onJoin(room, peer); group.announce(peer); presence(); }, onLeave: peer => { group.leave(peer, 'gone'); presence(); },
-    onMessage: (peer, m, name) => { try { return onMessage(peer, m, name); } catch { room.revoke(peer); } },
+    onMessage: (peer, m, name) => { try { return onMessage(peer, m, name); } catch { room.revoke(peer); } }, checkJoin,
   }, secrets);
+  for (const path of Object.keys(seed)) { sync(path); counters.set(path, Math.max(0, ...(seed[path].log ?? []).filter(e => e.id.startsWith(OWNER_CID + '.')).map(e => Number(e.id.split('.')[1])))); }
   grants = await GrantAuthority.create(room.roomId);
   group = ownerGroup({ room, onChange: onPool, current: async () => { // the logs, not the saved files, hold the shared text
     const { files } = source.tree();
@@ -219,6 +230,17 @@ export async function startHost({ helper, source, permission = () => true, onRem
       try { entry.handle(LOCAL, { t: 'update', k: 'op', cid: OWNER_CID, n, base: update.v, ops: update.op }, NAME); } catch (error) { waiting.delete(key); return Promise.reject(error); }
       return done;
     },
+    /** Stage 4 takeover: an edit this computer sent as a participant, resent under its original id (n); later edits continue after it. */
+    resubmit(path, { n, base, ops }) {
+      path = current(path); const entry = sync(path);
+      if (!entry) return Promise.reject(Error('Unknown file'));
+      counters.set(path, Math.max(counters.get(path) ?? 0, n));
+      const key = `${path}\0${OWNER_CID}.${n}`, done = new Promise((resolve, reject) => waiting.set(key, { resolve, reject }));
+      try { entry.handle(LOCAL, { t: 'update', k: 'op', cid: OWNER_CID, n, base, ops }, NAME); } catch (error) { waiting.delete(key); return Promise.reject(error); }
+      return done;
+    },
+    /** Every shared document's current text, version and log (the handover seed of the next coordinator). */
+    docs: () => Object.fromEntries([...syncs].map(([path, entry]) => [path, entry.state()])),
     cursor(c) { return room.broadcast({ t: 'cursor', name: NAME, ...c }).catch(() => {}); },
     participants: () => room.participants,
     setGrant: async (peer, grant) => { await room.setGrant(peer, grant); group.grant(peer, grant); },

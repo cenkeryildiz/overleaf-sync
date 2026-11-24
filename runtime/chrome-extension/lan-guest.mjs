@@ -30,7 +30,9 @@ const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
  * onResumed(conflicts); `reconcile` below settles those explicitly. Revoke, stop and leave end everything.
  */
 export async function joinSession({ link, passcode, username, onRemote = () => {}, onCursor = () => {}, onEnd = () => {}, onGrant = () => {}, onPresence = () => {}, onFs = () => {},
-  onLost = () => {}, onResumed = () => {}, onGroup = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket, P2PSocketImpl = null }) {
+  onLost = () => {}, onResumed = () => {}, onGroup = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket, P2PSocketImpl = null, identity = null, onTap = () => {}, beforeAdopt = async () => {}, keepOnLoss = false }) {
+  // Stage 4 (p2p-room.mjs): identity signs each join; onTap(message, session) sees every owner message first; beforeAdopt(session, first)
+  // runs once a new connection holds the project and before it is used (epoch check, handover catch-up); throwing refuses it.
   let target = parseJoinLink(link), current = link, code = passcode; // the passcode stays in this closure for the bounded rejoin; never logged or stored
   const name = validUsername(username), cid = randomHex(16), waiting = new Map(), cursors = new Map(), files = new Map(), byKey = new Map(), counters = new Map();
   let conn = null, state = 'joining', token = null, timer = null, syncs = 0, conflicts = [];
@@ -50,7 +52,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   const name_ = (o, n) => { byKey.delete(o.key); Object.assign(o, { n, id: `${cid}.${n}`, key: `${o.path}\0${cid}.${n}` }); byKey.set(o.key, o); };
   // ---- the owner's log for one file, in order: own entries acknowledge, others go to the editor
   const step = (path, f, e) => {
-    f.known = e.v;
+    f.known = e.v; f.at = e.id;
     if (e.id.startsWith(cid + '.')) { const o = byKey.get(`${path}\0${e.id}`); if (o) finish(o, e.v - 1 - f.off); return true; }
     onRemote(path, { op: e.ops, v: e.v - 1 - f.off, by: e.by }); return false;
   };
@@ -66,7 +68,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   const conflict = (path, hi) => { const f = files.get(path); Object.assign(f, { syncing: false, stale: true, hold: null, hi: Number.isSafeInteger(hi) ? hi : undefined }); conflicts.push(path); resumed(); };
   function sync(path) {
     const f = files.get(path); f.syncing = true; f.hold ??= []; f.replay = Promise.resolve(); syncs++;
-    conn.session.send({ t: 'update', k: 'sync', path, cid, base: f.known }).catch(() => {});
+    conn.session.send({ t: 'update', k: 'sync', path, cid, base: f.known, ...(f.at ? { at: f.at } : {}) }).catch(() => {});
   }
   function page(m) {
     const f = files.get(m.path);
@@ -117,7 +119,9 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
   // session (as before the merge) and fails a connection that is still opening.
   const onMessage = c => m => { c.tail = c.tail.then(() => handle(c, m)).catch(error => { if (c === conn) end(error.message); else c.project?.reject(error); }); };
   const handle = async (c, m) => {
-    if (c.dead || c.gate.receive(m)) return; // grant key, tickets and the denials that answer a ticket request
+    if (c.dead) return;
+    try { onTap(m, c.session); } catch {} // the tap only observes
+    if (c.gate.receive(m)) return; // grant key, tickets and the denials that answer a ticket request
     if (m.t === 'tree') {
       if (!c.treeSeen && Array.isArray(m.docs) && m.docs.length <= 1000 && m.docs.every(p => typeof p === 'string') && Number.isSafeInteger(m.seq)) {
         c.treeSeen = true; c.docs = new Set(m.docs); c.seq = m.seq; c.folders = Array.isArray(m.folders) && m.folders.length <= 1000 ? m.folders.filter(p => typeof p === 'string') : [];
@@ -128,8 +132,8 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     if (c !== conn) return; // replies to a connection still being opened; the rejoin catches up from the log
     if (m.t === 'work' || m.t === 'compiled' || m.t === 'pool' || (m.t === 'denied' && m.request === 'work')) { onGroup(m); return; } // stage 3 (lan-compile.mjs); not awaited: a compile must not hold up edits
     switch (m.t) {
-      case 'doc': if (typeof m.path === 'string' && typeof m.text === 'string' && Number.isSafeInteger(m.v)) settle(`${m.path}\0join`, true, { text: m.text, v: m.v }); break;
-      case 'ack': { const o = byKey.get(`${m.path}\0${m.id}`), f = files.get(m.path); if (o && f && Number.isSafeInteger(m.v)) { f.known = Math.max(f.known, m.v); finish(o, m.v - 1 - f.off); } break; }
+      case 'doc': if (typeof m.path === 'string' && typeof m.text === 'string' && Number.isSafeInteger(m.v)) settle(`${m.path}\0join`, true, { text: m.text, v: m.v, at: typeof m.at === 'string' ? m.at : null }); break;
+      case 'ack': { const o = byKey.get(`${m.path}\0${m.id}`), f = files.get(m.path); if (o && f && Number.isSafeInteger(m.v)) { if (m.v > f.known) Object.assign(f, { known: m.v, at: m.id }); finish(o, m.v - 1 - f.off); } break; }
       case 'refused': {
         const o = m.id && byKey.get(`${m.path}\0${m.id}`);
         if (o) finish(o, null, Error(`Refused by the owner (${m.reason})`));
@@ -155,7 +159,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       const clock = setTimeout(unreachable, TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;
     });
     Object.assign(c, connectStore({
-      roomId: t.roomId, passcode: pass, username, resume, send: bytes => socket.send(bytes), close: () => socket.close(), onMessage: onMessage(c),
+      roomId: t.roomId, passcode: pass, username, resume, identity, keepOnLoss, send: bytes => socket.send(bytes), close: () => socket.close(), onMessage: onMessage(c),
       onGrant: g => { c.gate.observeGrant(g); if (c === conn) onGrant(g); }, onProject: p => c.project.resolve(p), onTransferError: e => c.project.reject(e),
       onEnd: (reason, final) => { c.project.reject(Error(reason)); lost(c, reason, final); },
     }));
@@ -172,12 +176,13 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
         c.tree = new ProjectTree({ files: [...received.files].map(([path, bytes]) => [path, bytes.length]), folders: c.folders, main: received.main });
         for (const [m, upload] of c.early.splice(0)) await change(c, m, upload);
       }));
+      await Promise.race([beforeAdopt(c.session, { first: !conn, docs: c.docs }), timeout]);
       if (c.dead) throw Error('The session ended');
       return c;
     } catch (error) { c.dead = true; c.blobs.abort(); c.session.leave(); c.store.wipe(); socket.close(); throw error; }
     finally { clearTimeout(clock); }
   }
-  const adopt = c => { conn = c; token = c.welcome.resume; c.gate.installStorageGuard(); };
+  const adopt = c => { if (conn && conn !== c) conn.store.wipe(); conn = c; token = c.welcome.resume; c.gate.installStorageGuard(); };
   function end(reason) {
     if (state === 'ended') return; state = 'ended'; clearTimeout(timer);
     conn.gate.end(); conn.blobs.abort(); conn.store.wipe(); failAll(reason);
@@ -242,7 +247,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       /** Current text/version of one shared text file; later remote edits to it are delivered through onRemote. */
       async join(path) {
         const s = await request(path);
-        files.set(path, { known: s.v, off: 0, out: [], hold: null, stale: false, syncing: false });
+        files.set(path, { known: s.v, at: s.at, off: 0, out: [], hold: null, stale: false, syncing: false });
         return s;
       },
       /** Asks the owner for one file-tree change ({kind, ...}; put carries `bytes`); resolves once it is applied here (onFs's result). */
@@ -272,11 +277,15 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       },
       cursor: ({ path, row, column }) => state === 'live' ? conn.session.send({ t: 'cursor', path, row, column }).catch(() => {}) : Promise.resolve(),
       cursors: () => [...cursors.values()],
+      /** Stage 4 takeover: every edit not yet acknowledged, in order, with its id number, base and ops in the owner's numbering. */
+      outstanding: () => [...files].flatMap(([path, f]) => f.out.map(o => ({ path, n: o.n, base: o.base, ops: o.ops, off: f.off, resolve: o.resolve, reject: o.reject }))),
+      /** As outstanding(), and this session lets go of them: ending it later neither resends nor rejects them (the taker settles each). */
+      takeOutstanding() { const taken = this.outstanding(); for (const o of taken) byKey.delete(`${o.path}\0${cid}.${o.n}`); for (const f of files.values()) f.out = []; return taken; },
       rejoin,
       /** The owner's current text for a conflicted file; its remote edits are held until rebase(). */
       async adopt(path) {
         const s = await request(path), f = files.get(path) ?? { off: 0, out: [], syncing: false };
-        files.set(path, Object.assign(f, { known: s.v, hold: [], overflow: false, stale: false, floor: undefined, expect: undefined }));
+        files.set(path, Object.assign(f, { known: s.v, at: s.at, hold: [], overflow: false, stale: false, floor: undefined, expect: undefined }));
         return { ...s, applied: f.hi !== undefined && f.out[0]?.n <= f.hi }; // applied: the owner's text already holds our in-flight edit
       },
       /** Keep a conflicted file aside (no remote edits) until the participant chooses. */

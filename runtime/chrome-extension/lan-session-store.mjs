@@ -70,7 +70,7 @@ export class SessionStore {
  * joinRoom + receiver + store. Verified snapshots replace the project atomically; failed transfers keep the previous one.
  * Any end of the session (owner revoked/stopped, you left, host lost) aborts staging and wipes the store.
  */
-export function connectStore({ onProject = () => {}, onTransferError = () => {}, onMessage = () => {}, onGrant = () => {}, onEnd = () => {}, ...join }) {
+export function connectStore({ onProject = () => {}, onTransferError = () => {}, onMessage = () => {}, onGrant = () => {}, onEnd = () => {}, keepOnLoss = false, ...join }) {
   const store = new SessionStore(), receiver = new SnapshotReceiver();
   const session = joinRoom({
     ...join,
@@ -79,7 +79,7 @@ export function connectStore({ onProject = () => {}, onTransferError = () => {},
       receiver.accept(message).then(project => { if (project) { store.load(project); onProject(project); } }, error => onTransferError(error));
     },
     onGrant: grant => { store.setGrant(grant); onGrant(grant); },
-    onEnd: (reason, final) => { receiver.abort(); store.wipe(); onEnd(reason, final); },
+    onEnd: (reason, final) => { receiver.abort(); if (final || !keepOnLoss) store.wipe(); onEnd(reason, final); }, // keepOnLoss (stage 4 only): memory copy kept until a takeover reads it or a newer connection replaces it
   });
   session.joined.then(({ grant }) => { if (store.grant === null) store.setGrant(grant); }, () => {});
   return { session, store, requestSnapshot: () => session.send({ t: 'snapshot', req: true }) };

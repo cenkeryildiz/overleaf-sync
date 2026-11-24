@@ -17,19 +17,35 @@ const isInt = n => Number.isSafeInteger(n) && n >= 0;
 const noop = () => {};
 
 export class OwnerSync {
-  #log = []; #bytes = 0; #index = new Map(); #clients = new Map(); #owner = 0;
-  constructor({ room, ot, text = '', version = 0, limits = {} }) {
+  #log = []; #head = null; #bytes = 0; #index = new Map(); #clients = new Map(); #owner = 0; #ops = false; // #ops: an op of this coordinator's own epoch was committed
+  constructor({ room, ot, text = '', version = 0, limits = {}, log = [], headId = null }) {
     Object.assign(this, { room, ot, text, version, limits: { ...LIMITS, ...limits } });
+    this.#head = headId; // id of the entry at `version` when the seed carries no log (a room reopened from a saved copy)
+    // Stage 4 handover: a successor coordinator continues the previous coordinator's numbering and log (p2p-replica.mjs).
+    // Seeded ids acknowledge a resubmission without applying it again; their original submission is unknown, so it is not compared.
+    for (const e of log) {
+      if (!isInt(e?.v) || typeof e.id !== 'string' || !Array.isArray(e.ops)) throw Error('Malformed seed');
+      const entry = { v: e.v, id: e.id, by: String(e.by ?? ''), ops: e.ops, len: e.len };
+      this.#log.push(entry); this.#bytes += size(entry); this.#index.set(e.id, { v: e.v, len: e.len, submitted: null });
+      const [cid, n] = e.id.split('.'); const c = this.#clients.get(cid);
+      if (CID.test(cid) && isInt(Number(n))) { if (!c) this.#clients.set(cid, { name: entry.by, hi: Number(n) }); else c.hi = Math.max(c.hi, Number(n)); }
+    }
+    if (log.length && log.at(-1).v !== version) throw Error('Seed log does not end at the seeded version');
   }
+  /** Version and text of this document, the log tail after `base` (or null when it no longer covers it) and the client high marks. */
+  state() { return { text: this.text, version: this.version, log: this.log }; }
   get log() { return this.#log.map(e => ({ ...e })); }
+  /** Id of the entry at the current version (null for an unedited document): identifies this history, not just its length. */
+  get headId() { return this.#log.at(-1)?.id ?? this.#head; }
   /** The owner's own edits enter the same ordered log; `ops` apply to the current `this.text` (the editor mirrors the result). */
-  localEdit(ops) { return this.#commit(`owner.${++this.#owner}`, 'Owner', ops, null, `[${this.version},${JSON.stringify(ops)}]`); }
+  localEdit(ops) { this.#ops = true; return this.#commit(`owner.${++this.#owner}`, 'Owner', ops, null, `[${this.version},${JSON.stringify(ops)}]`); }
   /** Pass as OwnerRoom's onMessage. Throwing drops the peer: only malformed, replayed or tampered input throws. */
   handle(peer, message, name) {
     if (message.t === 'snapshot') return this.#snapshot(peer);
     if (message.t !== 'update') return;
     if (message.k === 'sync') return this.#sync(peer, name, message);
     if (message.k === 'op') return this.#op(peer, name, message);
+    if (message.k === 'fill') return this.#fill(peer, name, message);
     throw Error('Unknown update kind');
   }
   #send(peer, message) { this.room.sendTo(peer, message).catch(noop); }
@@ -62,7 +78,7 @@ export class OwnerSync {
     if (!isInt(n) || n < 1 || !isInt(base) || !Array.isArray(ops) || size(ops) > this.limits.opBytes) throw Error('Malformed op');
     const client = this.#bind(cid, name), id = `${cid}.${n}`, submitted = `[${base},${JSON.stringify(ops)}]`, seen = this.#index.get(id);
     if (seen) { // the same op again: acknowledge, never apply twice; different content under a used id is tampering
-      if (seen.submitted !== submitted) throw Error('Op id reused with different content');
+      if (seen.submitted !== null && seen.submitted !== submitted) throw Error('Op id reused with different content');
       return this.#send(peer, { t: 'ack', id, v: seen.v, len: seen.len });
     }
     if (n !== client.hi + 1) throw Error('Replayed or skipped op id');
@@ -71,16 +87,21 @@ export class OwnerSync {
     let cur = ops;
     try { for (const entry of since) cur = this.ot.transformX(cur, entry.ops)[0]; this.ot.apply(this.text, cur); }
     catch { return this.#refuse(peer, 'invalid_op', id); }
-    client.hi = n;
+    client.hi = n; this.#ops = true;
     const entry = this.#commit(id, name, cur, peer, submitted);
-    this.#send(peer, { t: 'ack', id, v: entry.v, len: entry.len });
+    this.#send(peer, { t: 'ack', id, v: entry.v, len: entry.len, ops: cur }); // ops: the applied form, so every replica can follow the log
   }
   #sync(peer, name, m) {
     if (!isInt(m.base)) throw Error('Malformed sync');
     const client = this.#bind(m.cid, name), since = this.#since(m.base);
+    // Stage 4: `at` names the entry the sender holds at `base`; another entry there means separately edited histories (a fork).
+    if (typeof m.at === 'string' && typeof since !== 'string' && m.base > 0) {
+      const at = m.base === this.version ? this.headId : this.#log[m.base - (this.#log[0]?.v ?? 1)]?.id;
+      if (at !== undefined && at !== null && at !== m.at) return this.#send(peer, { t: 'refused', reason: 'diverged', hi: client.hi });
+    }
     // hi: this client's last applied op number, so a participant the log no longer covers knows whether its in-flight edit landed
     if (typeof since === 'string') return this.#send(peer, { t: 'refused', reason: since, hi: client.hi });
-    const entries = since.map(e => e.id.startsWith(m.cid + '.') ? { v: e.v, id: e.id, len: e.len } : e); // own ops are already known to the sender
+    const entries = since; // own entries keep their ops too: replicas (p2p-replica.mjs) follow the whole log
     let page = [], bytes = 0;
     for (const entry of entries) {
       const s = size(entry);
@@ -88,6 +109,24 @@ export class OwnerSync {
       page.push(entry); bytes += s;
     }
     this.#send(peer, { t: 'sync', entries: page, done: true, head: this.version });
+  }
+  /**
+   * Stage 4 handover catch-up: a member that saw entries of the previous coordinator's log beyond this successor's version sends
+   * them verbatim. Accepted only while `this.open` allows (the successor has committed nothing of its own epoch yet) and only
+   * contiguous from the current version; anything else is refused and the sender reconciles explicitly.
+   */
+  #fill(peer, name, m) {
+    if (!Array.isArray(m.entries) || m.entries.length > this.limits.logEntries || size(m.entries) > this.limits.logBytes) throw Error('Malformed fill');
+    if (this.#ops || !this.fillable?.(peer, name)) return this.#refuse(peer, 'fill_closed');
+    let text = this.text;
+    try { for (const [i, e] of m.entries.entries()) { if (e?.v !== this.version + 1 + i || typeof e.id !== 'string' || !Array.isArray(e.ops)) throw Error(); text = this.ot.apply(text, e.ops); } }
+    catch { return this.#refuse(peer, 'fill_mismatch'); }
+    for (const e of m.entries) if (!this.#index.has(e.id)) {
+      const [cid, n] = e.id.split('.'), c = this.#clients.get(cid);
+      if (CID.test(cid) && isInt(Number(n))) { if (!c) this.#clients.set(cid, { name: String(e.by ?? ''), hi: Number(n) }); else c.hi = Math.max(c.hi, Number(n)); }
+      this.#commit(e.id, String(e.by ?? ''), e.ops, null, null);
+    }
+    this.#send(peer, { t: 'filled', v: this.version });
   }
   #snapshot(peer) {
     if (this.text.length > this.limits.snapshotBytes / 2 || size(this.text) > this.limits.snapshotBytes) return this.#refuse(peer, 'too_large'); // whole-project transfer is a separate path

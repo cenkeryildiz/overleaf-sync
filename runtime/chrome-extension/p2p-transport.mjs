@@ -10,7 +10,7 @@ import { selectSignaling } from './p2p-signal.mjs';
 export const PIECE = 64 * 1024 - 1;           // payload per data-channel message: 64 KiB is the size every WebRTC stack accepts
 export const QUEUE_LIMIT = 96 * 1024 * 1024;  // bytes waiting per peer; a full 64 MB snapshot in base64 frames fits, more drops the peer
 export const OPEN_TIMEOUT = 20_000;           // a connection attempt that never opens its channel is closed (strangers cannot pile up)
-export const MAX_PEERS = 32;
+export const MAX_PEERS = 32, CLOSE_GRACE = 2000;
 const HIGH = 1024 * 1024, MORE = 0, LAST = 1;
 const b64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
 const unb64 = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
@@ -63,7 +63,10 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
   const end = (peer, notify = true) => {
     const p = peers.get(peer); if (!p) return;
     peers.delete(peer); byFrom.delete(p.from); clearTimeout(p.timer);
-    try { p.channel?.close(); } catch {} try { p.pc.close(); } catch {}
+    // The channel closes first so messages already queued (e.g. 'revoked') still arrive; closing the connection at once discards them.
+    const pc = p.pc, later = setTimeout(() => { try { pc.close(); } catch {} }, CLOSE_GRACE);
+    if (p.channel) p.channel.onclose = () => { clearTimeout(later); try { pc.close(); } catch {} };
+    try { p.channel?.close(); } catch {} if (!p.channel) { clearTimeout(later); try { pc.close(); } catch {} }
     try { finder?.send(p.from, { t: 'bye' }); } catch {}
     if (p.open && notify) emit({ ev: 'gone', peer });
   };
