@@ -9,6 +9,11 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 const ORIGIN: &str = "chrome-extension://oekjjadnainlmdbgbdjokegaikafafke/";
 const HOST: &str = "com.cenker.latex_local";
 const MAX: usize = 64 * 1024 * 1024;
+/// TEX-PKG-03: the browser package store's installed files for this compile, a TDS tree used as TEXMFHOME (tex.rs) and
+/// removed with the job; never written into the TeX installation. Bounded apart from the project.
+pub const PACKAGES: &str = ".latex-local-texmf/";
+const PACKAGE_MAX: usize = 128 * 1024 * 1024;
+const PACKAGE_FILES: usize = 4000;
 type Output = Arc<Mutex<io::Stdout>>;
 struct Running { cancel: Arc<AtomicBool>, thread: Option<thread::JoinHandle<()>> }
 impl Drop for Running {
@@ -70,22 +75,25 @@ fn detected() -> Vec<PathBuf> {
 }
 fn engines(bin: &Path) -> Vec<&'static str> { ["pdflatex", "xelatex", "lualatex"].into_iter().filter(|name| bin.join(name).is_file()).collect() }
 struct InputFile { file: File, expected: usize, written: usize, hash: Sha256, digest: String }
-pub struct Job { pub root: PathBuf, files: HashMap<String, InputFile>, total: usize }
+pub struct Job { pub root: PathBuf, files: HashMap<String, InputFile>, total: usize, packages: usize }
 impl Drop for Job { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.root); } }
 impl Job {
     fn create(value: &Value) -> Result<Self, String> {
-        let entries = value["files"].as_array().filter(|files| !files.is_empty() && files.len() <= 1000).ok_or("Invalid file count")?;
+        let entries = value["files"].as_array().filter(|files| !files.is_empty() && files.len() <= 1000 + PACKAGE_FILES).ok_or("Invalid file count")?;
+        let installed = entries.iter().filter(|entry| entry["path"].as_str().is_some_and(|path| path.starts_with(PACKAGES))).count();
+        if installed > PACKAGE_FILES || entries.len() - installed > 1000 { return Err("Too many project or package files".into()); }
         let mut random = [0u8; 16]; File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut random)).map_err(|_| "Random source unavailable")?;
         let root = std::env::temp_dir().join(format!("latex-local-{:x}", u128::from_ne_bytes(random)));
         fs::DirBuilder::new().mode(0o700).create(&root).map_err(|_| "Private project directory unavailable")?;
         let root = fs::canonicalize(root).map_err(|_| "Private directory unavailable")?;
-        let mut job = Self { root, files: HashMap::new(), total: 0 };
+        let mut job = Self { root, files: HashMap::new(), total: 0, packages: 0 };
         for entry in entries {
             let path = text(entry, "path")?;
             let size = entry["size"].as_u64().and_then(|size| usize::try_from(size).ok()).ok_or("Invalid file size")?;
             let digest = text(entry, "digest")?;
             if !safe_path(path) || job.files.contains_key(path) || digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) { return Err("Invalid project file".into()); }
-            job.total = job.total.checked_add(size).filter(|size| *size <= MAX).ok_or("Project exceeds 64 MB")?;
+            if path.starts_with(PACKAGES) { job.packages = job.packages.checked_add(size).filter(|size| *size <= PACKAGE_MAX).ok_or("Installed packages exceed 128 MB for one compile")?; }
+            else { job.total = job.total.checked_add(size).filter(|size| *size <= MAX).ok_or("Project exceeds 64 MB")?; }
             let target = job.root.join(path);
             fs::create_dir_all(target.parent().ok_or("Invalid project path")?).map_err(|_| "Conflicting project paths")?;
             let file = OpenOptions::new().create_new(true).write(true).mode(0o600).open(target).map_err(|_| "Duplicate or invalid project path")?;
@@ -169,7 +177,7 @@ fn serve() -> Result<(), String> {
                     let bin = configured().ok_or("Choose a TeX installation under This computer first")?;
                     let mut job = stage.take().ok_or("No staged project")?; job.seal()?;
                     let main = text(&value, "main")?.to_string();
-                    if !safe_path(&main) || !job.files.contains_key(&main) { return Err("Invalid main source".into()); }
+                    if !safe_path(&main) || main.starts_with(PACKAGES) || !job.files.contains_key(&main) { return Err("Invalid main source".into()); }
                     let compiler = text(&value, "compiler")?.to_string();
                     if !engines(&bin).contains(&compiler.as_str()) { return Err(format!("The chosen TeX installation has no {compiler}")); }
                     let cancel = Arc::new(AtomicBool::new(false)); let flag = Arc::clone(&cancel); let out = Arc::clone(&output);
@@ -222,5 +230,18 @@ fn serve() -> Result<(), String> {
         assert!(job.chunk(&json!({"path":"main.tex","offset":1,"data":STANDARD.encode(b"source")})).is_err());
         job.chunk(&json!({"path":"main.tex","offset":0,"data":STANDARD.encode(b"source")})).unwrap();
         assert!(job.seal().is_ok());
+    }
+    #[test] fn package_tree_is_bounded_confined_and_removed() {
+        let file = |path: &str, size: usize| json!({"path": path, "size": size, "digest": "0".repeat(64)});
+        for path in [".latex-local-texmf/../main.tex", ".latex-local-texmf//x.sty", ".latex-local-texmf/a/./x.sty", "/.latex-local-texmf/x.sty"] {
+            assert!(Job::create(&json!({"files": [file("main.tex", 0), file(path, 1)]})).is_err(), "{path}");
+        }
+        let half = PACKAGE_MAX / 2 + 1;   // packages over their own bound; the project bound is separate
+        assert!(Job::create(&json!({"files": [file("main.tex", 0), file(".latex-local-texmf/a.sty", half), file(".latex-local-texmf/b.sty", half)]})).err().unwrap().contains("128 MB"));
+        assert!(Job::create(&json!({"files": [file("main.tex", MAX), file(".latex-local-texmf/a.sty", PACKAGE_MAX)]})).is_ok());
+        let many: Vec<Value> = (0..=PACKAGE_FILES).map(|i| file(&format!(".latex-local-texmf/{i}.sty"), 0)).chain([file("main.tex", 0)]).collect();
+        assert!(Job::create(&json!({"files": many})).is_err());
+        let job = Job::create(&json!({"files": [file("main.tex", 0), file(".latex-local-texmf/tex/latex/x/x.sty", 0)]})).unwrap();
+        let root = job.root.clone(); assert!(root.join(".latex-local-texmf/tex/latex/x/x.sty").is_file()); drop(job); assert!(!root.exists());
     }
 }
