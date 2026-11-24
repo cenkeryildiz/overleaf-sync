@@ -4,7 +4,8 @@
 // A lost connection wipes it too: a rejoin transfers the project again, so only unacknowledged edits outlive the loss.
 import { connectStore } from './lan-session-store.mjs';
 import { parseJoinLink, validUsername } from './lan-room.mjs';
-import { p2pSocket } from './p2p-transport.mjs';
+import { p2pSocket, OPEN_TIMEOUT } from './p2p-transport.mjs';
+import { CONNECT, FIND } from './p2p-signal.mjs';
 import { GrantGate, saveStandaloneCopy, exportCopy, copyResources } from './lan-grants.mjs';
 import { apply, invert, diff } from './lan-ot.mjs';
 import { ProjectTree, SnapshotReceiver, streamFiles, rekey, within } from './lan-transfer.mjs';
@@ -155,8 +156,11 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     const transfer = new Promise((resolve, reject) => { c.project = { resolve, reject }; }); transfer.catch(() => {});
     const socket = new (t.p2p ? P2PSocketImpl ?? p2pSocket() : WebSocketImpl)(t.url); socket.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => { // a dropped SYN (firewall, isolated Wi-Fi) never fires onerror: bound the wait
-      const unreachable = error => { clearTimeout(clock); socket.close(); reject(Error(error?.message ? `${error.message}.` : 'Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
-      const clock = setTimeout(unreachable, TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;
+      const unreachable = error => { clearTimeout(clock); socket.close(); reject(Error(error?.message ? `${error.message}.` : t.p2p
+        ? 'Cannot connect to this internet room. Keep the owner’s shared project open. This network may block direct peer connections; relay fallback is not available yet.'
+        : 'Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
+      // Internet discovery finishes before the transport's own connection timer starts.
+      const clock = setTimeout(unreachable, t.p2p ? CONNECT + FIND + OPEN_TIMEOUT + 1000 : TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;
     });
     Object.assign(c, connectStore({
       roomId: t.roomId, passcode: pass, username, resume, identity, keepOnLoss, send: bytes => socket.send(bytes), close: () => socket.close(), onMessage: onMessage(c),

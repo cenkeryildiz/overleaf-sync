@@ -160,9 +160,9 @@ export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCP
       this.#send = framed(channel, { onFrame: bytes => this.onmessage?.({ data: bytes.buffer }), onFail: () => this.close() });
       channel.onopen = () => { clearTimeout(this.#timer); this.#state = 1; this.#finder?.close(); this.#finder = null; this.onopen?.(); };
       channel.onclose = () => this.#end();
-      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') this.#fail(Error('No connection path to the room was found')); };
+      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') this.#fail(Error('No direct connection path to the room was found. This network may require relay fallback, which is not available yet')); };
       pc.onicecandidate = event => { if (event.candidate) try { this.#finder?.send('owner', { t: 'ice', c: candidate(event.candidate) }); } catch {} };
-      this.#timer = setTimeout(() => this.#fail(Error('The room did not answer')), OPEN_TIMEOUT);
+      this.#timer = setTimeout(() => this.#fail(Error('The room did not open a direct connection. Keep the owner’s shared project open. This network may require relay fallback, which is not available yet')), OPEN_TIMEOUT);
       await pc.setLocalDescription(await pc.createOffer());
       this.#finder.send('owner', { t: 'offer', sdp: pc.localDescription.sdp });
     }

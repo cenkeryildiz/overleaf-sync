@@ -8,9 +8,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startHost } from '../runtime/chrome-extension/lan-host.mjs';
 import { joinSession } from '../runtime/chrome-extension/lan-guest.mjs';
-import { memorySignaling } from '../runtime/chrome-extension/p2p-signal.mjs';
-import { p2pHelper, p2pSocket, QUEUE_LIMIT } from '../runtime/chrome-extension/p2p-transport.mjs';
-import { parseJoinLink } from '../runtime/chrome-extension/lan-room.mjs';
+import { memorySignaling, CONNECT, FIND } from '../runtime/chrome-extension/p2p-signal.mjs';
+import { p2pHelper, p2pSocket, QUEUE_LIMIT, OPEN_TIMEOUT } from '../runtime/chrome-extension/p2p-transport.mjs';
+import { parseJoinLink, roomLink, joinLink } from '../runtime/chrome-extension/lan-room.mjs';
 import { RTC, FakePC } from './p2p-fake-rtc.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -18,6 +18,29 @@ const until = async (check, ms = 5000) => { const end = Date.now() + ms; while (
 const enc = value => new TextEncoder().encode(value);
 const SOURCE = 'MARKER-SOURCE Hello Türkçe 😀\n';
 const BIG = Uint8Array.from({ length: 900_000 }, (_, i) => (i * 7919) & 255); // three room chunks, ~40 data-channel pieces
+
+test('internet discovery and connection get their full budget, with internet-specific failure text', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let closed = 0, ended = false;
+  class SilentSocket { close() { closed++; } }
+  const pending = joinSession({ link: roomLink('R'.repeat(22)), passcode: 'AAAA-AAAA-AAAA-AAAA', username: 'Ada', P2PSocketImpl: SilentSocket, retries: [] });
+  pending.catch(() => { ended = true; });
+  const rejected = assert.rejects(pending, error => /internet room/.test(error.message) && /relay fallback/.test(error.message) && !/same network/.test(error.message));
+  t.mock.timers.tick(15000); await Promise.resolve(); await Promise.resolve();
+  assert.equal(ended, false); assert.equal(closed, 0);
+  t.mock.timers.tick(CONNECT + FIND + OPEN_TIMEOUT + 1000 - 15000);
+  await rejected; assert.equal(closed, 1);
+});
+
+test('LAN connections retain their 15-second bound and same-network instructions', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let closed = 0;
+  class SilentSocket { close() { closed++; } }
+  const pending = joinSession({ link: joinLink('127.0.0.1', 12345, 'R'.repeat(22)), passcode: 'AAAA-AAAA-AAAA-AAAA', username: 'Ada', WebSocketImpl: SilentSocket, retries: [] });
+  const rejected = assert.rejects(pending, /same network/);
+  t.mock.timers.tick(14999); assert.equal(closed, 0);
+  t.mock.timers.tick(1); await rejected; assert.equal(closed, 1);
+});
 
 async function room({ finder } = {}) {
   const taps = [], signaling = finder ?? memorySignaling({ tap: (...a) => taps.push(a) });
