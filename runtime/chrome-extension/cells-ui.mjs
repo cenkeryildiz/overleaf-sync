@@ -11,6 +11,8 @@ import { toNotebook, fromNotebook, convertedPath } from './research/notebook.mjs
 export const HOST = 'com.cenker.latex_research';
 export const HINT = 'Install the helper once on this computer: in the folder you loaded this extension from, double-click "Install Sharing Helper", then quit and reopen the browser.';
 const TIMEOUT_S = 60;
+// S3-07: the owner while sharing and every participant (the project is the owner's); comes back when sharing stops
+const SHARED = 'Not run: code never runs while this project is shared on the network or opened from a shared session. Stop sharing to run it on this computer.';
 
 // ---------------------------------------------------------------- pure helpers (node-tested)
 export const languageOf = path => /\.py$/i.test(path) ? 'python' : /\.r$/i.test(path) ? 'r' : null;
@@ -103,7 +105,7 @@ export async function computerRows(context) {
       row.input.disabled = !feature.on && feature.ready !== true; // switching off always works
       row.describe(!status.sandbox ? 'Unavailable: this computer has no supported sandbox for running code' : feature.ready === true ? (feature.on ? 'On. ' : 'Off. ') + what : 'Unavailable: ' + feature.ready);
     }
-    allowed.checked = !!status.consent; consent.describe(context.shared() ? 'Code never runs while this project is shared on the network' : status.consent ? 'Allowed on this computer. Switch off to be asked again.' : 'Asked the first time you run a cell in this project');
+    allowed.checked = !!status.consent; allowed.disabled = context.shared(); consent.describe(context.shared() ? 'Code never runs while this project is shared on the network' : status.consent ? 'Allowed on this computer. Switch off to be asked again.' : 'Asked the first time you run a cell in this project');
   }
   await refresh();
   return [...rows, note];
@@ -250,7 +252,7 @@ async function insert(context, panel, path, cell, provenance, view, output, stal
   } catch (error) { panel.state(error.message); }
 }
 const controls = context => ({
-  stop: () => host().call('interrupt').catch(() => {}),
+  stop: () => kernel && host().call('interrupt').catch(() => {}),
   restart: async () => { const panel = resultsPanel(controls(context)); if (!kernel) return panel.state('No kernel is running');
     panel.state('Restarting…'); const reply = await host().call('restart').catch(error => ({ status: 'error', reason: error.message })); panel.state(reply.status === 'ok' ? 'Restarted: variables cleared' : 'Restart failed: ' + reply.reason); },
   rerun: () => runCell(context, 'rerun'),
@@ -262,7 +264,7 @@ export async function runCell(context, mode = 'cell') {
   if (busy) return panel.state('A cell is still running; Stop it first');
   if (!file || !editor) return panel.show({ title: 'Run cell', status: 'unavailable', message: 'Open a .py or .R file first.' });
   const language = languageOf(file.path); if (!language) return panel.show({ title: 'Run cell', status: 'unavailable', message: 'Run cell works in .py and .R files.' });
-  if (context.shared()) return panel.show({ title: 'Run cell', status: 'unavailable', message: 'Running code is unavailable while this project is shared on the network or opened from a shared session.' });
+  if (context.shared()) return panel.show({ title: 'Run cell', status: 'refused', message: SHARED });
   busy = true;
   try {
     if (!await ready(context, language, panel)) return;
@@ -284,7 +286,7 @@ const TOOL_FEATURE = { math: ['math-check', 'Math check'], python: ['python-anal
  *  {op:'version'} skips consent. Stop aborts `signal`, which cancels the job. Resolves with the script's own result. */
 export async function researchRun(context, { tool, request } = {}, { signal } = {}) {
   const feature = TOOL_FEATURE[tool]; if (!feature) return { status: 'error', reason: 'Unknown tool' };
-  if (context.shared()) return { status: 'unavailable', reason: 'Running code is unavailable while this project is shared on the network or opened from a shared session.' };
+  if (context.shared()) return { status: 'refused', reason: SHARED };   // decided here, before the helper is reached
   const project = context.project(), probe = request?.op === 'version' && Object.keys(request).length === 1;
   if (!probe) {
     let status; try { status = await host().call('status', { project }); } catch (error) { return { status: 'unavailable', reason: error.message }; }
