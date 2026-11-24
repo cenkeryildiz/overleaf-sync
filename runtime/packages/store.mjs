@@ -45,9 +45,9 @@ async function get(url, max, signal) {
   if (!response.ok) throw Error(`The mirror answered ${response.status} for ${url.split('/').pop()}`);
   return { response, bytes: await bounded(response.body, max, 'The download is larger than expected; nothing was installed') };
 }
-async function bounded(stream, max, message) {
+async function bounded(stream, max, message, copy = false) {   // copy: xzwasm enqueues views of its reused wasm output buffer
   const reader = stream.getReader(), parts = []; let size = 0;
-  try { for (;;) { const { done, value } = await reader.read(); if (done) break; if ((size += value.length) > max) throw Error(message); parts.push(value); } }
+  try { for (;;) { const { done, value } = await reader.read(); if (done) break; if ((size += value.length) > max) throw Error(message); parts.push(copy ? value.slice() : value); } }
   finally { reader.releaseLock?.(); }
   const out = new Uint8Array(size); let at = 0; for (const p of parts) { out.set(p, at); at += p.length; } return out;
 }
@@ -55,7 +55,7 @@ let xz = null;
 export async function unxz(bytes, max) {   // exported for the decompression-bomb check
   xz ??= import('/extension/packages/xzwasm.min.js').then(() => globalThis.xzwasm);   // UMD: sets self.xzwasm
   const { XzReadableStream } = await xz;
-  try { return await bounded(new XzReadableStream(new Blob([bytes]).stream()), max, 'The archive expands beyond the size limit; nothing was installed'); }
+  try { return await bounded(new XzReadableStream(new Blob([bytes]).stream()), max, 'The archive expands beyond the size limit; nothing was installed', true); }
   catch (error) { if (/size limit/.test(error.message)) throw error; throw Error('The archive is corrupt; nothing was installed'); }
 }
 /** The first mirror that answers: an unreachable or 5xx/404 mirror moves on to the next; other failures are final. */
@@ -112,6 +112,7 @@ export async function install(names, { signal, progress = () => {} } = {}) {
     if (!names.every(n => NAME.test(n))) throw Error('Invalid package name');
     const installed = new Map((await read('packages')).map(p => [p.name, p]));
     const plan = closure(cat.db, names, n => cat.bundled.has(n) || installed.get(n)?.current.revision === cat.db.get(n)?.revision);
+    if (!plan.install.length) return [];   // already installed at this revision: no download, no write
     if (plan.blocked.length) throw Error('Cannot install: ' + plan.blocked.map(b => `${b.name} (${b.reason})`).join('; '));
     const staged = [];
     for (const [i, pkg] of plan.install.entries()) {
@@ -121,7 +122,7 @@ export async function install(names, { signal, progress = () => {} } = {}) {
       const { value: { bytes } } = await anyMirror([cat.mirror, ...MIRRORS.filter(m => m !== cat.mirror)], base => get(base + path, max, signal), signal);   // the list's mirror first; the checksum decides either way
       if (bytes.length !== pkg.size || await sha512(bytes) !== pkg.sha512) throw Error(`${pkg.name} on the mirror is not the version in the package list (it may have been updated); refresh the package list and try again. Nothing was installed.`);
       const entries = readTar(await unxz(bytes, LIMIT.unpacked)), wanted = new Set(pkg.runfiles);
-      const files = entries.filter(e => e.path.startsWith('texmf-dist/') && wanted.has(e.path.slice(11))).map(e => ({ path: e.path.slice(11), data: e.data }));
+      const files = entries.map(e => ({ path: e.path.replace(/^texmf-dist\//, ''), data: e.data })).filter(f => wanted.has(f.path));   // relocated packages (most) omit texmf-dist/
       if (files.length !== wanted.size) throw Error(`${pkg.name}: the archive does not contain exactly the files the package list names; nothing was installed`);
       staged.push({ name: pkg.name, revision: pkg.revision, sha512: pkg.sha512, license: pkg.license, size: files.reduce((s, f) => s + f.data.length, 0), files });
     }

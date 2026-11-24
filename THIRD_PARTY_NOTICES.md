@@ -26,6 +26,6 @@ Standalone packaging modifies the pinned CE+ CodeMirror bundle's input sanitizer
 
 ## TeX package installation (Stage 5)
 
-- `extension/packages/xzwasm.min.js`: xzwasm 0.1.2 by Steve Sanderson (MIT), containing xz-embedded (public domain) and walloc (MIT, Igalia, S.L.). Full notice: `extension/packages/XZWASM-LICENSE.txt`.
+- `extension/packages/xzwasm.min.js`: xzwasm 0.1.2 by Steve Sanderson (MIT), containing xz-embedded (public domain) and walloc (MIT, Igalia, S.L.). Modified: the embedded WebAssembly is decoded with `atob` instead of `fetch(data:)`, which the extension CSP blocks. Full notice: `extension/packages/XZWASM-LICENSE.txt`.
 - `extension/packages/texlive.asc`: the TeX Live project's public signing key, used only to verify the downloaded package list.
 - Packages a user installs from TeX Live are downloaded on request from CTAN mirrors and stay under their own licences, shown before installation; packages without a redistributable licence are refused.

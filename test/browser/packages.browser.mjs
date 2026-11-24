@@ -25,6 +25,8 @@ const manifest = JSON.parse(readFileSync(join(repository, 'runtime/chrome-extens
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 const results = [], measures = {}, errors = [], requests = [], note = (name, detail = '') => { results.push(name); console.log('ok -', name, detail); };
 const until = async (check, what, ms = 30000) => { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await check(); if (last) return last; } catch (error) { last = error; } await new Promise(r => setTimeout(r, 100)); } throw Error('Timed out: ' + what + (last instanceof Error ? ' (' + last.message + ')' : last ? ' (last: ' + String(last).slice(0, 400) + ')' : '')); };
+const sample = async page => { measures.peakHeapBytes = Math.max(measures.peakHeapBytes ?? 0, await page.evaluate(() => performance.memory?.usedJSHeapSize ?? 0)); };
+const idbBytes = page => page.evaluate(async () => (await navigator.storage.estimate()).usageDetails?.indexedDB ?? null);
 const mirrorRequests = () => requests.filter(r => /^https:/.test(r.url));
 
 const editorOf = page => page.getByRole('textbox', { name: /^Source Editor/ });
@@ -33,8 +35,9 @@ const files = page => page.evaluate(async () => { const id = document.querySelec
 const status = page => page.locator('#local-status').textContent();
 const pdfText = page => page.locator('.textLayer').allTextContents().then(list => list.join(' '));
 async function compile(page, expect, what) {
+  await page.locator('#local-status').evaluate(node => { node.textContent = ''; });   // so a warm compile is timed to its own result
   const t = Date.now(); await page.getByRole('button', { name: 'Recompile', exact: true }).click();
-  await until(async () => expect === 'fail' ? /Previous PDF retained/.test(await status(page)) : (await pdfText(page)).includes(expect) && /Compiled and saved/.test(await status(page)), what, 180000);
+  await until(async () => { const now = await status(page); if (expect === 'fail' ? /Previous PDF retained/.test(now) : (await pdfText(page)).includes(expect) && /Compiled and saved/.test(now)) return true; throw Error(now); }, what, 180000);
   return Date.now() - t;
 }
 const packagesTab = async page => {
@@ -83,8 +86,8 @@ try {
   await until(async () => { const t = await note_(page).innerText(); if (!/signature is not valid for the TeX Live key/.test(t)) throw Error(t || '(empty)'); return true; }, 'bad signature refused', 60000); await context.unroute('**/texlive.tlpdb.sha512.asc');
   assert.ok(await pane(page).getByRole('button', { name: 'Download list' }).isVisible(), 'still no list'); note('PKG-T03: a list with a broken signature is refused and not stored');
 
-  const t0 = Date.now(), bytes0 = measures.downloadedBytes ?? 0; await pane(page).getByRole('button', { name: 'Retry' }).click();
-  await until(async () => /signature checked with the TeX Live key/.test(await pane(page).locator('#setting-packages-catalog').innerText()), 'catalog downloaded', 180000);
+  measures.indexedDbBytesBefore = await idbBytes(page); const t0 = Date.now(), bytes0 = measures.downloadedBytes ?? 0; await pane(page).getByRole('button', { name: 'Retry' }).click();
+  await until(async () => { await sample(page); if (/signature checked with the TeX Live key/.test(await pane(page).locator('#setting-packages-catalog').innerText())) return true; throw Error(await note_(page).innerText()); }, 'catalog downloaded', 180000);
   measures.catalogMs = Date.now() - t0; measures.catalogBytes = (measures.downloadedBytes ?? 0) - bytes0;
   const row = async file => until(async () => { const t = await requirement(page, file).innerText(); return !/unknown: Refresh/.test(t) && t; }, file + ' resolved');
   assert.match(await row('accents.sty'), /missing — package accents, \d+ KB, licence mit/); assert.match(await row('algxpar.sty'), /missing — package algxpar with \d+ dependenc/);
@@ -95,7 +98,7 @@ try {
   await context.route('**/archive/accents.tar.xz', async route => { const r = await route.fetch(), b = Buffer.from(await r.body()); b[100] ^= 1; await route.fulfill({ response: r, body: b }); });
   await requirement(page, 'accents.sty').getByRole('button', { name: 'Install' }).click(); await requirement(page, 'accents.sty').getByRole('button', { name: 'Confirm install' }).click();
   await until(async () => /not the version in the package list/.test(await note_(page).innerText()), 'tampered archive refused', 60000); await context.unroute('**/archive/accents.tar.xz');
-  assert.deepEqual(await installed(page), ['Nothing installed yet.']); note('PKG-T03: altered archive bytes are refused; nothing installed');
+  assert.deepEqual(await installed(page), []); assert.match(await pane(page).locator('ul[aria-label="Installed packages"]').innerText(), /Nothing installed yet/); note('PKG-T03: altered archive bytes are refused; nothing installed');
   await context.setOffline(true); await requirement(page, 'accents.sty').getByRole('button', { name: 'Install' }).click(); await requirement(page, 'accents.sty').getByRole('button', { name: 'Confirm install' }).click();
   await until(async () => /Could not reach a TeX Live mirror/.test(await note_(page).innerText()), 'offline refused'); await context.setOffline(false); note('PKG-T03: offline install is refused with the reason');
   let release; await context.route('**/archive/accents.tar.xz', async route => { await new Promise(r => { release = r; }); await route.continue().catch(() => {}); });
@@ -103,7 +106,7 @@ try {
   await until(async () => /Downloading accents/.test(await note_(page).innerText()), 'download started');
   const second = await page.evaluate(() => import('/extension/packages/store.mjs').then(m => m.install(['algxpar'])).then(() => 'installed', e => e.message)); assert.match(second, /Another installation is running/);
   await note_(page).getByRole('button', { name: 'Cancel' }).click(); release?.(); await until(async () => /Canceled; nothing was changed/.test(await note_(page).innerText()), 'cancel');
-  await context.unroute('**/archive/accents.tar.xz'); assert.deepEqual(await installed(page), ['Nothing installed yet.']); note('PKG-T03: a second install is refused while one runs; Cancel leaves nothing installed');
+  await context.unroute('**/archive/accents.tar.xz'); assert.deepEqual(await installed(page), []); assert.match(await pane(page).locator('ul[aria-label="Installed packages"]').innerText(), /Nothing installed yet/); note('PKG-T03: a second install is refused while one runs; Cancel leaves nothing installed');
   { const other = await context.newPage(); await other.goto(page.url()); await editorOf(other).waitFor({ timeout: 60000 });
     await context.route('**/archive/algxpar.tar.xz', () => {});   // never answers: the tab closes mid-install
     other.evaluate(() => import('/extension/packages/store.mjs').then(m => m.install(['algxpar']))).catch(() => {});
@@ -118,7 +121,7 @@ try {
   await pane(page).locator('#setting-packages-needed').getByRole('button', { name: 'Install all missing' }).click();
   const plan = await pane(page).locator('#setting-packages-needed').innerText(); assert.match(plan, /Install accents, algxpar, .*download\)\?/);
   await pane(page).locator('#setting-packages-needed').getByRole('button', { name: 'Confirm install' }).click();
-  await until(async () => (await installed(page)).includes('algxpar') && !(await note_(page).innerText()), 'installed', 180000);
+  await until(async () => { await sample(page); if ((await installed(page)).includes('algxpar') && !(await note_(page).innerText())) return true; throw Error(await note_(page).innerText()); }, 'installed', 180000);
   measures.installMs = Date.now() - t1; measures.installBytes = (measures.downloadedBytes ?? 0) - b1; const list = await installed(page);
   assert.ok(list.includes('accents') && list.includes('algxpar') && list.length >= 3, list.join(',')); note('PKG-T02: Install all missing installs accents, algxpar and its missing dependencies as one set', `${list.join(', ')}; ${measures.installMs} ms, ${measures.installBytes} B`);
   assert.match(await requirement(page, 'accents.sty').innerText(), /installed \(accents r\d+\)/);
@@ -126,8 +129,20 @@ try {
   await setDoc(page, works); await until(async () => (await files(page))['main.tex'] === works, 'saved');
   measures.firstPackagedCompileMs = await compile(page, 'PKGMARK', 'compile with installed packages');
   assert.equal(await page.locator('#olx-package-hint').count(), 0, 'hint cleared after success'); note('the project compiles with the installed packages', `${measures.firstPackagedCompileMs} ms`);
+  measures.warmPackagedMs = [await compile(page, 'PKGMARK', 'warm packaged'), await compile(page, 'PKGMARK', 'warm packaged')];
+  measures.indexedDbBytesAfter = await idbBytes(page); measures.storedBytes = await page.evaluate(() => import('/extension/packages/store.mjs').then(m => m.installed()).then(l => l.reduce((s, p) => s + p.size, 0)));
+  { const stamp = () => page.evaluate(() => new Promise(r => { const o = indexedDB.open('olx-packages'); o.onsuccess = () => { const q = o.result.transaction('packages').objectStore('packages').getAll(); q.onsuccess = () => { r(q.result.map(p => p.name + ':' + p.current.installedAt).sort().join()); o.result.close(); }; }; }));
+    const before = mirrorRequests().length, was = await stamp();
+    const again = await page.evaluate(() => import('/extension/packages/store.mjs').then(m => m.install(['accents', 'algxpar'])));
+    assert.deepEqual(again, []); assert.equal(mirrorRequests().length, before, 'repeat install downloads nothing'); assert.equal(await stamp(), was, 'repeat install writes nothing');
+    note('PKG-T06: installing the same packages again makes no request and no storage write'); }
   const before = mirrorRequests().length; await context.setOffline(true); await page.reload(); await editorOf(page).waitFor({ timeout: 60000 });
   await compile(page, 'PKGMARK', 'offline compile after reload'); assert.equal(mirrorRequests().length, before, 'nothing fetched offline'); note('PKG-T02: offline, after a reload, the project still compiles');
+  { const close = await packagesTab(page); await pane(page).getByRole('button', { name: 'Refresh' }).click();
+    await until(async () => /Could not reach a TeX Live mirror \(offline\?\); nothing was changed/.test(await note_(page).innerText()), 'offline refresh refused');
+    assert.match(await pane(page).locator('#setting-packages-catalog').innerText(), /signature checked/, 'the saved list stays'); await close();
+    assert.ok((await pdfText(page)).includes('PKGMARK'), 'previous PDF still shown'); assert.equal((await files(page))['main.tex'], works, 'source unchanged');
+    note('PKG-T03: an offline Refresh is refused with the reason; list, source and PDF stay'); }
   await context.setOffline(false);
 
   // ---- PKG-T05/T06: another project reuses the stored packages; nothing downloads; warm compile cost
@@ -138,7 +153,6 @@ try {
   measures.warmRegression = +(median(packagedWarm) / median(plainWarm) - 1).toFixed(3); note('warm compile of the same plain document with packages installed', `median ${median(plainWarm)} → ${median(packagedWarm)} ms (${(measures.warmRegression * 100).toFixed(1)}%, 3 samples each)`);
   { const close = await packagesTab(page); const count = (await installed(page)).length; await pane(page).locator('li', { has: page.locator('code', { hasText: /^accents$/ }) }).getByRole('button', { name: 'Remove' }).click();
     await until(async () => !(await installed(page)).includes('accents'), 'removed'); assert.equal((await installed(page)).length, count - 1); await close(); note('Remove deletes one package; the others stay'); }
-  measures.storedBytes = await page.evaluate(() => import('/extension/packages/store.mjs').then(m => m.installed()).then(l => l.reduce((s, p) => s + p.size, 0)));
   assert.deepEqual(errors, [], 'no page errors');
   console.log(JSON.stringify({ packagesBrowser: { passed: results.length, measures } }));
 } catch (error) { console.log('page errors:', errors); throw error; } finally {

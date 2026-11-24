@@ -77,4 +77,6 @@ test('every mirror the store may contact is named in the manifest, and nothing e
   assert.ok(MIRRORS.every(m => m.startsWith('https://') && m.endsWith('/systems/texlive/tlnet')));
   const sw = readFileSync(new URL('../runtime/browser-recovery/recovery-sw.template.js', import.meta.url), 'utf8');
   assert.deepEqual(JSON.parse(sw.match(/const MIRROR_ORIGINS = new Set\((\[[^\]]*\])\)/)[1]), origins, 'the service worker passes exactly these origins through');
+  const page = readFileSync(new URL('../runtime/browser-recovery/native-workspace.mjs', import.meta.url), 'utf8');
+  assert.deepEqual(JSON.parse(page.match(/const MIRROR_ORIGINS = new Set\((\[[^\]]*\])\)/)[1]), origins, 'the workspace fetch passes exactly these origins through');
 });

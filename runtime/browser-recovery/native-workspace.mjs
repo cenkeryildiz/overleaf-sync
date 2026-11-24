@@ -41,7 +41,7 @@ const compiler = new LocalCompiler(), editors = new Map();
 const packageSet = () => import('/extension/packages/store.mjs').then(m => m.compileSet()).catch(() => ({ files: [], manifest: [] }));
 const packageHint = log => import('/extension/packages-ui.mjs').then(m => m.compileHint(log)).catch(() => {});
 // Unchanged when nothing is installed, so PDFs saved before this feature stay current.
-const sourceKey = async (list, packages) => (await fingerprint(project, list)) + (packages.manifest.length ? ':' + packages.manifest.map(p => `${p.name}@${p.revision}`).join(',') : '');
+const sourceKey = (list, packages) => fingerprint(project, packages.manifest.length ? [...list, { path: '.texmf/manifest', content: JSON.stringify(packages.manifest) }] : list);   // stays a 64-hex digest (project-store checks it)
 let compileLog = 'Compiled locally.\n';
 // Native CE+ reuses one editor view for every document: read each document's own text, never another file's.
 const textOf = editor => editor?.container.doc?.getSnapshot?.() ?? (editor && editor === active ? editor.facade.getValue() : undefined);
@@ -288,6 +288,7 @@ try {
     return result;
   };
   const originalFetch = globalThis.fetch.bind(globalThis);
+  const MIRROR_ORIGINS = new Set(["https://ftp.fau.de", "https://mirror.init7.net", "https://ftp.snt.utwente.nl", "https://ctan.mirror.garr.it", "https://mirrors.mit.edu", "https://ctan.math.illinois.edu", "https://mirror.aarnet.edu.au", "https://mirrors.tuna.tsinghua.edu.cn"]);
   const change = async action => {
     if (!joined) await flush(); // a participant's copy is memory only, and its pending edits may wait on the owner, who waits on this change
     const saved = await api.change(project, [...files.values()], action);
@@ -366,6 +367,8 @@ try {
   const localFetch = async (input, init) => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
     const method = init?.method || (input instanceof Request ? input.method : 'GET');
+    // TEX-PKG: GET to the TeX Live mirrors (store.mjs MIRRORS, manifest host_permissions) is the one exception; checked against the signed list.
+    if (method === 'GET' && MIRROR_ORIGINS.has(url.origin)) return originalFetch(input, init);
     if (url.origin !== location.origin) return new Response('External requests disabled in Local only mode', { status: 503 });
     if (globalThis.overleafStandalone && url.pathname.startsWith(`/recovery/native-output/${project.id}/`) && url.pathname.endsWith('/output.log')) return new Response(compileLog, { headers: { 'Content-Type': 'text/plain' } });
     if (joined && url.pathname.startsWith(`/recovery/native-output/${project.id}/${project.outputDigest}/`)) { // shared session: the PDF lives in this tab only

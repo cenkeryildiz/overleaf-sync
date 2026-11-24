@@ -47,3 +47,16 @@ importScripts('busytex_worker.original.js');
 // texmf_local roots to TEXMFDIST, and the page writes that tree's ls-R. The SDK always sends texmf_local: [].
 const originalMessage = self.onmessage;
 self.onmessage = event => originalMessage(event.data?.busytex_wasm ? { data: { ...event.data, texmf_local: ['/home/web_user/project_dir/.texmf'] } } : event);
+// The pipeline loads an on-demand bundle (recommended/extra) only for packages main.tex names, so a bundled package that
+// only an installed package requires (algxpar -> ragged2e) would be missing: resolve those names too.
+if (typeof BusytexDataPackageResolver === 'function') {
+  const resolve = BusytexDataPackageResolver.prototype.resolve, text = new TextDecoder();
+  BusytexDataPackageResolver.prototype.resolve = async function (files, main, bundles) {
+    const result = await resolve.call(this, files, main, bundles);
+    const names = new Set(files.filter(f => f.path.startsWith('.texmf/') && /\.(?:sty|cls)$/.test(f.path)).flatMap(f => [...(typeof f.contents === 'string' ? f.contents : text.decode(f.contents)).matchAll(/\\(?:RequirePackage|usepackage)(?:WithOptions)?\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].flatMap(m => m[1].split(',').map(s => s.trim()))));
+    if (!names.size) return result;
+    const more = await resolve.call(this, [{ path: main, contents: [...names].map(n => `\\usepackage{${n}}`).join('\n') }, ...files.filter(f => f.path !== main)], main, bundles);
+    for (const [name, entry] of Object.entries(more)) if (!(name in result) && entry.source && entry.source !== 'local') result[name] = entry;   // unknown names never force loading every bundle
+    return result;
+  };
+}
