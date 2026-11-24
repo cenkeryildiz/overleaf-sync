@@ -7,11 +7,13 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { memorySignaling } from '../../runtime/chrome-extension/p2p-signal.mjs';
+import { BROKERS } from '../../runtime/chrome-extension/p2p-providers.mjs';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const extension = resolve(process.env.LATEX_EXTENSION_PATH), manifest = JSON.parse(readFileSync(join(extension, 'manifest.json')));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(b => String.fromCharCode(97 + (b >> 4), 97 + (b & 15))).join('');
 const root = `chrome-extension://${id}`, work = mkdtempSync(join(tmpdir(), 'latex-p2p-native-')), hub = memorySignaling(), contexts = [], external = [];
 const errors = [];
+const realServices = process.env.P2P_EXTERNAL === '1', approved = new Set(BROKERS.map(url => new URL(url).origin)), signalingFrames = [], services = new Set();
 const editor = page => page.getByRole('textbox', { name: /^Source Editor/ });
 const text = page => editor(page).evaluate(node => node.cmView.view.state.doc.toString());
 const append = (page, value) => editor(page).evaluate((node, value) => { const view = node.cmView.view; view.dispatch({ changes: { from: view.state.doc.length, insert: value } }); }, value);
@@ -20,11 +22,12 @@ async function profile(name) {
   const context = await chromium.launchPersistentContext(join(work, name), { headless: true, executablePath: process.env.EXTENSION_CHROME_PATH,
     viewport: { width: 1600, height: 1000 }, ignoreDefaultArgs: ['--disable-extensions'], args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension] });
   contexts.push(context);
-  await context.route(/^(https?|wss?):/, route => { external.push(new URL(route.request().url()).origin); return route.abort(); });
-  await context.addInitScript(() => { globalThis.LATEX_P2P_TEST_SIGNAL = true; const NativeRTC = RTCPeerConnection; globalThis.RTCPeerConnection = class extends NativeRTC { constructor(config) { super({ ...config, iceServers: [] }); } }; });
+  await context.route(/^(https?|wss?):/, route => { const origin = new URL(route.request().url()).origin; if (realServices && approved.has(origin)) return route.continue(); external.push(origin); return route.abort(); });
+  if (!realServices) await context.addInitScript(() => { globalThis.LATEX_P2P_TEST_SIGNAL = true; const NativeRTC = RTCPeerConnection; globalThis.RTCPeerConnection = class extends NativeRTC { constructor(config) { super({ ...config, iceServers: [] }); } }; });
   const page = await context.newPage(), open = new Map(); page.setDefaultTimeout(45000);
   context.on('close', () => { for (const endpoint of open.values()) endpoint.close(); open.clear(); });
   page.on('pageerror', error => errors.push(error.message));
+  page.on('websocket', socket => { services.add(new URL(socket.url()).origin); socket.on('framesent', frame => signalingFrames.push(Buffer.from(frame.payload))); });
   const deliver = (handle, kind, from, message) => page.evaluate(([h, k, f, m]) => globalThis.__p2pDeliver?.(h, k, f, m), [handle, kind, from, message]).catch(() => {});
   await page.exposeBinding('__p2pSignal', async (_, op, args) => {
     if (op === 'open') { open.set(args.handle, await hub.open({ roomId: args.roomId, role: args.role, onSignal: (from, m) => deliver(args.handle, 'signal', from, m), onState: up => deliver(args.handle, 'state', null, up) })); return true; }
@@ -76,7 +79,10 @@ try {
   await append(guest, '\n% after handover');
   assert.equal(await text(guest), expected + '\n% after handover');
   assert.deepEqual(external, []);
+  for (const service of services) assert(approved.has(service));
+  for (const frame of signalingFrames) for (const secret of [passcode, passcode.replaceAll('-', ''), original, 'Guest']) assert.equal(frame.includes(Buffer.from(secret)), false, 'Plaintext in signaling frame');
   console.log(JSON.stringify({ nativeJoin: true, exactSource: true, editsBothWays: true, ownershipTransfer: true, coordinatorHandover: true,
-    noGroupCompile: true, noExternal: true, joinMs, handoverMs: Math.round(performance.now() - handover) }));
+    noGroupCompile: true, noUnapprovedNetwork: true, realServices, services: [...services], signalingFrames: signalingFrames.length,
+    signalingBytes: signalingFrames.reduce((n, frame) => n + frame.length, 0), plaintextAbsent: true, joinMs, handoverMs: Math.round(performance.now() - handover) }));
 } catch (error) { console.error('Failed stage:', stage); throw error; }
 finally { for (const context of contexts) await context.close().catch(() => {}); rmSync(work, { recursive: true, force: true }); }
