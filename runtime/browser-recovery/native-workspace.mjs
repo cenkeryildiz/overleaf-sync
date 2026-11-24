@@ -36,6 +36,12 @@ const status = (text, error = false) => { const node = document.querySelector('#
 }
 let project, files, active, pending = Promise.resolve(), failure, nav, controller, outputDigest;
 const compiler = new LocalCompiler(), editors = new Map();
+// TEX-PKG: installed packages (store.mjs) join each compile as files; their manifest is part of the source key, so a PDF
+// made with other package versions is not shown as current. A failed compile that names missing files offers Install.
+const packageSet = () => import('/extension/packages/store.mjs').then(m => m.compileSet()).catch(() => ({ files: [], manifest: [] }));
+const packageHint = log => import('/extension/packages-ui.mjs').then(m => m.compileHint(log)).catch(() => {});
+// Unchanged when nothing is installed, so PDFs saved before this feature stay current.
+const sourceKey = async (list, packages) => (await fingerprint(project, list)) + (packages.manifest.length ? ':' + packages.manifest.map(p => `${p.name}@${p.revision}`).join(',') : '');
 let compileLog = 'Compiled locally.\n';
 // Native CE+ reuses one editor view for every document: read each document's own text, never another file's.
 const textOf = editor => editor?.container.doc?.getSnapshot?.() ?? (editor && editor === active ? editor.facade.getValue() : undefined);
@@ -255,12 +261,13 @@ try {
     const research = () => import('/extension/cells-ui.mjs');
     const current = () => { const file = active && [...files.values()].find(item => item.doc === active.container.doc_id); return file && { path: file.path }; };
     const context = { project: () => project.id, clientProject: () => clientProject, shared: () => !!lan || !!joined, file: current, view: () => document.querySelector('.cm-content')?.cmView?.view,
-      text: path => { const file = files.get(path); return file?.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined; }, exists: path => files.has(path) };
+      text: path => { const file = files.get(path); return file?.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined; }, exists: path => files.has(path),
+      sources: () => [...files.values()].map(file => ({ path: file.path, content: file.doc ? textOf(editors.get(file.doc)) ?? file.content : undefined })), compileLog: () => compileLog, compiling: () => !!controller };
     const inFile = pattern => event => event.target instanceof Element && !!event.target.closest('.cm-editor') && pattern.test(current()?.path ?? '');
     const inCode = inFile(/\.(?:py|r)$/i), inCells = inFile(/\.(?:py|r|ipynb)$/i);   // .ipynb: right-click converts; it never runs
     addEventListener('contextmenu', event => { if (inCells(event)) { event.preventDefault(); research().then(m => m.cellMenu(context, event)); } }, true);
     addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && inCode(event)) { event.preventDefault(); event.stopPropagation(); research().then(m => m.runCell(context)); } }, true);
-    addEventListener('click', () => requestAnimationFrame(() => { if (document.querySelector('.ide-settings-tab-nav') && !document.getElementById('ide-settings-tabs-tab-this-computer')) import('/extension/this-computer.mjs').then(m => m.attach(context)); }), true);
+    addEventListener('click', () => requestAnimationFrame(() => { if (document.querySelector('.ide-settings-tab-nav') && !document.getElementById('ide-settings-tabs-tab-this-computer')) import('/extension/this-computer.mjs').then(m => { m.attach(context); m.attach(context, { id: 'packages', label: 'Packages', symbol: 'inventory_2', load: () => import('/extension/packages-ui.mjs').then(p => p.packageRows(context)) }); }); }), true);
     lanEvents.onSharing = () => research().then(m => m.revoke(project.id));
     // transport for research-ui.mjs (math check, analyses); the helper is reached only when that UI runs something
     globalThis.overleafResearchRun = (job, options) => research().then(m => m.researchRun(context, job, options));
@@ -471,7 +478,7 @@ try {
           await flush();
           const saved = await api.read(project.id);
           if ([...files.values()].some(file => saved.files.find(other => other.path === file.path)?.revision !== file.revision)) throw Error('Another tab changed this project. Reload before compiling.');
-          const digest = await fingerprint(project, saved.files);
+          const packages = await packageSet(), digest = await sourceKey(saved.files, packages);   // installed TeX packages are part of what a PDF was made from
           // The editor's automatic compile on open: the saved PDF was compiled from exactly these sources, so show it.
           if (attempt === 0 && url.searchParams.get('auto_compile') === 'true' && project.pdf && project.synctex && project.outputDigest === digest) {
             const savedNav = await navigation(project.synctex, project, [...files.values()]).catch(() => undefined);
@@ -481,24 +488,24 @@ try {
             }
           }
           status('Compiling on this device…');
-          const result = await (globalThis.overleafGroupCompile?.(project, saved.files, text => status(text), controller.signal) ?? compiler.compile(project, saved.files, text => status(text), controller.signal)); // stage 3: the group's TeX when chosen
+          const result = await (globalThis.overleafGroupCompile?.(project, saved.files, text => status(text), controller.signal) ?? compiler.compile(project, [...saved.files, ...packages.files], text => status(text), controller.signal)); // stage 3: the group's TeX when chosen
           compileLog = result.log || 'Compiled locally.\n';
           await flush();
           if (controller.signal.aborted) throw Error('Source changed during compilation. Compile again.');
           // Typing (or a participant's edit while sharing) during the compile: compile the latest source instead of reporting an error.
-          if (digest !== await fingerprint(project, [...files.values()])) { if (attempt < 3) { status('Source changed; compiling the latest version…'); continue; } throw Error('Source changed during compilation. Compile again.'); }
+          if (digest !== await sourceKey([...files.values()], packages)) { if (attempt < 3) { status('Source changed; compiling the latest version…'); continue; } throw Error('Source changed during compilation. Compile again.'); }
           project = await api.output(project, saved.files, new Blob([result.pdf], { type: 'application/pdf' }), result.synctex, digest);
           nav = await navigation(project.synctex, project, [...files.values()]); outputDigest = digest;
-          status('Compiled and saved in this browser.');
+          status('Compiled and saved in this browser.'); packageHint(null);
           return Response.json({ status: 'success', outputFiles: outputFiles(),
             compileGroup: 'standard', stats: {}, timings: {}, outputFilesArchive: null });
         }
-      } catch (error) { compileLog = error.log || error.message; status(error.message + ' Previous PDF retained.', true); return Response.json({ status: 'error', outputFiles: outputFiles() }); }
+      } catch (error) { compileLog = error.log || error.message; status(error.message + ' Previous PDF retained.', true); packageHint(compileLog); return Response.json({ status: 'error', outputFiles: outputFiles() }); }
       finally { controller = undefined; }
     }
     if (url.pathname.startsWith(`/project/${clientProject}/sync/`)) {
       const saved = await api.read(project.id);
-      if (!nav || outputDigest !== await fingerprint(project, saved.files)) return Response.json({ error: 'Recompile current source first' }, { status: 409 });
+      if (!nav || outputDigest !== await sourceKey(saved.files, await packageSet())) return Response.json({ error: 'Recompile current source first' }, { status: 409 });
       if (url.pathname.endsWith('/code')) {
         const path = url.searchParams.get('file')?.split('/').filter(part => part && part !== '.').join('/'), node = forward(nav, path, Number(url.searchParams.get('line')));
         return node ? Response.json({ pdf: [{ page: node.page, h: node.x, v: node.y, width: node.width, height: node.height }] }) : Response.json({ error: 'No location' }, { status: 404 });

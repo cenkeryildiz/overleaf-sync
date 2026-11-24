@@ -3,7 +3,6 @@
 // Each optional tool contributes rows from its own module; nothing here talks to a helper. Add a module to ROWS to merge.
 // A row module exports `computerRows(context)` -> Promise<HTMLElement[]>, built with `settingRow` for the native look.
 export const ROWS = ['/extension/cells-ui.mjs', '/extension/lan-compile-ui.mjs'];
-const TAB = 'ide-settings-tabs-tab-this-computer', PANE = 'ide-settings-tabs-tabpane-this-computer';
 
 /** One row in the Settings dialog's own markup: title, description, control on the right. */
 export function settingRow({ id, title, description = '', control }) {
@@ -16,13 +15,15 @@ export function settingRow({ id, title, description = '', control }) {
 }
 
 /** Adds the tab once the Settings dialog is open (called after any click; cheap when the dialog is absent). */
-export function attach(context) {
+/** Adds a tab to the open Settings dialog once: `load(context)` returns its rows the first time the tab is selected. */
+export function attach(context, { id = 'this-computer', label = 'This computer', symbol = 'computer', load = loadRows } = {}) {
+  const TAB = `ide-settings-tabs-tab-${id}`, PANE = `ide-settings-tabs-tabpane-${id}`;
   const nav = document.querySelector('.ide-settings-tab-nav'), content = document.querySelector('.ide-settings-tab-content');
   if (!nav || !content || document.getElementById(TAB)) return;
   const tab = document.createElement('button'); tab.type = 'button'; tab.id = TAB; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', PANE); tab.setAttribute('aria-selected', 'false'); tab.tabIndex = -1;
   tab.className = 'ide-settings-tab-link ide-settings-tab-link-button nav-link';
-  const icon = document.createElement('span'); icon.className = 'material-symbols ide-settings-tab-link-icon unfilled'; icon.setAttribute('aria-hidden', 'true'); icon.translate = false; icon.textContent = 'computer';
-  const name = document.createElement('span'); name.textContent = 'This computer'; tab.append(icon, name, Object.assign(document.createElement('div'), { className: 'flex-grow-1' }));
+  const icon = document.createElement('span'); icon.className = 'material-symbols ide-settings-tab-link-icon unfilled'; icon.setAttribute('aria-hidden', 'true'); icon.translate = false; icon.textContent = symbol;
+  const name = document.createElement('span'); name.textContent = label; tab.append(icon, name, Object.assign(document.createElement('div'), { className: 'flex-grow-1' }));
   const pane = document.createElement('div'); pane.id = PANE; pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', TAB); pane.className = 'tab-pane'; pane.hidden = true;
   const section = document.createElement('div'); section.className = 'ide-settings-section'; pane.append(section);
   nav.querySelector('a.ide-settings-tab-link-anchor') ? nav.querySelector('a.ide-settings-tab-link-anchor').before(tab) : nav.append(tab); content.append(pane);
@@ -36,9 +37,15 @@ export function attach(context) {
     for (const other of nav.querySelectorAll('[role=tab].active')) if (other !== tab) { other.classList.remove('active'); other.setAttribute('aria-selected', 'false'); restore.push(() => { other.classList.add('active'); other.setAttribute('aria-selected', 'true'); }); }
     tab.classList.add('active'); tab.setAttribute('aria-selected', 'true'); pane.hidden = false; pane.classList.add('active'); // Bootstrap shows only .tab-pane.active
     if (loaded) return; loaded = true;
-    for (const url of ROWS) {
-      try { section.append(...await (await import(url)).computerRows(context)); }
-      catch (error) { const { row } = settingRow({ id: 'computer-' + section.children.length, title: 'Unavailable', description: error.message, control: document.createElement('span') }); section.append(row); }
-    }
+    section.append(...await load(context));
   });
+}
+
+async function loadRows(context) {
+  const rows = [];
+  for (const url of ROWS) {
+    try { rows.push(...await (await import(url)).computerRows(context)); }
+    catch (error) { rows.push(settingRow({ id: 'computer-' + rows.length, title: 'Unavailable', description: error.message, control: document.createElement('span') }).row); }
+  }
+  return rows;
 }

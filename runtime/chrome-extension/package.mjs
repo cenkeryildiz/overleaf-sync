@@ -35,7 +35,9 @@ for (const name of readdirSync(resolve(repository, 'runtime/browser-recovery')))
     cpSync(resolve(repository, 'runtime/browser-recovery', name), join(destination, 'recovery', name));
 }
 const extension = join(destination, 'extension'); mkdirSync(extension);
-for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'research-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs', 'cells-ui.mjs']) cpSync(join(source, name), join(extension, name));
+for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'research-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs', 'cells-ui.mjs', 'packages-ui.mjs']) cpSync(join(source, name), join(extension, name));
+// TEX-PKG: catalog/store/installer modules, the pinned TeX Live key and the vendored xz decoder with its licence
+mkdirSync(join(extension, 'packages')); for (const name of ['store.mjs', 'tlpdb.mjs', 'tar.mjs', 'openpgp.mjs', 'detect.mjs', 'xzwasm.min.js', 'XZWASM-LICENSE.txt', 'texlive.asc']) cpSync(resolve(repository, 'runtime/packages', name), join(extension, 'packages', name));
 mkdirSync(join(extension, 'research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(resolve(repository, 'runtime/research', name), join(extension, 'research', name));
 const templatePath = join(extension, 'native-template.json'), template = JSON.parse(readFileSync(templatePath, 'utf8'));
 const languages = template.meta.find(item => item.name === 'ol-languages');
@@ -47,6 +49,9 @@ const editorPath = join(destination, 'js', assetName);
 writeFileSync(editorPath, patchEditorUnicode(readFileSync(editorPath, 'utf8')));
 for (const name of Object.keys(pathnameAssets)) { const path = join(destination, 'js', name); writeFileSync(path, patchPathnameUnicode(name, readFileSync(path, 'utf8'))); }
 for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync(join(repository, name), join(destination, name));
+{ // the image's service worker with this branch's template (TEX-PKG mirror exception), keeping the image's asset manifest
+  const sw = join(destination, 'recovery/recovery-sw.js'), assets = readFileSync(sw, 'utf8').match(/const manifest = (.+);/)?.[1]; assert(assets, 'service worker manifest not found');
+  writeFileSync(sw, readFileSync(resolve(repository, 'runtime/browser-recovery/recovery-sw.template.js'), 'utf8').replace('__RECOVERY_MANIFEST__', assets)); }
 for (const name of ['native-workspace.html', 'project-workspace.html']) {
   const path = join(destination, 'recovery', name);
   writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>'));

@@ -17,10 +17,18 @@
     "128": "recovery/icon-192.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' blob: ws:; worker-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'none';"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' blob: ws: https://ftp.fau.de https://mirror.init7.net https://ftp.snt.utwente.nl https://ctan.mirror.garr.it https://mirrors.mit.edu https://ctan.math.illinois.edu https://mirror.aarnet.edu.au https://mirrors.tuna.tsinghua.edu.cn; worker-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'none';"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk5e2YwRkWQBrx+kkOiitnZE0e/WVddQXaqvN/CXJPLNMVrvJAY8zAUXsUbIazjhBvkIiyl8VeuSkbH8LSMw98oS6HiRxVRNjoHwwNBF9tjXenA54GpQXNmZe/awMxdQaltB6YQ3p6DUSCCS/6CHbLSbrtpcqHLRoH+GTDI3/RPwwQ5yrBG4NX04HTPL8x+HBUB26+yjoXyMTT+/p3uW0Ek7nZ0lJgyLoHKeGeyLm0cGs4pqunO0DepTE8oPjbKTc9/hnW+fDKCBjN026AIAY5sLeUChUYR5PKg/YBqay6gP8M5eI6Ims25VpBmflo11ZraF44Em/GQV3t4vODsNjeQIDAQAB",
   "host_permissions": [
-    "ws://*/*"
+    "ws://*/*",
+    "https://ftp.fau.de/*",
+    "https://mirror.init7.net/*",
+    "https://ftp.snt.utwente.nl/*",
+    "https://ctan.mirror.garr.it/*",
+    "https://mirrors.mit.edu/*",
+    "https://ctan.math.illinois.edu/*",
+    "https://mirror.aarnet.edu.au/*",
+    "https://mirrors.tuna.tsinghua.edu.cn/*"
   ]
 }

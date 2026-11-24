@@ -23,3 +23,9 @@ Offline PDF rendering reuses the pinned CE+ PDF.js5.1.91 distribution under Apac
 runtime/browser-recovery/client-zip.mjs is client-zip2.5.1, Copyright2020David Junger, MIT; full terms are in CLIENT-ZIP-LICENSE.txt and shipped with the offline static assets. It supplies streaming ZIP container generation only; this application makes no upstream performance claim.
 
 Standalone packaging modifies the pinned CE+ CodeMirror bundle's input sanitizer to use Unicode regular-expression mode, preserving valid astral characters while replacing NUL and lone surrogates. The native editor, OT implementation and their original license/notices remain applicable. This patch does not change or resolve the application's existing distribution-license boundary.
+
+## TeX package installation (Stage 5)
+
+- `extension/packages/xzwasm.min.js`: xzwasm 0.1.2 by Steve Sanderson (MIT), containing xz-embedded (public domain) and walloc (MIT, Igalia, S.L.). Full notice: `extension/packages/XZWASM-LICENSE.txt`.
+- `extension/packages/texlive.asc`: the TeX Live project's public signing key, used only to verify the downloaded package list.
+- Packages a user installs from TeX Live are downloaded on request from CTAN mirrors and stay under their own licences, shown before installation; packages without a redistributable licence are refused.

@@ -43,3 +43,7 @@ self.postMessage = (data, ...rest) => {
 if (compileStreaming) WebAssembly.compileStreaming = (...args) => compileStreaming(...args).finally(() => performance.mark('worker:wasm compiled'));
 WebAssembly.instantiate = (...args) => instantiate(...args).finally(() => performance.mark('worker:wasm instantiated'));
 importScripts('busytex_worker.original.js');
+// TEX-PKG-02: installed packages arrive as project files under .texmf (fresh in each compile's MEMFS); the pipeline adds
+// texmf_local roots to TEXMFDIST, and the page writes that tree's ls-R. The SDK always sends texmf_local: [].
+const originalMessage = self.onmessage;
+self.onmessage = event => originalMessage(event.data?.busytex_wasm ? { data: { ...event.data, texmf_local: ['/home/web_user/project_dir/.texmf'] } } : event);

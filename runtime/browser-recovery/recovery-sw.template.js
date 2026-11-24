@@ -78,7 +78,11 @@ self.addEventListener('message', event => {
     } catch (error) { port.postMessage({ error: error.message + '. Check available browser storage and connectivity, then retry.' }); }
   })());
 });
+// TEX-PKG: the TeX Live mirrors also named in the extension's host_permissions (runtime/packages/store.mjs MIRRORS) are the
+// one exception, GET only; what they serve is checked against the signed package list, so the network is only transport.
+const MIRROR_ORIGINS = new Set(["https://ftp.fau.de", "https://mirror.init7.net", "https://ftp.snt.utwente.nl", "https://ctan.mirror.garr.it", "https://mirrors.mit.edu", "https://ctan.math.illinois.edu", "https://mirror.aarnet.edu.au", "https://mirrors.tuna.tsinghua.edu.cn"]);
 self.addEventListener('fetch', event => {
+  if (event.request.method === 'GET' && MIRROR_ORIGINS.has(new URL(event.request.url).origin)) return;   // not intercepted
   // Controlled local-workspace clients never fall through to network, even for unknown URLs.
   event.respondWith((async () => {
     const url = new URL(event.request.url);
