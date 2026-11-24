@@ -6,12 +6,23 @@
 import { settingRow } from './this-computer.mjs';
 import { participantGroup, texHost, bytesOf } from './lan-compile.mjs';
 
-let ui = null; // set by mount(); computerRows() reads it
+let ui = null, texStatus = null; // set by mount(); computerRows() and chosenTex() read them
+
+// TEX-PKG-03: packages installed in this browser (Settings › Packages) also reach this computer's chosen TeX, as a per-job
+// TEXMFHOME tree the helper bounds and deletes with the job (native/src/main.rs PACKAGES); the TeX installation is never changed.
+const withPackages = host => ({ ...host, async compile(files, main, compiler) {
+  const set = await import('/extension/packages/store.mjs').then(m => m.compileSet()).catch(() => ({ files: [] }));
+  const tree = set.files.filter(f => f.content instanceof Uint8Array).map(f => ({ path: f.path.replace('.texmf/texmf-dist/', '.latex-local-texmf/'), bytes: f.content }));
+  return host.compile([...files, ...tree], main, compiler);
+} });
+/** The TeX installation this computer's packages are also active for, or null (not chosen, helper absent, no shared page). */
+export const chosenTex = () => texStatus?.().then(s => s.directory ?? null, () => null) ?? Promise.resolve(null);
 
 /** lan(): the owner's running room or the participant's session (null when not sharing); joined: this tab is a participant. */
 export function mount({ lan, joined, events }) {
-  const tex = texHost(), view = { tex: null, texError: '', pool: { workers: 0, engines: [] }, wanted: false, helpWanted: false, error: '' };
+  const tex = withPackages(texHost()), view = { tex: null, texError: '', pool: { workers: 0, engines: [] }, wanted: false, helpWanted: false, error: '' };
   let participant = null;
+  texStatus = tex.status;
   const pool = () => (participant ? participant.state : view.pool);
   if (joined) {
     participant = participantGroup({ send: m => lan().session.send(m), tex, onChange: () => refresh() });

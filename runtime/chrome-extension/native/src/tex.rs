@@ -72,7 +72,8 @@ pub fn compile(root: &Path, bin: &Path, main: &str, compiler: &str, cancel: &Ato
         .args(["-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "-synctex=1", "-cd"])
         .arg(format!("-outdir={}", out.display())).arg(root.join(main)).current_dir(root)
         .env_clear().env("PATH", format!("{}:/usr/bin:/bin", bin.display())).env("LANG", "C").env("TMPDIR", &temporary)
-        .env("TEXMFOUTPUT", &out).env("TEXMFVAR", &temporary).env("TEXMFCONFIG", &temporary).env("TEXMFHOME", &temporary)
+        .env("TEXMFOUTPUT", &out).env("TEXMFVAR", &temporary).env("TEXMFCONFIG", &temporary)
+        .env("TEXMFHOME", if root.join(crate::PACKAGES).is_dir() { root.join(crate::PACKAGES) } else { temporary.clone() })
         .env("TEXMFCACHE", &temporary).env("VARTEXFONTS", &temporary).env("openin_any", "p").env("openout_any", "p")
         .stdin(Stdio::null()).stdout(Stdio::from(log.try_clone().map_err(|_| "Log unavailable")?)).stderr(Stdio::from(log)).process_group(0);
     // Limits are inherited by TeX's trusted child tools; the parent also bounds elapsed time and total scratch growth.
@@ -151,5 +152,23 @@ pub fn failure_log(root: &Path) -> String {
         let network = run("/usr/bin/perl", &["-e".as_ref(), "use Socket; socket(my $s, AF_INET, SOCK_STREAM, 0) or exit 2; connect($s, pack_sockaddr_in(9, inet_aton('127.0.0.1'))) and exit 1; exit($!{EPERM} || $!{EACCES} ? 0 : 3)".as_ref()]);
         assert!(network.status.success(), "{}", String::from_utf8_lossy(&network.stderr));
         assert!(memory(unsafe { libc::getpgrp() }).unwrap() > 0);
+    }
+    /// TEX-PKG-03: a package absent from the installation compiles only when its files arrive in the job's package tree.
+    #[test] fn installed_package_tree_is_used_by_the_native_compile() {
+        let bin = crate::detected().into_iter().next().expect("This integration check needs installed TeX");
+        let source = b"\\documentclass{article}\\usepackage{olxfixture}\\begin{document}\\olxmark\\end{document}\n".to_vec();
+        let style = b"\\ProvidesPackage{olxfixture}\\newcommand\\olxmark{OLXFIXMARK}\n".to_vec();
+        let run = |files: &[(&str, &Vec<u8>)]| {
+            let manifest: Vec<_> = files.iter().map(|(path, bytes)| serde_json::json!({"path": path, "size": bytes.len(), "digest": format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))})).collect();
+            let mut job = crate::Job::create(&serde_json::json!({"files": manifest})).unwrap();
+            for (path, bytes) in files { job.chunk(&serde_json::json!({"path": path, "offset": 0, "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)})).unwrap(); }
+            job.seal().unwrap(); let start = Instant::now();
+            let result = compile(&job.root, &bin, "main.tex", "pdflatex", &AtomicBool::new(false)).map(|(pdf, _, _)| pdf.len());
+            (result, start.elapsed(), failure_log(&job.root))
+        };
+        let (without, _, log) = run(&[("main.tex", &source)]);
+        assert!(without.is_err() && log.contains("olxfixture.sty"), "the package is not in the installation: {log}");
+        let (with, elapsed, _) = run(&[("main.tex", &source), (".latex-local-texmf/tex/latex/olxfixture/olxfixture.sty", &style)]);
+        assert!(with.unwrap() > 0); eprintln!("compile with package tree: {elapsed:?}");
     }
 }

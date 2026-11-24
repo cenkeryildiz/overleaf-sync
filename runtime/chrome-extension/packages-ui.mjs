@@ -14,7 +14,9 @@ export async function packageRows(context) {
   const note = node('p', { className: 'olx-computer-note', role: 'status', id: 'olx-packages-status' });
   const listRow = settingRow({ id: 'packages-catalog', title: 'TeX Live package list', description: '', control: node('div') });
   const needsRow = settingRow({ id: 'packages-needed', title: 'This project needs', description: '', control: node('div') });
-  const installedRow = settingRow({ id: 'packages-installed', title: 'Installed in this browser', description: 'Used by this browser’s compiler for every project; not shared with collaborators.', control: node('div') });
+  const installedRow = settingRow({ id: 'packages-installed', title: 'Installed in this browser', description: '', control: node('div') });
+  const tex = await import('/extension/lan-compile-ui.mjs').then(m => m.chosenTex()).catch(() => null);   // TEX-PKG-03
+  installedRow.describe(`Active for this browser’s compiler${tex ? ` and for this computer’s TeX installation ${tex} when it helps compile for the group (copied into each job’s private folder, never into the installation)` : ''}, for every project; not shared with collaborators.`);
   const needs = node('ul', { className: 'olx-package-list', ariaLabel: 'Package requirements' }), have = node('ul', { className: 'olx-package-list', ariaLabel: 'Installed packages' });
   let controller = null;
   const busy = (label, run) => async () => {
