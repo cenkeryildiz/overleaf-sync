@@ -3,7 +3,7 @@
 import { projectZip } from './project-zip.mjs';
 import { LocalCompiler, fingerprint, navigation, forward, backward } from './project-compile.mjs';
 // LAN sharing (standalone only): `lan` is the owner's running room or the participant's session; both offer join/edit/cursor.
-const lanEvents = {}, joined = globalThis.overleafStandalone && location.hash.startsWith('#join=') ? await (await import('/extension/lan-ui.mjs')).joinForm(location.hash.slice(1), lanEvents) : null;
+const lanEvents = {}, joined = globalThis.overleafStandalone && /^#(join|room)=/.test(location.hash) ? await (await import('/extension/lan-ui.mjs')).joinForm(location.hash.slice(1), lanEvents) : null;
 const api = joined?.api ?? globalThis.overleafLocalProjects;
 let lan = joined?.shared ?? null;
 const report = state => dispatchEvent(new CustomEvent('overleaf-durability', { detail: { state } }));

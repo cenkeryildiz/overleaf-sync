@@ -36,7 +36,14 @@ export function joinLink(host, port, roomId) {
   if (!validHost(host) || !validPort(port) || !ROOM.test(roomId)) throw Error('Invalid sharing address');
   return `chrome-extension://${EXTENSION_ID}/extension/index.html#join=${host}:${port}/${roomId}`;
 }
+/** Stage 4 internet room: the link names the room only; peers are found through the room finder (p2p-signal.mjs). */
+export function roomLink(roomId) {
+  if (!ROOM.test(roomId)) throw Error('Invalid room');
+  return `chrome-extension://${EXTENSION_ID}/extension/index.html#room=${roomId}`;
+}
 export function parseJoinLink(link) {
+  const room = String(link).match(/^chrome-extension:\/\/([a-p]{32})\/extension\/index\.html#room=([A-Za-z0-9_-]{22})$/);
+  if (room && room[1] === EXTENSION_ID) return { roomId: room[2], url: `p2p:${room[2]}`, p2p: true };
   const match = String(link).match(/^chrome-extension:\/\/([a-p]{32})\/extension\/index\.html#join=([\d.]+):(\d{4,5})\/([A-Za-z0-9_-]{22})$/);
   if (!match || match[1] !== EXTENSION_ID || !validHost(match[2]) || !validPort(Number(match[3]))) throw Error('This is not a valid join link');
   const [, , host, port, roomId] = match;

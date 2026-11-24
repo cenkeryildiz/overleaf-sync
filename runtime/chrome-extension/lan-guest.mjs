@@ -4,6 +4,7 @@
 // A lost connection wipes it too: a rejoin transfers the project again, so only unacknowledged edits outlive the loss.
 import { connectStore } from './lan-session-store.mjs';
 import { parseJoinLink, validUsername } from './lan-room.mjs';
+import { p2pSocket } from './p2p-transport.mjs';
 import { GrantGate, saveStandaloneCopy, exportCopy, copyResources } from './lan-grants.mjs';
 import { apply, invert, diff } from './lan-ot.mjs';
 import { ProjectTree, SnapshotReceiver, streamFiles, rekey, within } from './lan-transfer.mjs';
@@ -29,7 +30,7 @@ const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
  * onResumed(conflicts); `reconcile` below settles those explicitly. Revoke, stop and leave end everything.
  */
 export async function joinSession({ link, passcode, username, onRemote = () => {}, onCursor = () => {}, onEnd = () => {}, onGrant = () => {}, onPresence = () => {}, onFs = () => {},
-  onLost = () => {}, onResumed = () => {}, onGroup = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket }) {
+  onLost = () => {}, onResumed = () => {}, onGroup = () => {}, retries = RETRIES, WebSocketImpl = globalThis.WebSocket, P2PSocketImpl = null }) {
   let target = parseJoinLink(link), current = link, code = passcode; // the passcode stays in this closure for the bounded rejoin; never logged or stored
   const name = validUsername(username), cid = randomHex(16), waiting = new Map(), cursors = new Map(), files = new Map(), byKey = new Map(), counters = new Map();
   let conn = null, state = 'joining', token = null, timer = null, syncs = 0, conflicts = [];
@@ -148,7 +149,7 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
     const c = { gate: new GrantGate({ roomId: t.roomId, name }), blobs: new SnapshotReceiver(), docs: null, folders: [], treeSeen: false, seq: 0, tree: null, blob: null,
       tail: Promise.resolve(), early: [], dead: false };
     const transfer = new Promise((resolve, reject) => { c.project = { resolve, reject }; }); transfer.catch(() => {});
-    const socket = new WebSocketImpl(t.url); socket.binaryType = 'arraybuffer';
+    const socket = new (t.p2p ? P2PSocketImpl ?? p2pSocket() : WebSocketImpl)(t.url); socket.binaryType = 'arraybuffer';
     await new Promise((resolve, reject) => { // a dropped SYN (firewall, isolated Wi-Fi) never fires onerror: bound the wait
       const unreachable = error => { clearTimeout(clock); socket.close(); reject(Error(error?.message ? `${error.message}.` : 'Cannot reach the owner at this link. Check that both computers are on the same network and that the owner allowed incoming connections.')); };
       const clock = setTimeout(unreachable, TIMEOUT); socket.onopen = () => { clearTimeout(clock); resolve(); }; socket.onerror = unreachable;

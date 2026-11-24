@@ -196,7 +196,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
   });
   const bind = network ? (await helper.call('addresses').catch(error => { unsubscribe(); throw error; })).addresses?.find(a => a !== LOOPBACK) : LOOPBACK;
   if (!bind) { unsubscribe(); throw Error('No private network address found. Connect this computer to Wi-Fi or Ethernet and try again.'); }
-  const { port } = await helper.call('open', { bind, port: 0, room: room.roomId }).catch(error => { unsubscribe(); throw error; });
+  const { port, link } = await helper.call('open', { bind, port: 0, room: room.roomId }).catch(error => { unsubscribe(); throw error; }); // link: an internet room (p2p-transport.mjs)
   const stop = async () => {
     if (stopped) return; stopped = true; unsubscribe(); group.stop();
     await room.stop().catch(() => {}); await helper.call('close').catch(() => {}); helper.close();
@@ -204,7 +204,7 @@ export async function startHost({ helper, source, permission = () => true, onRem
     waiting.clear();
   };
   return {
-    room, port, link: joinLink(bind, port, room.roomId), get passcode() { return room.passcode; }, stop, get stopped() { return stopped; },
+    room, port, link: link ?? joinLink(bind, port, room.roomId), get passcode() { return room.passcode; }, stop, get stopped() { return stopped; },
     /** Current text/version for the owner's editor; the log, not the file, is authoritative while sharing. */
     text: path => syncs.get(current(path))?.text,
     /** An owner file-tree change ({kind, ...}; put carries `bytes`): checked, applied through source.apply, then sent to everyone. */

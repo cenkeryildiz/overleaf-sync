@@ -120,7 +120,7 @@ export function joinForm(hash, events) {
   const code = el('input', { id: 'lan-join-code', ariaLabel: 'Passcode', className: 'lan-code', autocomplete: 'off', spellcheck: false, placeholder: 'XXXX-XXXX-XXXX-XXXX', autofocus: true });
   const name = el('input', { id: 'lan-join-name', ariaLabel: 'Your name for this session', autocomplete: 'off', maxLength: 32, placeholder: 'How others will see you' });
   const note = el('p', { role: 'status' }), submit = el('button', { type: 'submit', className: 'lan-btn lan-primary', textContent: 'Join' });
-  let from = ''; try { const t = parseJoinLink(initial); from = `Shared from ${t.host} on your network.`; } catch {}
+  let from = ''; try { const t = parseJoinLink(initial); from = t.p2p ? 'Shared over the internet.' : `Shared from ${t.host} on your network.`; } catch {}
   // The link opened this page, so only the passcode and a name are asked; without a valid link the field is shown.
   const form = el('form', { className: 'lan-panel', ariaLabel: 'Join a shared project' }, el('div', { className: 'lan-head' }, el('h2', { textContent: 'Join a shared project' })),
     ...(from ? [el('p', { className: 'lan-sub', textContent: from })] : [el('label', { textContent: 'Join link', htmlFor: link.id }), link]),
@@ -132,7 +132,8 @@ export function joinForm(hash, events) {
       const passcode = code.value; code.value = '';
       // The helper connects when installed: Chrome's local-network rules block extension pages from reaching another computer,
       // and they change by version. Without it, try the browser's own WebSocket (older browsers, same computer).
-      const viaHelper = await helperAvailable();
+      let internet = false; try { internet = !!parseJoinLink(link.value.trim()).p2p; } catch {}
+      const viaHelper = !internet && await helperAvailable(); // internet rooms use WebRTC: no helper
       try {
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
           onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
@@ -140,7 +141,7 @@ export function joinForm(hash, events) {
         const template = await (await fetch('/extension/native-template.json')).json();
         const { api, project, docIds } = await memoryProjects(shared, template);
         screen.remove(); resolve({ api, shared, project, docIds });
-      } catch (error) { note.textContent = error.message.includes(HELPER_HINT) || viaHelper ? error.message : `${error.message} ${HELPER_HINT}`; submit.disabled = false; submit.textContent = 'Join'; }
+      } catch (error) { note.textContent = error.message.includes(HELPER_HINT) || viaHelper || internet ? error.message : `${error.message} ${HELPER_HINT}`; submit.disabled = false; submit.textContent = 'Join'; }
     };
   });
 }
