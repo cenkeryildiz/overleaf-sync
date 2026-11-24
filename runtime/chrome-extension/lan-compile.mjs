@@ -218,14 +218,16 @@ export function participantGroup({ send, tex, onChange = () => {}, now = Date.no
   async function finish(job, out) {
     if (active !== job) return;
     const base = { t: 'work', job: job.job, lease: job.lease, digest: job.digest, compiler: job.compiler };
+    // Free this computer before the final message: the owner hands over the next queued job the moment it arrives.
+    const release = () => { if (active !== job) return false; clearInterval(beat); beat = null; active = null; update({ status: out.error ? `Last job failed: ${out.error}`.slice(0, 200) : 'Sending the PDF' }); return true; };
     try {
-      if (out.error) await send({ ...base, k: 'fail', error: out.error, log: clip(out.log, 32000) });
+      if (out.error) { release(); await send({ ...base, k: 'fail', error: out.error, log: clip(out.log, 32000) }); }
       else {
         const { xfer } = await streamFiles(m => send({ t: 'work', k: 'blob', m }), { files: [{ path: 'output.pdf', bytes: out.pdf }, { path: 'output.synctex.gz', bytes: out.synctex }] });
-        await send({ ...base, k: 'done', xfer, log: clip(out.log, 32000) });
+        if (release()) await send({ ...base, k: 'done', xfer, log: clip(out.log, 32000) });
       }
     } catch {}
-    if (active === job) { clearInterval(beat); beat = null; active = null; update({ status: out.error ? `Last job failed: ${out.error}`.slice(0, 200) : 'Sending the PDF' }); }
+    release();
   }
   function compiled(m) {
     const p = pending.get(m.req); if (!p) return;

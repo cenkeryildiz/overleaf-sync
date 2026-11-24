@@ -73,6 +73,23 @@ test('two contributors share concurrent jobs fairly and take turns on sequential
   for (let i = 1; i < by.length; i++) assert.notEqual(by[i], by[i - 1], 'sequential jobs alternate: ' + by.join(','));
 });
 
+// S3-03: more requesters than workers; a contributor who opts in later takes the next queued job and nothing is claimed twice.
+test('a second contributor joining mid-queue takes the waiting jobs; one claim per job, one live job per requester', async () => {
+  const h = harness(), ta = fakeTex(), tc = fakeTex(), a = h.join('a', 'Ana', ta), c = h.join('c', 'Cem', tc), b = h.join('b', 'Bea'), d = h.join('d', 'Dev');
+  await a.help(true); await settle();
+  const jobs = [request(b, h.files), request(d, h.files), h.owner.request({ main: 'main.tex', compiler: 'pdflatex', files: h.files })];
+  await until(() => ta.runs.length === 1, 'Ana takes the first job'); await settle();
+  assert.equal(h.owner.queued, 2, 'the other two wait');
+  await c.help(true); await until(() => tc.runs.length === 1, 'Cem takes a waiting job as soon as he joins');
+  assert.equal(h.owner.queued, 1);
+  ta.runs[0].ok(); await until(() => ta.runs.length === 2, 'Ana takes the last job'); tc.runs[0].ok(); ta.runs[1].ok();
+  const by = (await Promise.all(jobs)).map(r => r.stats.by);
+  assert.deepEqual(by.sort(), ['Ana', 'Ana', 'Cem']);
+  assert.equal(ta.runs.length + tc.runs.length, 3, 'no job compiled twice');
+  assert.deepEqual(h.owner.workers.map(w => [w.name, w.done, w.busy]), [['Ana', 2, false], ['Cem', 1, false]]);
+  assert.equal(h.owner.queued, 0);
+});
+
 test('stale, foreign and repeated results are refused and never published', async () => {
   const h = harness(), ta = fakeTex(), a = h.join('a', 'Ana', ta), b = h.join('b', 'Bea');
   await a.help(true); await settle();
