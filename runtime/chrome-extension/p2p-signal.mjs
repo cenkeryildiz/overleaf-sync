@@ -4,7 +4,8 @@
 // (the room protocol in lan-room.mjs runs inside the data channel, end to end). Everything a signaling service sends is untrusted.
 //
 // Adapter contract (one object per service):
-//   open({ roomId, role: 'owner' | 'peer', onSignal(from, message), onState(up) }) -> Promise<{ send(to, message), close() }>
+//   open({ roomId, role: 'owner' | 'peer', passcodes, onSignal(from, message), onState(up) }) -> Promise<{ send(to, message), close() }>
+//   passcodes (current first) key the finder's encryption; the in-process test hub ignores them.
 //   A peer addresses the owner as 'owner'; the owner answers the `from` it received. `from` is chosen by the service: untrusted.
 //   open rejects when the service is unreachable, when nobody is sharing that room (role 'peer'), or when the room is taken (role 'owner').
 //   onState(false) reports an outage after open; connections already made do not depend on the service.
@@ -69,11 +70,104 @@ export function bridgeSignaling(call = (...args) => globalThis.__p2pSignal(...ar
   };
 }
 
-/**
- * Adapter slot for the signaling service the user will choose (not chosen yet; nothing here contacts any service).
- * It must implement the contract above over e.g. a small WebSocket relay; the manifest CSP must then name its wss:// host.
- */
-export const providerSignaling = null;
+// ---- production room finder: public MQTT brokers (p2p-providers.mjs) ---------------------------------------------------------
+// Every envelope {from, to, m} is AES-GCM encrypted with a key derived from the room ID and passcode (HKDF), published QoS 0 on
+// topic latex-p2p/v1/<SHA-256 of the room ID>. Brokers see only that hash and ciphertext. Endpoint ids are random per connection.
+// The coordinator publishes a beacon every BEACON ms; a peer addresses 'owner' as the beacon's sender. "Room slot" rule: a new
+// coordinator listens LISTEN ms first and refuses ('This room is already open') when it hears another beacon; two coordinators that
+// start at the same instant are resolved by signed epochs (p2p-room.mjs), not here.
+import { BROKERS } from './p2p-providers.mjs';
+export const BEACON = 2000, LISTEN = 2600, FIND = 4500, CONNECT = 6000;
+const enc = new TextEncoder(), dec = new TextDecoder();
+const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+const b64 = bytes => { let t = ''; for (const x of bytes) t += String.fromCharCode(x); return btoa(t); };
+const unb64 = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
+async function finderKey(roomId, passcode) {
+  const code = String(passcode).toUpperCase().replace(/[\s-]/g, '');
+  const material = await crypto.subtle.importKey('raw', enc.encode(code), 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode(`latex-p2p-finder-v1\n${roomId}`), info: enc.encode('finder') }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+const varint = n => { const out = []; do { let b = n % 128; n = Math.floor(n / 128); if (n) b |= 128; out.push(b); } while (n); return out; };
+const str = s => { const b = enc.encode(s); return [b.length >> 8, b.length & 255, ...b]; };
+const packet = (type, body) => Uint8Array.from([type, ...varint(body.length), ...body]);
 
-/** The adapter in use, or null when internet rooms are unavailable (no provider chosen and no test bridge). */
+/** Minimal MQTT 3.1.1 over WebSocket: connect, one subscription, QoS 0 publish, keep-alive. Incoming bytes are untrusted. */
+function mqtt(url, topic, onPayload, onDown, Socket) {
+  return new Promise((resolve, reject) => {
+    let buffer = new Uint8Array(0), up = false, ping;
+    const ws = new Socket(url, 'mqtt'); ws.binaryType = 'arraybuffer';
+    const fail = () => { clearInterval(ping); if (!up) reject(Error('unreachable')); else onDown(); up = false; };
+    const timer = setTimeout(() => { try { ws.close(); } catch {} fail(); }, CONNECT);
+    ws.onopen = () => ws.send(packet(0x10, [...str('MQTT'), 4, 0x02, 0, 60, ...str('lp' + hex(crypto.getRandomValues(new Uint8Array(10))))]));
+    ws.onerror = ws.onclose = () => { clearTimeout(timer); fail(); };
+    ws.onmessage = event => {
+      const add = new Uint8Array(event.data); if (buffer.length + add.length > 256 * 1024) { ws.close(); return; }
+      const merged = new Uint8Array(buffer.length + add.length); merged.set(buffer); merged.set(add, buffer.length); buffer = merged;
+      for (;;) {
+        let len = 0, mul = 1, i = 1;
+        for (; i < 5 && i < buffer.length; i++) { len += (buffer[i] & 127) * mul; mul *= 128; if (!(buffer[i] & 128)) break; }
+        if (i >= buffer.length || buffer.length < i + 1 + len) return;
+        const type = buffer[0] >> 4, body = buffer.subarray(i + 1, i + 1 + len); buffer = buffer.slice(i + 1 + len);
+        if (type === 2) { // CONNACK
+          if (body[1] !== 0) { ws.close(); return; }
+          ws.send(packet(0x82, [0, 1, ...str(topic), 0]));
+        } else if (type === 9) { clearTimeout(timer); up = true; ping = setInterval(() => { try { ws.send(Uint8Array.of(0xC0, 0)); } catch {} }, 30_000); resolve({ publish: p => ws.send(packet(0x30, [...str(topic), ...p])), close: () => { up = false; clearInterval(ping); try { ws.close(); } catch {} } }); }
+        else if (type === 3 && body.length >= 2) { const n = (body[0] << 8) | body[1]; onPayload(body.subarray(2 + n)); }
+      }
+    };
+  });
+}
+
+/** The production adapter (contract above, plus `passcodes`: the current passcode first, then accepted older ones). */
+export function mqttSignaling({ brokers = BROKERS, Socket = globalThis.overleafNetworkSocket ?? globalThis.WebSocket } = {}) {
+  return {
+    async open({ roomId, role, passcodes = [], onSignal, onState = () => {} }) {
+      if (!/^[A-Za-z0-9_-]{22}$/.test(roomId) || !passcodes.length) throw Error('Invalid room');
+      let keys = await Promise.all(passcodes.slice(0, 9).map(code => finderKey(roomId, code)));
+      const topic = `latex-p2p/v1/${hex(await crypto.subtle.digest('SHA-256', enc.encode(`latex-p2p-topic-v1\n${roomId}`)))}`;
+      const id = hex(crypto.getRandomValues(new Uint8Array(12))), seen = new Set();
+      let owner = null, heard = null, closed = false, beacon;
+      const links = new Set();
+      const incoming = async payload => {
+        if (closed || payload.length > 64 * 1024 || payload.length < 30) return;
+        let env = null;
+        try { const text = dec.decode(payload), iv = unb64(text.slice(0, 16)), data = unb64(text.slice(16)); const mark = text.slice(0, 16); if (seen.has(mark)) return; seen.add(mark); if (seen.size > 2000) seen.clear();
+          for (const key of keys) { try { env = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data))); break; } catch {} } } catch { return; }
+        if (!env || typeof env.from !== 'string' || env.from.length > 32 || env.from === id) return;
+        if (env.beacon) { heard ??= env.from; if (role === 'peer' && !owner) owner = env.from; return; }
+        if (env.to !== id) return;
+        if (role === 'peer' && env.from !== owner) return;
+        try { onSignal(role === 'peer' ? 'owner' : env.from, checkSignal(env.m)); } catch {}
+      };
+      const publish = async env => {
+        const iv = crypto.getRandomValues(new Uint8Array(12)), data = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, keys[0], enc.encode(JSON.stringify(env))));
+        const payload = enc.encode(b64(iv) + b64(data));
+        for (const link of links) try { link.publish(payload); } catch {}
+      };
+      const down = link => { links.delete(link); if (!links.size && !closed) onState(false); };
+      await Promise.all(brokers.map(async url => { let link; try { link = await mqtt(url, topic, incoming, () => down(link), Socket); links.add(link); } catch {} }));
+      if (!links.size) throw Error('The room finder is unreachable');
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      if (role === 'owner') {
+        await wait(LISTEN);
+        if (heard) { for (const l of links) l.close(); throw Error('This room is already open'); }
+        const tick = () => publish({ from: id, beacon: true }).catch(() => {});
+        tick(); beacon = setInterval(tick, BEACON);
+      } else {
+        for (let t = 0; t < FIND && !owner; t += 100) await wait(100);
+        if (!owner) { for (const l of links) l.close(); throw Error('Nobody is sharing this room right now (or the passcode is not this room’s)'); } // a wrong passcode cannot decrypt the beacons
+      }
+      return {
+        send(to, message) { if (closed) return; publish({ from: id, to: to === 'owner' ? owner : to, m: checkSignal(message) }).catch(() => {}); },
+        close() { if (closed) return; closed = true; clearInterval(beacon); for (const l of links) l.close(); },
+        /** After a passcode rotation: encrypt with the new one, still read the older ones. */
+        async rekey(list) { if (list?.length) keys = await Promise.all(list.slice(0, 9).map(code => finderKey(roomId, code))); },
+      };
+    },
+  };
+}
+
+export const providerSignaling = mqttSignaling();
+
+/** The adapter in use: the test bridge when a browser check installs it, otherwise the public brokers. */
 export const selectSignaling = () => (globalThis.LATEX_P2P_TEST_SIGNAL && typeof globalThis.__p2pSignal === 'function' ? bridgeSignaling() : providerSignaling);

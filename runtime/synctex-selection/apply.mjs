@@ -21,6 +21,12 @@ export function patchPdfViewer(source) {
   assert.equal(source.split(from).length-1,1,'Unknown or already patched PDF viewer');
   return source.replace(from,'selectText:(()=>{const span=n.target?.closest?.(".textLayer span"),label=span?.textContent?.trim().match(/^(\\d+)\\.\\s/);return label&&n.clientX-span.getBoundingClientRect().left<parseFloat(getComputedStyle(span).fontSize)*2?"\\0question:"+label[1]:window.getSelection()?.toString()||span?.textContent?.trim()})()');
 }
+export function refreshSynctex(source, core) {
+  const end = '  globalThis.overleafSynctexSelection = Object.freeze({ refine });\n})();';
+  assert(source.startsWith('// SPDX-License-Identifier: AGPL-3.0-only\n// Cenker YILDIZ, 2026.'), 'Unknown SyncTeX prefix');
+  assert.equal(source.split(end).length - 1, 1, 'Unknown SyncTeX selection core');
+  return core.trimEnd() + source.slice(source.indexOf(end) + end.length);
+}
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const [input,output]=process.argv.slice(2);
   assert(input&&output&&resolve(input)!==resolve(output),'Use distinct original/recovery editor and output paths');

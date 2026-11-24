@@ -19,6 +19,7 @@ import { joinSession } from './lan-guest.mjs';
 import { newRoomSecrets, parseJoinLink, roomLink, joinBinding, normalizePasscode, validUsername } from './lan-room.mjs';
 import { p2pHelper, p2pSocket } from './p2p-transport.mjs';
 import { selectSignaling } from './p2p-signal.mjs';
+import { ICE_SERVERS } from './p2p-providers.mjs';
 import { identityStore, verify, KEY } from './p2p-identity.mjs';
 import { Membership } from './p2p-membership.mjs';
 import { Replica } from './p2p-replica.mjs';
@@ -30,7 +31,7 @@ const randomHex = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b =
 const sha256 = async bytes => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
 const epochBytes = (room, epoch, key) => encoder.encode(JSON.stringify(['latex-p2p-epoch-v1', room, epoch, key]));
 const within = (path, root) => path === root || path.startsWith(root + '/');
-const net = o => ({ signaling: o.signaling ?? selectSignaling(), RTC: o.RTC ?? globalThis.RTCPeerConnection, iceServers: o.iceServers ?? [] });
+const net = o => ({ signaling: o.signaling ?? selectSignaling(), RTC: o.RTC ?? globalThis.RTCPeerConnection, iceServers: o.iceServers ?? [...ICE_SERVERS] });
 
 /** In-memory project for a peer that coordinates without the owner's editor project (a successor, or a reopened copy). */
 function memorySource({ files, docs, folders, main }, events) {
@@ -58,7 +59,7 @@ async function coordinate(ctx, { source, seed = {}, client }) {
   const { events } = ctx, sent = new Set(), order = new Map(); // order: member key -> first time seen, for the succession list
   const claim = { t: 'epoch', room: ctx.roomId, epoch: ctx.epoch, key: ctx.identity.key, sig: await ctx.identity.sign(epochBytes(ctx.roomId, ctx.epoch, ctx.identity.key)) };
   const fillUntil = Date.now() + FILL_WINDOW;
-  let host; const helper = p2pHelper(ctx.net);
+  let host; const helper = p2pHelper({ ...ctx.net, passcodes: () => [ctx.passcode, ...ctx.retired] });
   const succession = () => {
     const rank = r => r === ctx.membership.owner ? 0 : ctx.membership.member(r)?.role === 'copy' ? 1 : 2;
     return host.participants().filter(p => p.id).map(p => p.id).sort((a, b) => rank(a) - rank(b) || order.get(a) - order.get(b));
@@ -73,7 +74,7 @@ async function coordinate(ctx, { source, seed = {}, client }) {
       if (!p.id) continue;
       if (!m) { removed = true; await host.revoke(p.peer); } else if (m.role !== p.grant) await host.setGrant(p.peer, m.role).catch(() => {});
     }
-    if (removed) { ctx.passcode = host.room.rotatePasscode(); ctx.retired = host.room.retired; await host.room.broadcast(passcodes()).catch(() => {}); events.onPasscode?.(ctx.passcode); }
+    if (removed) { ctx.passcode = host.room.rotatePasscode(); ctx.retired = host.room.retired; helper.rekey()?.catch?.(() => {}); await host.room.broadcast(passcodes()).catch(() => {}); events.onPasscode?.(ctx.passcode); }
     events.onMembers?.(ctx.membership.members, ctx.membership.frozen);
   };
   const apply = async doc => {
@@ -114,7 +115,8 @@ async function coordinate(ctx, { source, seed = {}, client }) {
   host = await startHost({
     helper, source, secrets: { roomId: ctx.roomId, passcode: ctx.passcode, retired: ctx.retired }, client, seed, checkJoin, onMember,
     fillable: (peer) => Date.now() < fillUntil && ctx.membership.member(host.participants().find(p => p.peer === peer)?.id)?.role === 'copy', // shortcut: catch-up trusts copy members' entries; signed entries would remove that trust
-    onRemote: (...a) => events.onRemote?.(...a), onCursor: (...a) => events.onCursor?.(...a), onPool: () => {}, onLost: () => events.onLost?.('The room finder connection was lost', { retrying: false }),
+    // A successor's editor is still a participant; its local connection delivers these events once.
+    onRemote: (...a) => { if (!ctx.localParticipant) events.onRemote?.(...a); }, onCursor: (...a) => { if (!ctx.localParticipant) events.onCursor?.(...a); }, onPool: () => {}, onLost: () => events.onLost?.('The room finder connection was lost', { retrying: false }),
     onPeers: names => {
       for (const p of host?.participants() ?? []) if (!sent.has(p.peer)) {
         sent.add(p.peer); if (p.id && !order.has(p.id)) order.set(p.id, order.size);
@@ -129,22 +131,35 @@ async function coordinate(ctx, { source, seed = {}, client }) {
   return { host, helper, apply };
 }
 
-/** The facade a page holds; `role` and the underlying session change on takeover or step-down. */
+/**
+ * The facade a page holds. A member's page always works through its participant session (`ctl`, what lan-ui/native-workspace
+ * use); when this computer coordinates as well (takeover, reopen), that session reaches the local coordinator in memory
+ * (p2pHelper.connectLocal), so the editor never changes role and unsent edits are resent by the ordinary rejoin (same ids).
+ * Only the room's creator works through the coordinator directly (its own project is the source).
+ */
 function facade(ctx) {
   let coord = null, ctl = null, replica = null, leaving = false, electing = false;
   const { events } = ctx;
+  const Remote = p2pSocket({ ...ctx.net, passcode: () => ctx.passcode });
+  class Socket { constructor(url) { return ctx.local ? ctx.local.connectLocal(url) : new Remote(url); } } // eslint-disable-line no-constructor-return
+  const session = () => ctl ?? coord?.host;
   const self = {
     get role() { return coord ? 'coordinator' : ctl ? 'participant' : 'none'; },
+    get ctl() { return ctl; },
+    get host() { return coord?.host ?? null; },
     get link() { return roomLink(ctx.roomId); },
     get passcode() { return ctx.passcode; },
     get epoch() { return ctx.epoch; },
     get members() { return ctx.membership?.members ?? []; },
+    get me() { return ctx.identity.key; },
     get owner() { return ctx.membership?.owner === ctx.identity.key; },
-    get session() { return coord?.host ?? ctl; },
-    join: path => coord ? Promise.resolve(coord.host.join(path)) : ctl.join(path),
-    edit: (path, update) => (coord ? coord.host : ctl).edit(path, update),
-    fs: op => (coord ? coord.host : ctl).fs(op),
-    cursor: c => (coord ? coord.host : ctl).cursor(c),
+    get ownerKey() { return ctx.membership?.owner; },
+    get frozen() { return !!ctx.membership?.frozen; },
+    get session() { return session(); },
+    join: path => Promise.resolve(session().join(path)),
+    edit: (path, update) => session().edit(path, update),
+    fs: op => session().fs(op),
+    cursor: c => session().cursor(c),
     // ---- membership (owner, backup, transfer recipient); documents go through the coordinator, which every peer re-verifies ----
     async sign(make) {
       const doc = await make(ctx.membership, ctx.identity);
@@ -165,23 +180,29 @@ function facade(ctx) {
     /** A copy holder's saved room state for reopening without anyone online: no passcode (asked again), no session data. */
     async saveForReopen(save) {
       const meta = async files => ({ roomId: ctx.roomId, chain: ctx.membership.chain(), epoch: ctx.epoch,
-        heads: coord ? Object.fromEntries(Object.entries(coord.host.docs()).map(([p, d]) => [p, { v: d.version, at: d.log.at(-1)?.id ?? null }])) : replica.heads(),
+        heads: ctl ? replica.heads() : Object.fromEntries(Object.entries(coord.host.docs()).map(([p, d]) => [p, { v: d.version, at: d.log.at(-1)?.id ?? null }])),
         digests: Object.fromEntries(await Promise.all(files.map(async f => [f.path, await sha256(f.bytes)]))) });
-      if (coord) { const tree = ctx.source.tree(); return save({ files: tree.files, main: tree.main, docs: tree.docs, folders: tree.folders }, await meta(tree.files)); }
-      return ctl.saveCopy(async (resources, copy) => save({ files: copy.files, main: copy.main, docs: [...ctl.docs], folders: ctl.folders }, await meta(copy.files)));
+      if (ctl) return ctl.saveCopy(async (resources, copy) => save({ files: copy.files, main: copy.main, docs: [...ctl.docs], folders: ctl.folders }, await meta(copy.files)));
+      const tree = ctx.source.tree(); return save({ files: tree.files, main: tree.main, docs: tree.docs, folders: tree.folders }, await meta(tree.files));
+    },
+    /** Nobody else online (onLost with reopen: true): a copy member continues the room from this computer. */
+    async continueHere() {
+      if (ctx.membership?.member(ctx.identity.key)?.role !== 'copy') throw Error('Only members with the copy permission can continue the room');
+      if (!coord && !await takeover()) throw Error('Someone else is coordinating this room now');
+      await ctl.rejoin({ passcode: ctx.passcode });
     },
     /** Leave this room; as coordinator, disconnect without ending it, so the next member takes over. */
-    async leave() { leaving = true; if (coord) { coord.helper.close(); await coord.host.stop(); } else ctl?.leave(); },
+    async leave() { leaving = true; if (coord) { coord.helper.close(); await coord.host.stop(); } ctl?.leave(); },
     /** Owner only: end the room for everyone (members keep copies they were allowed to save). */
     async endRoom() {
       if (ctx.membership.owner !== ctx.identity.key) throw Error('Only the owner can end the room');
-      leaving = true; if (coord) await coord.host.stop(); else ctl?.leave(); // shortcut: a non-coordinating owner only leaves; ending then needs the coordinator's cooperation
+      leaving = true; if (coord) await coord.host.stop(); ctl?.leave(); // shortcut: a non-coordinating owner only leaves; ending then needs the coordinator's cooperation
     },
   };
 
-  const lead = async (source, seed, client) => {
-    coord = await coordinate(ctx, { source, seed, client });
-    ctx.source = source; events.onRole?.('coordinator');
+  const lead = async (source, seed) => {
+    coord = await coordinate(ctx, { source, seed, client: { cid: randomHex(16), name: ctx.username } });
+    ctx.source = source; if (ctl || ctx.localParticipant) { ctx.localParticipant = true; ctx.local = coord.helper; } events.onRole?.('coordinator');
   };
   /** Participant on a new or resumed connection, then election on loss. */
   const participate = async ({ link, passcode }) => {
@@ -203,9 +224,8 @@ function facade(ctx) {
         const theirs = Math.max(...docs.map(d => d?.b?.[2] ?? -1));
         if (ctx.membership.seq > theirs && docs.length > 1) await session.send({ t: 'member', docs: ctx.membership.since(theirs) }); // the coordinator is behind us
       }
-      const me = ctx.membership.member(ctx.identity.key);
       events.onMembers?.(ctx.membership.members, ctx.membership.frozen);
-      if (!me) events.onRemoved?.();
+      if (!ctx.membership.member(ctx.identity.key)) events.onRemoved?.();
     }));
     const claim = (m, session) => (tail = tail.then(async () => {
       if (m.room !== ctx.roomId || !Number.isSafeInteger(m.epoch) || !ctx.membership?.member(m.key) || !await verify(m.key, m.sig, epochBytes(ctx.roomId, m.epoch, m.key))) return;
@@ -216,46 +236,46 @@ function facade(ctx) {
       const c = epochs.get(session);
       if (!c) throw Error('The room did not prove who coordinates it');
       if (c.epoch < ctx.epoch) { await session.send({ t: 'member', epoch: ctx.claim }).catch(() => {}); throw Error('That computer coordinated an older session of this room'); }
-      if (replica.docs.size) { const result = await replica.catchUp(session); if (result.diverged.length) events.onFork?.(result.diverged); }
+      if (replica.docs.size && c.key !== ctx.identity.key) { const result = await replica.catchUp(session); if (result.diverged.length) events.onFork?.(result.diverged); }
       ctx.epoch = c.epoch; ctx.claim = c;
       replica.track(session, docs);
     };
     ctl = await joinSession({
-      link, passcode, username: ctx.username, identity: ctx.identity, P2PSocketImpl: p2pSocket(ctx.net), retries: [], onTap: tap, beforeAdopt, keepOnLoss: true, // the room outlives its coordinator: the memory copy is wiped when the election gives up
+      link, passcode, username: ctx.username, identity: ctx.identity, P2PSocketImpl: Socket, retries: [], onTap: tap, beforeAdopt, keepOnLoss: true, // the room outlives its coordinator: the memory copy is wiped when it is given up
       onRemote: (...a) => events.onRemote?.(...a), onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g),
-      onPresence: n => events.onPeers?.(n), onResumed: conflicts => events.onConflicts?.(conflicts), onGroup: () => {},
-      onEnd: reason => { if (!leaving && !self.taking) events.onEnd?.(reason); },
+      onPresence: n => events.onPeers?.(n), onResumed: conflicts => events.onResumed?.(conflicts), onGroup: () => {},
+      onEnd: reason => { if (!leaving) events.onEnd?.(reason); },
       onLost: reason => { events.onLost?.(reason, { retrying: true }); if (!electing) { electing = true; elect().catch(() => {}).finally(() => { electing = false; }); } },
     });
     ctx.passcode = passcode;
-    events.onRole?.('participant');
+    events.onRole?.(coord ? 'coordinator' : 'participant');
   };
   /** Coordinator gone: rejoin whoever takes over; members in the succession list take over in turn. */
   const elect = async () => {
     const rank = (ctx.succession ?? []).indexOf(ctx.identity.key), started = Date.now();
     while (ctl?.state === 'lost' && !leaving) {
-      if (rank >= 0 && Date.now() - started >= rank * STEP && await takeover().catch(() => false)) return;
-      try { await ctl.rejoin({ passcode: ctx.passcode }); return; } catch { if (ctl.state === 'ended') return; }
-      if (Date.now() - started > rank * STEP + GIVE_UP) { leaving = true; ctl.leave(); events.onLost?.('Nobody is online in this room', { retrying: false, reopen: ctx.membership?.member(ctx.identity.key)?.role === 'copy' }); return; }
+      if (!coord && rank >= 0 && Date.now() - started >= rank * STEP) await takeover().catch(() => false);
+      try { await ctl.rejoin({ passcode: ctx.passcode }); events.onRole?.(coord ? 'coordinator' : 'participant'); return; } catch { if (ctl.state === 'ended') return; }
+      if (Date.now() - started > Math.max(rank, 0) * STEP + GIVE_UP) {
+        const copy = ctx.membership?.member(ctx.identity.key)?.role === 'copy';
+        if (!copy) { leaving = true; ctl.leave(); } // restricted members keep nothing once the room is gone
+        events.onLost?.('Nobody is online in this room', { retrying: false, reopen: copy }); return;
+      }
       await sleep(1000);
     }
   };
+  /** Start coordinating the next epoch from this member's replica and memory copy; false when someone else holds the room. */
   const takeover = async () => {
     const store = ctl.store, docs = new Set(ctl.docs);
     const project = { files: new Map(store.paths().map(p => [p, store.read(p)])), docs, folders: ctl.folders, main: ctl.main };
-    const seed = replica.seed(), client = { cid: ctl.cid, name: ctx.username };
-    const previous = { epoch: ctx.epoch };
-    ctx.epoch = previous.epoch + 1;
-    try { await lead(memorySource(project, events), seed, client); }
-    catch (error) { ctx.epoch = previous.epoch; if (/already open/.test(error.message)) return false; throw error; }
-    self.taking = true;
-    const pending = ctl.takeOutstanding(); ctl.leave(); ctl = null; self.taking = false;
-    for (const o of pending) coord.host.resubmit(o.path, o).then(v => o.resolve(v - o.off), o.reject); // original ids: an edit the old coordinator applied is acknowledged, not repeated
-    return true;
+    const before = ctx.epoch; ctx.epoch = before + 1;
+    try { await lead(memorySource(project, events), replica.seed()); return true; }
+    catch (error) { ctx.epoch = before; if (/already open/.test(error.message)) return false; throw error; }
   };
-  ctx.stepDown = async () => { // a newer coordinator exists (after a split): rejoin it as a participant
-    const old = coord; if (!old) return; coord = null; await old.host.stop().catch(() => {}); events.onSuperseded?.();
-    await participate({ link: roomLink(ctx.roomId), passcode: ctx.passcode }).catch(error => events.onEnd?.(error.message));
+  ctx.stepDown = async () => { // a newer coordinator exists (after a split): stop coordinating; a member session rejoins it on its own
+    const old = coord; if (!old) return; coord = null; ctx.local = null; await old.host.stop().catch(() => {});
+    if (!ctl) events.onEnd?.('Another computer now coordinates this room. Open the room link again to join it.');
+    events.onSuperseded?.();
   };
   return { self, lead, participate };
 }
@@ -265,7 +285,7 @@ export async function createInternetRoom({ source, username, identities = identi
   const name = validUsername(username) ?? 'Owner', { roomId, passcode } = newRoomSecrets(), identity = await identities.forRoom(roomId);
   const ctx = { roomId, passcode, retired: [], identity, username: name, membership: await Membership.create(roomId, identity, name), epoch: 1, net: net(options), events };
   const f = facade(ctx);
-  await f.lead(source, {}, { cid: randomHex(16), name });
+  await f.lead(source, {});
   return f.self;
 }
 
@@ -283,11 +303,11 @@ export async function joinInternetRoom({ link, passcode, username, identities = 
 }
 
 /**
- * Nobody online: a member with the copy permission reopens the room from a copy saved with saveForReopen and coordinates it.
- * Files unchanged since the save continue the room's history; files edited offline start a new version, so returning members
- * reconcile them explicitly (p2p-reconcile.mjs) instead of having edits applied on a different text.
+ * Nobody online: a member with the copy permission reopens the room from a copy saved with saveForReopen, coordinates it and
+ * joins it in memory as a participant (the page then works like any member's). Files unchanged since the save continue the
+ * room's history; files edited since start a new version, so returning members reconcile them explicitly.
  */
-export async function reopenInternetRoom({ saved, passcode, username, identities = identityStore(), events = {}, ...options }) {
+export async function reopenInternetRoom({ saved, passcode, identities = identityStore(), events = {}, ...options }) {
   const { project, room } = saved;
   if (!normalizePasscode(passcode)) throw Error('Enter the room passcode');
   const membership = await Membership.load(room.roomId, room.chain), identity = await identities.forRoom(room.roomId), me = membership.member(identity.key);
@@ -299,8 +319,9 @@ export async function reopenInternetRoom({ saved, passcode, username, identities
     const same = await sha256(bytes) === room.digests[path];
     seed[path] = same ? { text: decoder.decode(bytes), version: head.v, log: [], headId: head.at } : { text: decoder.decode(bytes), version: head.v + 1, log: [], headId: `local.${randomHex(8)}` };
   }
-  const ctx = { roomId: room.roomId, passcode, retired: [], identity, username: me.name, membership, epoch: room.epoch + 1, net: net(options), events };
+  const ctx = { roomId: room.roomId, passcode, retired: [], identity, username: me.name, membership, epoch: room.epoch + 1, net: net(options), events, localParticipant: true };
   const f = facade(ctx);
-  await f.lead(memorySource({ files, docs, folders: project.folders ?? [], main: project.main }, events), seed, { cid: randomHex(16), name: me.name });
+  await f.lead(memorySource({ files, docs, folders: project.folders ?? [], main: project.main }, events), seed);
+  await f.participate({ link: roomLink(room.roomId), passcode });
   return f.self;
 }

@@ -5,10 +5,10 @@ import { HELPER_HINT, helperAvailable, helperSocket, nativeHelper, startHost } f
 import { joinSession, memoryProjects } from './lan-guest.mjs';
 import { parseJoinLink } from './lan-room.mjs';
 
-const GRANT_LABELS = [['online', 'Edit while I’m online'], ['copy', 'Can keep a copy']];
-const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
-const hueOf = name => [...new TextEncoder().encode(name)].reduce((h, b) => (h * 31 + b) % 360, 7);
-const style = el('style', { textContent: `
+export const GRANT_LABELS = [['online', 'Edit while I’m online'], ['copy', 'Can keep a copy']];
+export const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
+export const hueOf = name => [...new TextEncoder().encode(name)].reduce((h, b) => (h * 31 + b) % 360, 7);
+export const style = el('style', { textContent: `
 .lan-panel{--lan-bg:var(--olx-bg,#fff);--lan-fg:var(--olx-fg,#1b222c);--lan-muted:color-mix(in srgb,var(--lan-fg) 58%,transparent);--lan-line:color-mix(in srgb,var(--lan-fg) 12%,transparent);--lan-soft:color-mix(in srgb,var(--lan-fg) 5%,transparent);--lan-accent:#2f6fde;--lan-danger:#c4372e;
   position:fixed;top:52px;right:14px;z-index:6000;box-sizing:border-box;width:min(392px,calc(100vw - 28px));max-height:calc(100vh - 72px);overflow:auto;padding:18px 18px 16px;border:1px solid var(--lan-line);border-radius:14px;
   background:var(--lan-bg);color:var(--lan-fg);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 24px 48px -16px rgba(16,24,40,.28),0 2px 6px rgba(16,24,40,.08);animation:lan-in .14s ease-out}
@@ -19,7 +19,7 @@ const style = el('style', { textContent: `
 .lan-live{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,#1f9d55 14%,transparent);color:#1f8a4c;font-size:11.5px;font-weight:600}
 .lan-live::before{content:"";width:7px;height:7px;border-radius:50%;background:#1f9d55;box-shadow:0 0 0 3px color-mix(in srgb,#1f9d55 25%,transparent)}
 .lan-x{width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--lan-muted);font-size:16px;line-height:1;cursor:pointer}.lan-x:hover{background:var(--lan-soft);color:var(--lan-fg)}
-.lan-step{display:grid;grid-template-columns:22px 1fr;gap:10px;margin-bottom:14px}.lan-num{width:22px;height:22px;border-radius:50%;background:var(--lan-soft);color:var(--lan-muted);display:grid;place-items:center;font-size:11.5px;font-weight:650}
+.lan-step{display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px;margin-bottom:14px}.lan-num{width:22px;height:22px;border-radius:50%;background:var(--lan-soft);color:var(--lan-muted);display:grid;place-items:center;font-size:11.5px;font-weight:650}
 .lan-step p{margin:1px 0 8px;font-weight:550}.lan-row{display:flex;gap:8px;align-items:center}
 .lan-panel code{display:block;min-width:0;flex:1;padding:8px 10px;border-radius:9px;background:var(--lan-soft);font:12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:all}
 .lan-panel code.lan-pass{text-align:center;font-size:19px;font-weight:600;letter-spacing:.14em;padding:10px;white-space:normal}
@@ -41,7 +41,7 @@ const style = el('style', { textContent: `
 .lan-join{position:fixed;inset:0;z-index:6500;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--olx-bg,#fff) 92%,#7a8599)}
 .lan-join .lan-panel{position:static;width:min(380px,100%);padding:24px}.lan-join .lan-btn.lan-primary{width:100%;height:38px;margin-top:18px}
 .lan-sub{margin:-8px 0 6px;color:var(--lan-muted)}` });
-const copyButton = (label, value) => {
+export const copyButton = (label, value) => {
   const button = el('button', { type: 'button', className: 'lan-btn lan-primary', textContent: label });
   button.onclick = async () => { try { await navigator.clipboard.writeText(value()); button.textContent = 'Copied ✓'; } catch { button.textContent = 'Select and copy'; } setTimeout(() => { button.textContent = label; }, 1600); };
   return button;
@@ -135,6 +135,14 @@ export function joinForm(hash, events) {
       let internet = false; try { internet = !!parseJoinLink(link.value.trim()).p2p; } catch {}
       const viaHelper = !internet && await helperAvailable(); // internet rooms use WebRTC: no helper
       try {
+        if (internet) {
+          const { joinInternet } = await import('./p2p-ui.mjs');
+          const joined = await joinInternet({ link: link.value.trim(), passcode, username: name.value, events,
+            offerReopen: () => new Promise(resolve => { note.textContent = 'Nobody is online. A permitted copy of this room is saved here.';
+              const reopen = el('button', { type: 'button', className: 'lan-btn', textContent: 'Reopen saved room', onclick: () => { reopen.remove(); cancel.remove(); resolve(true); } });
+              const cancel = el('button', { type: 'button', className: 'lan-btn', textContent: 'Cancel', onclick: () => { reopen.remove(); cancel.remove(); resolve(false); } }); note.append(reopen, cancel); }) });
+          screen.remove(); resolve(joined); return;
+        }
         const shared = await joinSession({ link: link.value.trim(), passcode, username: name.value, onRemote: (...a) => events.onRemote?.(...a),
           onCursor: (...a) => events.onCursor?.(...a), onFs: op => events.onFs?.(op), onGrant: g => events.onGrant?.(g), onPresence: n => events.onPeers?.(n), onEnd: reason => { events.onEnd?.(reason); },
           onLost: (...a) => events.onLost?.(...a), onResumed: c => events.onResumed?.(c), onGroup: m => events.onGroup?.(m), WebSocketImpl: viaHelper ? helperSocket() : globalThis.WebSocket });

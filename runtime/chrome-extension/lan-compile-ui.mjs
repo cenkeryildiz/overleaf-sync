@@ -20,6 +20,8 @@ export const chosenTex = () => texStatus?.().then(s => s.directory ?? null, () =
 
 /** lan(): the owner's running room or the participant's session (null when not sharing); joined: this tab is a participant. */
 export function mount({ lan, joined, events }) {
+  // Internet rooms never contribute or send compile jobs; retain the bundled local compiler.
+  if (location.hash.startsWith('#room=')) return;
   const tex = withPackages(texHost()), view = { tex: null, texError: '', pool: { workers: 0, engines: [] }, wanted: false, helpWanted: false, error: '' };
   let participant = null;
   texStatus = tex.status;
@@ -33,7 +35,7 @@ export function mount({ lan, joined, events }) {
   } else events.onPool = info => { view.pool = info; refresh(); };
 
   globalThis.overleafGroupCompile = (project, files, progress, signal) => {
-    const session = lan(); if (!view.wanted || !session || !pool().workers) return undefined;
+    const session = lan(); if (!view.wanted || !session || session.internetRoom || !pool().workers) return undefined;
     const input = { main: project.main, compiler: project.compiler, files: files.map(bytesOf) };
     progress('Sending this compile to the group…');
     const run = participant ? participant.request(input, progress, signal)

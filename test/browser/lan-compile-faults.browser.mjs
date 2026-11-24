@@ -21,7 +21,7 @@ const texHelper = resolve(process.env.LATEX_TEX_HELPER), texDir = resolve(proces
 const work = mkdtempSync(join(tmpdir(), 'latex-group-faults-')), extension = join(work, 'extension');
 cpSync(base, extension, { recursive: true });
 for (const name of readdirSync(join(repository, 'runtime/browser-recovery'))) if (/\.(?:js|mjs|html|css)$/.test(name) && !['apply.mjs', 'provision-offline.mjs', 'recovery-sw.template.js'].includes(name)) cpSync(join(repository, 'runtime/browser-recovery', name), join(extension, 'recovery', name));
-for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^(lan-.*\.mjs|this-computer\.mjs|cells-ui\.mjs|join\.js|index\.html)$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
+for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^((?:lan-|p2p-).*\.mjs|this-computer\.mjs|cells-ui\.mjs|join\.js|index\.html)$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
 mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 for (const name of ['native-workspace.html', 'project-workspace.html']) { const path = join(extension, 'recovery', name); writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>')); }
 import { assetName, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../../runtime/browser-recovery/apply.mjs';
@@ -99,7 +99,7 @@ try {
   await owner.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(owner).waitFor({ timeout: 60000 });
   await setDoc(owner, source('BASEMARK'));
-  await owner.getByRole('button', { name: 'Share on this network' }).click();
+  await owner.getByRole('button', { name: 'Share on this network' }).click(); await owner.getByRole('dialog', { name: 'Share', exact: true }).getByRole('button', { name: /^On this network/ }).click();
   const panel = owner.getByRole('dialog', { name: 'Share on this network' });
   await until(async () => (await panel.locator('code').nth(0).textContent()).trim(), 'share link');
   const link = (await panel.locator('code').nth(0).textContent()).trim(), passcode = (await panel.locator('code').nth(1).textContent()).trim();

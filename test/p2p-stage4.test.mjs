@@ -152,7 +152,7 @@ test('nobody online: a copy member reopens the room from a saved copy; offline e
   await assert.rejects(joinInternetRoom({ link: owner.link, passcode: owner.passcode, username: 'Bo', ...B }), e => e.code === 'nobody');
   const reopened = await reopenInternetRoom({ saved, passcode: owner.passcode, username: 'Ada', ...A });
   assert.equal(reopened.role, 'coordinator'); assert.equal(reopened.epoch, saved.room.epoch + 1);
-  assert.deepEqual(await reopened.join('main.tex'), { text: 'shared\n', v: saved.room.heads['main.tex'].v });
+  assert.deepEqual(await reopened.join('main.tex'), { text: 'shared\n', v: saved.room.heads['main.tex'].v, at: saved.room.heads['main.tex'].at });
   // An offline edit since the save: the room starts a new version, so members holding the old history reconcile explicitly.
   await reopened.leave();
   const edited = { ...saved, project: { ...saved.project, files: saved.project.files.map(f => f.path === 'main.tex' ? { ...f, bytes: enc('shared + offline\n') } : f) } };

@@ -29,7 +29,7 @@ const status = (text, error = false) => { const node = document.querySelector('#
   const separator = document.createElement('span'); separator.className = 'olx-separator';
   if (globalThis.overleafStandalone) bar.append(ui.button({ id: 'local-open-pdf', label: 'Open PDF', ariaLabel: 'Open an existing PDF', iconName: 'picture_as_pdf' }));
   bar.append(iconButton('local-zip', 'Download project (.zip)', 'folder_zip'), iconButton('local-pdf', 'Download PDF', 'picture_as_pdf'),
-    ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), ...(globalThis.overleafStandalone && !joined ? [ui.button({ id: 'local-share', label: 'Share', ariaLabel: 'Share on this network', iconName: 'share' })] : []), separator, wrap);
+    ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), ...(globalThis.overleafStandalone && (!joined || joined.room) ? [ui.button({ id: 'local-share', label: 'Share', ariaLabel: 'Share on this network', iconName: 'share' })] : []), separator, wrap);
   bar.querySelector('#local-status').after(ui.durability());
   ui.mount(bar, { hideLabels: ['Share', 'History'] });
   if (globalThis.overleafStandalone) document.querySelector('#local-review').hidden = true;
@@ -218,6 +218,7 @@ try {
   }
   document.querySelector('#local-share')?.addEventListener('click', async () => {
     const button = document.querySelector('#local-share');
+    if (joined?.room) { joined.room.showPanel(); return; }
     if (lan?.panel) { lan.panel.hidden = !lan.panel.hidden; if (!lan.panel.hidden) lan.panel.querySelector('.lan-btn')?.focus(); return; }
     button.disabled = true;
     try {
@@ -233,12 +234,16 @@ try {
         },
         persist, apply: op => fsApply(op),
       };
-      const host = await (await import('/extension/lan-ui.mjs')).shareFlow({ source, events: lanEvents });
+      const internet = await import('/extension/p2p-ui.mjs'), choice = await internet.shareChoice();
+      if (!choice) return;
+      const host = choice === 'lan' ? await (await import('/extension/lan-ui.mjs')).shareFlow({ source, events: lanEvents })
+        : await internet.internetShare({ source, events: lanEvents, name: choice.name });
       for (const file of files.values()) if (file.doc && editors.get(file.doc)?.container.doc) host.join(file.path); // freeze open documents' state before any edit
-      lan = host; status('Sharing on this network.'); lanEvents.onSharing?.();
+      lan = host; status(choice === 'lan' ? 'Sharing on this network.' : 'Sharing over the internet. PDFs compile on this computer.'); lanEvents.onSharing?.();
     } catch (error) { status(error.message, true); }
     finally { button.disabled = false; }
   });
+  globalThis.overleafNetworkSocket ??= globalThis.WebSocket; // stage 4 room finder only (p2p-signal.mjs: configured broker URLs); the editor keeps no socket
   globalThis.WebSocket = class {
     static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
     constructor() { throw Error('Live connections require Connected mode'); }
@@ -514,7 +519,8 @@ try {
         return node ? Response.json({ pdf: [{ page: node.page, h: node.x, v: node.y, width: node.width, height: node.height }] }) : Response.json({ error: 'No location' }, { status: 404 });
       }
       const node = backward(nav, Number(url.searchParams.get('page')), Number(url.searchParams.get('h')), Number(url.searchParams.get('v')));
-      return node ? Response.json({ code: [{ file: node.path, line: node.line, column: 0 }] }) : Response.json({ error: 'No location' }, { status: 404 });
+      // SyncTeX leaf boxes identify a line, not a column; let the native editor refine the PDF selection.
+      return node ? Response.json({ code: [{ file: node.path, line: node.line }] }) : Response.json({ error: 'No location' }, { status: 404 });
     }
     const asset = url.pathname.match(new RegExp(`^/project/${clientProject}/file/([a-f0-9]{24})`));
     if (asset && assets.has(asset[1])) { const file = assets.get(asset[1]); return new Response(file.content ?? Uint8Array.from(atob(file.data), c => c.charCodeAt(0))); }

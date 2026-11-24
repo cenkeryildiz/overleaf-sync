@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url';
 const directory = dirname(fileURLToPath(import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const assetName = 'codemirror-editor-57ce7aa576296ae31fad.js';
+export function patchLanRecovery(source) {
+  const guard = '    if (globalThis.overleafLanGate) return [];';
+  if (source.includes(guard)) return source;
+  const from = 'function extension(State, Transaction, container, name) {\n    return State.transactionFilter.of(';
+  assert.equal(source.split(from).length - 1, 1, 'Unexpected recovery extension');
+  return source.replace(from, 'function extension(State, Transaction, container, name) {\n' + guard + '\n    return State.transactionFilter.of(');
+}
 export function patchEditorUnicode(source) {
   const from = String.raw`/[\0\uD800-\uDFFF]/g`;
   assert(!source.includes(from + 'u'), 'Editor Unicode sanitizer is already patched');

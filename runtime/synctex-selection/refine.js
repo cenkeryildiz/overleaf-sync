@@ -36,9 +36,30 @@
       return { from, to: from + '\\question'.length };
     }
     if (typeof selected !== 'string' || !selected.trim() || selected.length > 80 || /[\r\n\0]/.test(selected)) return null;
+    const original = selected;
+    selected = selected.replace(/[ﬀﬁﬂﬃﬄ]/g, c => ({ 'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi', 'ﬄ': 'ffl' })[c]).normalize('NFC');
     const math = refineMath(view, position, selected, mathAncestor);
     if (math) return math;
+    // A coarse SyncTeX line can start before an inline formula or its environment opener.
+    let offset = -1, candidate = null, attempts = 0;
+    const outsideMath = !mathAncestor(view.state, position)?.getChild('Content');
+    while (outsideMath && (offset = line.text.indexOf(selected, offset + 1)) !== -1) {
+      if (++attempts > 128) return null;
+      const range = refineMath(view, line.from + offset, selected, mathAncestor);
+      if (!range) continue;
+      if (candidate && (candidate.from !== range.from || candidate.to !== range.to)) return null;
+      candidate = range;
+    }
+    if (candidate) return candidate;
+    if (/^\(?\d+[a-z]?\)?$/.test(selected) && !line.text.includes(selected)) {
+      // Double-click selects the digits of a generated equation number, without its parentheses.
+      for (let i = 0; i < Math.min(line.text.length, 1024); i++) {
+        const content = mathAncestor(view.state, line.from + i)?.getChild('Content');
+        if (content && content.to > content.from && content.to - content.from <= 32768) return { from: content.from, to: content.to };
+      }
+    }
     const sameLine = line.text.indexOf(selected);
+    if (selected !== original && sameLine >= 0 && sameLine === line.text.lastIndexOf(selected) && !line.text.slice(0, sameLine).includes('%') && line.text[sameLine - 1] !== '\\') return { from: line.from + sameLine, to: line.from + sameLine + selected.length };
     if (sameLine >= 0 && sameLine === line.text.lastIndexOf(selected)) return null;
     if (position > 2000000) return null;
     // Text inside an imported PDF belongs to its inclusion, not to editable chart text.

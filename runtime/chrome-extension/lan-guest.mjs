@@ -277,10 +277,6 @@ export async function joinSession({ link, passcode, username, onRemote = () => {
       },
       cursor: ({ path, row, column }) => state === 'live' ? conn.session.send({ t: 'cursor', path, row, column }).catch(() => {}) : Promise.resolve(),
       cursors: () => [...cursors.values()],
-      /** Stage 4 takeover: every edit not yet acknowledged, in order, with its id number, base and ops in the owner's numbering. */
-      outstanding: () => [...files].flatMap(([path, f]) => f.out.map(o => ({ path, n: o.n, base: o.base, ops: o.ops, off: f.off, resolve: o.resolve, reject: o.reject }))),
-      /** As outstanding(), and this session lets go of them: ending it later neither resends nor rejects them (the taker settles each). */
-      takeOutstanding() { const taken = this.outstanding(); for (const o of taken) byKey.delete(`${o.path}\0${cid}.${o.n}`); for (const f of files.values()) f.out = []; return taken; },
       rejoin,
       /** The owner's current text for a conflicted file; its remote edits are held until rebase(). */
       async adopt(path) {

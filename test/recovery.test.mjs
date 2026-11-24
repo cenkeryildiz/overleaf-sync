@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
-import { patchEditor, patchLanUuid, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../runtime/browser-recovery/apply.mjs';
+import { patchEditor, patchLanUuid, patchEditorUnicode, patchLanRecovery, pathnameAssets, patchPathnameUnicode } from '../runtime/browser-recovery/apply.mjs';
 const source = readFileSync(new URL('../runtime/browser-recovery/recovery-core.js', import.meta.url), 'utf8');
 const account = 'a'.repeat(24), project = 'b'.repeat(24), docId = 'c'.repeat(24);
+test('packaging disables durable editor recovery for session-only peers and refuses unknown assets', () => {
+  const raw = 'function extension(State, Transaction, container, name) {\n    return State.transactionFilter.of('; const patched = patchLanRecovery(raw);
+  assert(patched.includes('if (globalThis.overleafLanGate) return [];')); assert.equal(patchLanRecovery(patched), patched);
+  for (const input of ['', raw + raw]) assert.throws(() => patchLanRecovery(input), /Unexpected recovery/);
+});
 class Storage {
   values = new Map(); full = false;
   get length() { return this.values.size; }

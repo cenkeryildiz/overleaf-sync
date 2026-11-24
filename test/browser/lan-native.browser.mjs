@@ -17,16 +17,14 @@ const HOST = process.env.LAN_NETWORK ? String.raw`(?:10\.\d+|172\.(?:1[6-9]|2\d|
 const work = mkdtempSync(join(tmpdir(), 'latex-lan-check-')), extension = join(work, 'extension');
 cpSync(base, extension, { recursive: true });
 for (const name of readdirSync(join(repository, 'runtime/browser-recovery'))) if (/\.(?:js|mjs|html|css)$/.test(name) && !['apply.mjs', 'provision-offline.mjs', 'recovery-sw.template.js'].includes(name)) cpSync(join(repository, 'runtime/browser-recovery', name), join(extension, 'recovery', name));
-for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^(lan-.*\.mjs|join\.js|index\.html)$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
+for (const name of readdirSync(join(repository, 'runtime/chrome-extension'))) if (/^((?:lan-|p2p-).*\.mjs|join\.js|index\.html)$/.test(name)) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));
 for (const name of ['native-workspace.html', 'project-workspace.html']) { const path = join(extension, 'recovery', name); writeFileSync(path, readFileSync(path, 'utf8').replace('<head>', '<head><script src="/extension/bootstrap.js"></script>')); }
-import { assetName, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../../runtime/browser-recovery/apply.mjs';
+import { assetName, patchEditorUnicode, patchLanRecovery, pathnameAssets, patchPathnameUnicode } from '../../runtime/browser-recovery/apply.mjs';
 const editorPath = join(extension, 'js', assetName); { // as package.mjs does; the base asset embeds an older recovery-core.js, so carry this repository's LAN guard into it as provisioning would
   const raw = readFileSync(editorPath, 'utf8'), patched = String.raw`/[\0\uD800-\uDFFF]/gu`;
   let editor = raw.includes(patched) ? raw : patchEditorUnicode(raw); // a packaged base (with the compiler) is already patched
-  const header = 'function extension(State, Transaction, container, name) {\n    return State.transactionFilter.of(';
-  assert.equal(editor.split(header).length - 1, 1, 'base editor asset has an unexpected recovery extension');
   assert(readFileSync(join(repository, 'runtime/browser-recovery/recovery-core.js'), 'utf8').includes('if (globalThis.overleafLanGate) return [];'));
-  writeFileSync(editorPath, editor.replace(header, 'function extension(State, Transaction, container, name) {\n    if (globalThis.overleafLanGate) return [];\n    return State.transactionFilter.of('));
+  writeFileSync(editorPath, patchLanRecovery(editor));
 }
 cpSync(join(repository, 'runtime/participant-compile/worker.js'), join(extension, 'recovery/busytex/busytex_worker.js')); // as package.mjs does
 for (const name of Object.keys(pathnameAssets)) { const path = join(extension, 'js', name), raw = readFileSync(path, 'utf8'); if (!raw.includes(pathnameAssets[name][1])) writeFileSync(path, patchPathnameUnicode(name, raw)); } // as package.mjs does; emoji path names
@@ -95,7 +93,7 @@ try {
   for (const [path, bytes] of Object.entries(fixture)) assert.equal(ownerFiles[path], sha(bytes), path);
   const projectBytes = Object.values(ownerFiles).reduce((n, d) => n + Number(d.split(':')[1]), 0);
   // ---- Share on this network
-  await owner.getByRole('button', { name: 'Share on this network' }).click();
+  await owner.getByRole('button', { name: 'Share on this network' }).click(); await owner.getByRole('dialog', { name: 'Share', exact: true }).getByRole('button', { name: /^On this network/ }).click();
   const panel = owner.getByRole('dialog', { name: 'Share on this network' });
   await until(async () => (await panel.locator('code').nth(0).textContent()).trim() || (await owner.locator('#local-status').getAttribute('data-error')) === 'true', 'share link or error');
   assert.equal(await panel.count(), 1, await owner.locator('#local-status').textContent());
@@ -201,7 +199,7 @@ try {
   const again = await ownerContext.newPage(); await again.goto(projectUrl); await editorOf(again).waitFor({ timeout: 60000 });
   assert.equal(await docOf(again), ownerText); note('owner data intact after host loss');
   // ---- rejoin: new room, new passcode; the old code no longer works; the participant gets the owner's current text
-  await again.getByRole('button', { name: 'Share on this network' }).click();
+  await again.getByRole('button', { name: 'Share on this network' }).click(); await again.getByRole('dialog', { name: 'Share', exact: true }).getByRole('button', { name: /^On this network/ }).click();
   const panel2 = again.getByRole('dialog', { name: 'Share on this network' });
   await until(async () => (await panel2.locator('code').nth(0).textContent()).trim(), 'second share link');
   const link2 = (await panel2.locator('code').nth(0).textContent()).trim(), passcode2 = (await panel2.locator('code').nth(1).textContent()).trim();
@@ -291,7 +289,7 @@ try {
   // ---- S2-05 lock and reconcile dialogs: two host losses with the
   // owner editing while the participant is away; the lock offers Rejoin/Leave and covers the editor; a new room then asks keep or discard.
   { const share = async page => {
-      await page.getByRole('button', { name: 'Share on this network' }).click(); const p = page.getByRole('dialog', { name: 'Share on this network' });
+      await page.getByRole('button', { name: 'Share on this network' }).click(); await page.getByRole('dialog', { name: 'Share', exact: true }).getByRole('button', { name: /^On this network/ }).click(); const p = page.getByRole('dialog', { name: 'Share on this network' });
       await until(async () => (await p.locator('code').nth(0).textContent()).trim(), 'share link');
       return { link: (await p.locator('code').nth(0).textContent()).trim(), code: (await p.locator('code').nth(1).textContent()).trim() };
     };

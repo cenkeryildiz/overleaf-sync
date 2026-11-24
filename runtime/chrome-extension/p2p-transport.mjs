@@ -56,7 +56,7 @@ const candidate = c => c && { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLine
  * offers; each opened channel is one peer. 'addresses' reports none (internet rooms bind nothing), 'admit' is a no-op and 'drop'
  * closes that peer's connection. `state` is 'up' or 'down' (finder outage: open rooms keep working, new joins wait).
  */
-export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCPeerConnection, iceServers = [] } = {}) {
+export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCPeerConnection, iceServers = [], passcodes = () => [] } = {}) {
   const listeners = new Set(), peers = new Map(), byFrom = new Map(); let next = 1, finder = null, closed = false;
   const helper = { state: 'down', get peers() { return peers.size; } };
   const emit = event => { for (const listener of listeners) listener(event); };
@@ -64,6 +64,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
     const p = peers.get(peer); if (!p) return;
     peers.delete(peer); byFrom.delete(p.from); clearTimeout(p.timer);
     // The channel closes first so messages already queued (e.g. 'revoked') still arrive; closing the connection at once discards them.
+    if (p.local) { p.local.closedByHelper(); if (p.open && notify) emit({ ev: 'gone', peer }); return; }
     const pc = p.pc, later = setTimeout(() => { try { pc.close(); } catch {} }, CLOSE_GRACE);
     if (p.channel) p.channel.onclose = () => { clearTimeout(later); try { pc.close(); } catch {} };
     try { p.channel?.close(); } catch {} if (!p.channel) { clearTimeout(later); try { pc.close(); } catch {} }
@@ -106,7 +107,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
       if (op === 'open') {
         if (!signaling) throw noFinder();
         if (finder) throw Error('This room is already open');
-        finder = await signaling.open({ roomId: args.room, role: 'owner', onSignal, onState: up => { helper.state = up ? 'up' : 'down'; } });
+        finder = await signaling.open({ roomId: args.room, role: 'owner', passcodes: passcodes(), onSignal, onState: up => { helper.state = up ? 'up' : 'down'; } });
         helper.state = 'up';
         return { port: 0, link: roomLink(args.room) };
       }
@@ -115,6 +116,23 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
     },
     send(message) { if (message?.op === 'send') { const p = peers.get(message.peer); if (p?.open) p.send(unb64(message.data)); } },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    /** The passcodes changed (removal): the finder re-keys; open connections are unaffected. */
+    rekey: () => finder?.rekey?.(passcodes()),
+    /**
+     * In-memory participant connection to this coordinator, WebSocket-shaped like p2pSocket's class: the member whose computer
+     * coordinates keeps its own participant session (and editor) and reaches its own room without any network.
+     */
+    connectLocal(url) {
+      const peer = next++, socket = { url, binaryType: 'arraybuffer', readyState: 0 }, entry = { from: `local${peer}`, open: false, local: socket };
+      entry.send = bytes => { const copy = bytes.slice(); queueMicrotask(() => { if (socket.readyState === 1) socket.onmessage?.({ data: copy.buffer }); }); };
+      socket.send = bytes => { if (socket.readyState !== 1) throw Error('Not connected'); const copy = new Uint8Array(bytes).slice(); queueMicrotask(() => { if (peers.get(peer) === entry) emit({ ev: 'data', peer, data: b64(copy) }); }); };
+      socket.close = () => { if (socket.readyState === 3) return; const was = socket.readyState; socket.readyState = 3; if (peers.get(peer) === entry) { peers.delete(peer); if (entry.open) emit({ ev: 'gone', peer }); } if (was === 1) queueMicrotask(() => socket.onclose?.()); };
+      socket.closedByHelper = () => { if (socket.readyState === 3) return; socket.readyState = 3; queueMicrotask(() => socket.onclose?.()); };
+      if (closed) { queueMicrotask(() => socket.onerror?.(Error('The room is closed'))); socket.readyState = 3; return socket; }
+      peers.set(peer, entry);
+      queueMicrotask(() => { if (socket.readyState !== 0) return; entry.open = true; socket.readyState = 1; emit({ ev: 'peer', peer }); socket.onopen?.(); });
+      return socket;
+    },
     close() { if (closed) return; closed = true; for (const peer of [...peers.keys()]) end(peer); finder?.close(); finder = null; helper.state = 'down'; },
   });
   return helper;
@@ -124,7 +142,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
  * Participant side: a WebSocket-shaped class (`new Socket('p2p:<roomId>')`) for joinSession. It offers one data channel to the
  * room's owner through the finder; once open, the finder is left and the session no longer depends on it.
  */
-export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCPeerConnection, iceServers = [] } = {}) {
+export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCPeerConnection, iceServers = [], passcode = () => null } = {}) {
   return class P2PSocket {
     #pc = null; #channel = null; #finder = null; #send = null; #state = 0; #timer;
     constructor(url) {
@@ -136,7 +154,7 @@ export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCP
     async #start(roomId) {
       if (!roomId) throw Error('This is not a valid room link');
       if (!signaling) throw noFinder();
-      this.#finder = await signaling.open({ roomId, role: 'peer', onSignal: (from, m) => this.#signal(from, m) });
+      this.#finder = await signaling.open({ roomId, role: 'peer', passcodes: [passcode()].filter(Boolean), onSignal: (from, m) => this.#signal(from, m) });
       if (this.#state !== 0) { this.#finder.close(); return; }
       const pc = this.#pc = new RTC({ iceServers }), channel = this.#channel = pc.createDataChannel('room', { ordered: true });
       this.#send = framed(channel, { onFrame: bytes => this.onmessage?.({ data: bytes.buffer }), onFail: () => this.close() });

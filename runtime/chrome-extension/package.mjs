@@ -5,7 +5,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, unlinkSync, lstatSync, existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assetName, patchEditorUnicode, pathnameAssets, patchPathnameUnicode } from '../browser-recovery/apply.mjs';
+import { assetName, patchEditorUnicode, patchLanRecovery, pathnameAssets, patchPathnameUnicode } from '../browser-recovery/apply.mjs';
+import { refreshSynctex } from '../synctex-selection/apply.mjs';
 const source = dirname(fileURLToPath(import.meta.url)), repository = resolve(source, '../..');
 const destination = resolve(process.argv[2] || '/Users/macc/Downloads/LaTeX_Local_Chrome_Extension');
 const image = process.argv[3] || 'sha256:f2f69f3528aacbbd83c77093e1efec31f363e4447c4d2e87b76862b982d83a66';
@@ -35,7 +36,7 @@ for (const name of readdirSync(resolve(repository, 'runtime/browser-recovery')))
     cpSync(resolve(repository, 'runtime/browser-recovery', name), join(destination, 'recovery', name));
 }
 const extension = join(destination, 'extension'); mkdirSync(extension);
-for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'research-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs', 'cells-ui.mjs', 'packages-ui.mjs']) cpSync(join(source, name), join(extension, name));
+for (const name of ['background.js', 'bootstrap.js', 'index.html', 'join.js', 'imports.mjs', 'zip-worker.mjs', 'native-template.json', 'ZIPJS-LICENSE.txt', 'lan-room.mjs', 'lan-sync.mjs', 'lan-transfer.mjs', 'lan-session-store.mjs', 'lan-grants.mjs', 'lan-ot.mjs', 'lan-host.mjs', 'lan-guest.mjs', 'lan-ui.mjs', 'p2p-signal.mjs', 'p2p-providers.mjs', 'p2p-transport.mjs', 'p2p-identity.mjs', 'p2p-membership.mjs', 'p2p-replica.mjs', 'p2p-room.mjs', 'p2p-reconcile.mjs', 'p2p-ui.mjs', 'research-ui.mjs', 'lan-compile.mjs', 'lan-compile-ui.mjs', 'this-computer.mjs', 'cells-ui.mjs', 'packages-ui.mjs']) cpSync(join(source, name), join(extension, name));
 // TEX-PKG: catalog/store/installer modules, the pinned TeX Live key and the vendored xz decoder with its licence
 mkdirSync(join(extension, 'packages')); for (const name of ['store.mjs', 'tlpdb.mjs', 'tar.mjs', 'openpgp.mjs', 'detect.mjs', 'xzwasm.min.js', 'XZWASM-LICENSE.txt', 'texlive.asc']) cpSync(resolve(repository, 'runtime/packages', name), join(extension, 'packages', name));
 mkdirSync(join(extension, 'research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(resolve(repository, 'runtime/research', name), join(extension, 'research', name));
@@ -46,7 +47,7 @@ writeFileSync(templatePath, JSON.stringify(template));
 cpSync(join(source, 'zipjs'), join(extension, 'zipjs'), { recursive: true });
 cpSync(join(source, 'manifest.json'), join(destination, 'manifest.json'));
 const editorPath = join(destination, 'js', assetName);
-writeFileSync(editorPath, patchEditorUnicode(readFileSync(editorPath, 'utf8')));
+writeFileSync(editorPath, patchLanRecovery(patchEditorUnicode(refreshSynctex(readFileSync(editorPath, 'utf8'), readFileSync(resolve(repository, 'runtime/synctex-selection/refine.js'), 'utf8')))));
 for (const name of Object.keys(pathnameAssets)) { const path = join(destination, 'js', name); writeFileSync(path, patchPathnameUnicode(name, readFileSync(path, 'utf8'))); }
 for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync(join(repository, name), join(destination, name));
 { // the image's service worker with this branch's template (TEX-PKG mirror exception), keeping the image's asset manifest

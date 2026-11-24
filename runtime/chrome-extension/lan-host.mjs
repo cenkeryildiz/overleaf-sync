@@ -230,15 +230,6 @@ export async function startHost({ helper, source, permission = () => true, onRem
       try { entry.handle(LOCAL, { t: 'update', k: 'op', cid: OWNER_CID, n, base: update.v, ops: update.op }, NAME); } catch (error) { waiting.delete(key); return Promise.reject(error); }
       return done;
     },
-    /** Stage 4 takeover: an edit this computer sent as a participant, resent under its original id (n); later edits continue after it. */
-    resubmit(path, { n, base, ops }) {
-      path = current(path); const entry = sync(path);
-      if (!entry) return Promise.reject(Error('Unknown file'));
-      counters.set(path, Math.max(counters.get(path) ?? 0, n));
-      const key = `${path}\0${OWNER_CID}.${n}`, done = new Promise((resolve, reject) => waiting.set(key, { resolve, reject }));
-      try { entry.handle(LOCAL, { t: 'update', k: 'op', cid: OWNER_CID, n, base, ops }, NAME); } catch (error) { waiting.delete(key); return Promise.reject(error); }
-      return done;
-    },
     /** Every shared document's current text, version and log (the handover seed of the next coordinator). */
     docs: () => Object.fromEntries([...syncs].map(([path, entry]) => [path, entry.state()])),
     cursor(c) { return room.broadcast({ t: 'cursor', name: NAME, ...c }).catch(() => {}); },

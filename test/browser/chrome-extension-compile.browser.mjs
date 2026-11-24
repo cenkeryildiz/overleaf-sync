@@ -145,7 +145,9 @@ try {
   const figure = Buffer.from(await page.evaluate(async () => [...new Uint8Array(await (await overleafLocalProjects.read(location.hash.slice(1))).project.pdf.arrayBuffer())])).toString('base64');
   const resources = [
     { path: 'main.tex', content: String.raw`\documentclass{article}
+\usepackage[T1]{fontenc}
 \usepackage{graphicx}
+\usepackage{amsmath}
 \begin{document}
 \input{sections/child}
 \includegraphics[width=1in]{figure.pdf}
@@ -155,7 +157,15 @@ try {
 \end{document}
 ` },
     { path: 'sections/child.tex', content: String.raw`Multi-file navigation marker.
+Inline $q+7$ then an office ligature and Türkçe.
 \[ x^2 + y^2 = z^2 \]
+\begin{equation} a+9=b \end{equation}
+\begin{align}
+c+3 &= d+4 \\
+e+5 &= f+6
+\end{align}
+\parbox{1.8cm}{extraordinarily internationalization}
+Wrapped paragraph text fills the available line and continues across the next PDF line, with more ordinary words before the unique wrappedmarker at its end.
 ` },
     { path: 'figure.pdf', data: figure },
     { path: 'refs.bib', content: '@book{fixture,author={Fixture Author},title={Offline Bibliography},year={2026}}\n' },
@@ -176,8 +186,22 @@ try {
   });
   assert.equal(mapping.forward, 'sections/child.tex'); assert.equal(mapping.backward, 'sections/child.tex');
   stage = 'native-navigation-controls';
-  await page.locator('.textLayer span').filter({ hasText: 'Multi-file navigation marker.' }).first().dblclick();
-  await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, resources.find(file => file.path === 'sections/child.tex').content);
+  const samples = [];
+  for (const word of ['marker', 'office', 'Türkçe', 'q', 'z', 'b', 'd', 'f', 'extra', 'wrappedmarker']) {
+    const prose = ['marker', 'office', 'Türkçe', 'extra', 'wrappedmarker'].includes(word);
+    const span = page.locator('.textLayer span').filter({ hasText: prose ? word : new RegExp('^' + word + '$') }).first();
+    if (prose) {
+      const box = await span.evaluate((node, word) => { const text = node.firstChild, at = text.textContent.indexOf(word); const range = new Range(); range.setStart(text, at); range.setEnd(text, at + word.length); const box = range.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }, word);
+      await page.mouse.dblclick(box.x, box.y);
+    } else await span.dblclick();
+    try { await page.waitForFunction(word => { const view = document.querySelector('[aria-label^="Source Editor"]')?.cmView.view; return view && view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to).includes(word); }, word); }
+    catch (error) { console.error(JSON.stringify({ word, selection: await editor.evaluate(node => { const v = node.cmView.view; return { selected: v.state.sliceDoc(v.state.selection.main.from, v.state.selection.main.to), line: v.state.doc.lineAt(v.state.selection.main.head).number }; }) })); throw error; }
+    samples.push(await editor.evaluate(node => { const view = node.cmView.view, selection = view.state.selection.main; return { line: view.state.doc.lineAt(selection.from).number, selected: view.state.sliceDoc(selection.from, selection.to) }; }));
+  }
+  assert.deepEqual(samples.map(sample => sample.line), [1, 2, 2, 2, 3, 4, 6, 7, 9, 10]);
+  await page.locator('.textLayer span').filter({ hasText: /^\(1\)$/ }).first().dblclick();
+  await page.waitForFunction(() => { const view = document.querySelector('[aria-label^="Source Editor"]')?.cmView.view; return view?.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to).includes('a+9=b'); });
+  metrics.inverseSelections = samples;
   await page.getByRole('button', { name: 'Go to code location in PDF', exact: true }).click();
   await page.getByRole('treeitem', { name: 'main.tex', exact: true }).click();
   await page.waitForFunction(expected => document.querySelector('[aria-label^="Source Editor"]')?.cmView.view.state.doc.toString() === expected, resources[0].content);
