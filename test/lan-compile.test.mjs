@@ -116,6 +116,17 @@ test('worker loss, opt-out and a lost grant release the job to another contribut
   await assert.rejects(second, /failed: the helping computer left/); assert.equal(ATTEMPTS, 2);
 });
 
+test('a TeX helper that stops mid-job is a lost worker: the job is retried, not reported as a TeX error', async () => {
+  const h = harness(), ta = fakeTex(), tc = fakeTex(), a = h.join('a', 'Ana', ta), c = h.join('c', 'Cem', tc), b = h.join('b', 'Bea');
+  await a.help(true); await c.help(true); await settle();
+  const p = request(b, h.files);
+  await until(() => ta.runs.length + tc.runs.length === 1, 'job started');
+  const [dead, other] = ta.runs.length ? [ta, tc] : [tc, ta];
+  dead.runs[0].reject(Object.assign(Error('The TeX helper is not installed or stopped.'), { lost: true }));
+  await until(() => other.runs.length === 1, 'retried on the other contributor');
+  other.runs[0].ok(); assert.equal((await p).stats.by, other === ta ? 'Ana' : 'Cem');
+});
+
 test('a downgraded grant stops new work; lease expiry releases a silent worker', async () => {
   const h = harness(), ta = fakeTex(), tc = fakeTex(), a = h.join('a', 'Ana', ta), c = h.join('c', 'Cem', tc), b = h.join('b', 'Bea');
   await a.help(true); await settle();
@@ -166,5 +177,5 @@ test('texHost stages exact chunks and reassembles streamed PDF and SyncTeX parts
   const chunks = posted.filter(m => m.op === 'chunk');
   assert.deepEqual(chunks.map(m => m.offset), [0, 270000, 540000]); assert.ok(chunks.every(m => m.data.length <= 360000));
   assert.equal(posted.filter(m => m.op === 'begin').length, 2, 'a just-finished compile is waited for, not reported');
-  hold = true; const asked = host.status(); listeners.gone(); await assert.rejects(asked, /not installed/); // the helper went away mid-call
+  hold = true; const asked = host.status(); listeners.gone(); await assert.rejects(asked, error => /not installed/.test(error.message) && error.lost === true); // the helper went away mid-call
 });

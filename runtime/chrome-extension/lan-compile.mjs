@@ -105,6 +105,7 @@ export function ownerGroup({ room, current, now = Date.now, onChange = () => {},
     if (!job || job.state !== 'leased' || job.worker !== peer || m.lease !== job.lease || latest.get(job.requester) !== job.id || m.digest !== job.digest || m.compiler !== job.compiler)
       return send(peer, { t: 'work', k: 'refused', job: typeof m.job === 'string' ? m.job : null, reason: 'Stale, foreign or repeated result' });
     w.job = null;
+    if (m.k === 'fail' && m.lost === true) return release(job, 'its TeX helper stopped'); // S3-05: a crashed helper is a lost worker, not a TeX error
     if (m.k === 'fail') return end(job, { k: 'failed', reason: `${clip(m.error, 200)} (on ${w.name}'s computer). Your files and previous PDF are retained.`, log: clip(m.log, 32000) });
     const pdf = upload?.xfer === m.xfer ? upload.files.get('output.pdf') : null, synctex = upload?.files.get('output.synctex.gz');
     if (!pdf || !synctex || upload.files.size !== 2 || !isPdf(pdf) || !isGzip(synctex) || pdf.length > MAX_PDF || synctex.length > MAX_SYNCTEX) {
@@ -212,14 +213,14 @@ export function participantGroup({ send, tex, onChange = () => {}, now = Date.no
       if (await identity(job.main, job.compiler, files) !== job.digest) return finish(job, { error: 'The job files do not match the job' });
       update({ status: 'Compiling for the group' });
       try { const out = await tex.compile(files, job.main, job.compiler); if (!job.cancelled) await finish(job, out); }
-      catch (error) { if (!job.cancelled) await finish(job, { error: error.message, log: error.log }); }
+      catch (error) { if (!job.cancelled) await finish(job, { error: error.message, log: error.log, lost: error.lost === true }); }
     }
   }
   async function finish(job, out) {
     if (active !== job) return;
     const base = { t: 'work', job: job.job, lease: job.lease, digest: job.digest, compiler: job.compiler };
     try {
-      if (out.error) await send({ ...base, k: 'fail', error: out.error, log: clip(out.log, 32000) });
+      if (out.error) await send({ ...base, k: 'fail', error: out.error, log: clip(out.log, 32000), ...(out.lost && { lost: true }) });
       else {
         const { xfer } = await streamFiles(m => send({ t: 'work', k: 'blob', m }), { files: [{ path: 'output.pdf', bytes: out.pdf }, { path: 'output.synctex.gz', bytes: out.synctex }] });
         await send({ ...base, k: 'done', xfer, log: clip(out.log, 32000) });
@@ -297,7 +298,7 @@ export function texHost(connectNative = (...a) => chrome.runtime.connectNative(.
       if (m.error) p.reject(Object.assign(Error(m.error), { log: m.log }));
       else p.resolve(m.done ? { parts: p.parts, log: m.log } : m.result);
     });
-    port.onDisconnect.addListener(() => { port = null; for (const p of pending.values()) p.reject(Error('The TeX helper is not installed or stopped. Install the helper once, then reopen the browser.')); pending.clear(); });
+    port.onDisconnect.addListener(() => { port = null; for (const p of pending.values()) p.reject(Object.assign(Error('The TeX helper is not installed or stopped. Install the helper once, then reopen the browser.'), { lost: true })); pending.clear(); });
     return port;
   };
   const call = (op, args = {}) => new Promise((resolve, reject) => {
