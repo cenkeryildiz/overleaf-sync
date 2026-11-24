@@ -3,17 +3,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OwnerRoom, joinRoom, joinLink, parseJoinLink, normalizePasscode, validUsername, newRoomSecrets, MAX_MESSAGE } from '../runtime/chrome-extension/lan-room.mjs';
 
-const tick = () => new Promise(resolve => setImmediate(resolve));
-const settle = async () => { for (let i = 0; i < 20; i++) await tick(); };
+const pending = new Set();
+const schedule = task => {
+  const run = new Promise(resolve => setImmediate(resolve)).then(task); pending.add(run);
+  run.then(() => pending.delete(run), () => pending.delete(run));
+};
+const settle = async () => {
+  let timer;
+  try {
+    await Promise.race([(async () => { while (pending.size) await Promise.all([...pending]); })(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Room fixture did not settle')), 5000); })]);
+  } finally { clearTimeout(timer); }
+};
 
 /** In-memory stand-in for the helper: records every frame so tests can replay or tamper with them. */
 function harness(events = {}) {
   const links = new Map(), dropped = new Set(), admitted = new Set(), log = { joins: [], messages: [], leaves: [] };
   let next = 1;
   const room = new OwnerRoom({
-    send: (peer, bytes) => { const link = links.get(peer); if (link && !dropped.has(peer)) { link.toParticipant.push(bytes); setImmediate(() => link.session.receive(bytes)); } },
+    send: (peer, bytes) => { const link = links.get(peer); if (link && !dropped.has(peer)) { link.toParticipant.push(bytes); schedule(() => link.session.receive(bytes)); } },
     admit: peer => admitted.add(peer),
-    drop: peer => { dropped.add(peer); const link = links.get(peer); if (link) setImmediate(() => link.session.closed()); },
+    drop: peer => { dropped.add(peer); const link = links.get(peer); if (link) schedule(() => link.session.closed()); },
     onJoin: (peer, name) => log.joins.push([peer, name]),
     onMessage: (peer, message, name) => log.messages.push([peer, message, name]),
     onLeave: (peer, name) => log.leaves.push([peer, name]),
@@ -25,7 +35,7 @@ function harness(events = {}) {
     room.connected(peer);
     link.session = joinRoom({
       roomId: room.roomId, passcode, username,
-      send: bytes => { link.toOwner.push(bytes); if (!dropped.has(peer)) setImmediate(() => room.receive(peer, bytes)); },
+      send: bytes => { link.toOwner.push(bytes); if (!dropped.has(peer)) schedule(() => room.receive(peer, bytes)); },
       close: () => { if (!dropped.has(peer)) { dropped.add(peer); room.disconnected(peer); } },
       onMessage: message => link.received.push(message), onGrant: grant => link.grants.push(grant), onEnd: reason => link.ended.push(reason),
       ...rest,
