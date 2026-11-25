@@ -2,9 +2,13 @@
 
 [![Build and release](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml/badge.svg)](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml)
 
+**[Download latest — Chrome / macOS](https://github.com/cenkeryildiz/overleaf-sync/releases/latest/download/LaTeX-Local-Chrome-macOS-arm64.zip)** · [All releases](https://github.com/cenkeryildiz/overleaf-sync/releases)
+
+Unzip to a permanent folder. In `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the extracted folder. Keep that folder in place. Export important projects before replacing or removing an installation.
+
 Self-hosted collaborative LaTeX **web application candidate** for browser use on Windows/macOS, retaining nearly all capabilities of the selected CE+, Overleaf Workshop and LaTeX Workshop repositories and adding safe local/offline recovery, explicit Local only / Connect to server sessions, and multi-user server job distribution. No VS Code extension or Premium account is required.
 
-**Current status: R0 is in progress. The local service and public-source image candidate have passed synthetic browser workflows and encrypted restore checks; Google login/logout/repeat login was user-confirmed locally. No application release or independent public host is active yet.**
+**Current download: the standalone offline LaTeX editor, verified on Chrome/macOS arm64. The hosting and collaboration material below describes separate development work; it is not required to use the offline editor.**
 
 ## Use an existing instance
 
