@@ -1,19 +1,17 @@
 # Release contract
 
-## Current planning pipeline
+LaTeX Local is distributed as a versioned GitHub Release. The stable download URL is https://github.com/cenkeryildiz/overleaf-sync/releases/latest/download/LaTeX-Local-Chrome-macOS-arm64.zip. The current v0.1.0 ZIP corresponds to source c21e067eb24d4e6d288127e796f5f944108ba5fd; main may include newer documentation or development work.
 
-The existing workflow checks repository tooling on Linux, macOS and Windows, builds planning assets from exact committed source, and reopens the source archive to verify hashes. Only successful main-branch CI updates the rolling `latest` planning prerelease. The publisher checks source identity and re-downloads assets. PR jobs have no publication permission.
+The supported qualification target is Chrome/macOS arm64. The release notes state tested scope and remaining development features. Other OS/browser targets require their own application checks. Repository CI on Linux/macOS/Windows does not establish browser qualification on those platforms.
 
-The package is tooling, not an application. Editing phase names/status cannot produce or authorize a web release. The 9 November documentation revision uses a work branch because pushing main triggers publication; it does not deploy or publish a release.
+For an explicitly authorized release:
 
-## Web application releases
+1. Finish the scoped implementation and its real browser checks. Run npm ci, typecheck, test and validate, then build/test:package from exact committed source. Those build outputs are source snapshots, not the installable application.
+2. Build the standalone folder with runtime/chrome-extension/package.mjs using the pinned existing asset image. Retain runtime assets, source/provenance references and third-party licences. Check the actual folder/ZIP and newly published history for private inputs, credentials, maps and unsafe paths; verify exact decoded asset bytes, extension identity and source commit.
+3. After source CI and package/application checks pass, create a new versioned release draft with LaTeX-Local-Chrome-macOS-arm64.zip and SHA256SUMS. Keep existing tags/releases. Independently download and hash-check both draft assets, publish as latest with honest scope, then verify the anonymous stable download against the tested ZIP. Record results in the existing project plan and retain rollback until readback succeeds.
 
-The product is a browser-based collaborative LaTeX application, not a VS Code extension. R0 must establish the actual web/source/service artifact pipeline, exact supported browsers and host/runtime requirements, smoke checks, source/checksum provenance and rollback. No VSIX, installed VS Code or Marketplace step is required. If a local helper is needed, its artifacts, loopback authentication/origin boundary and lifecycle require their own qualification; do not assume browser APIs provide local filesystem/compile durability.
+The former rolling planning publisher is disabled and must not replace the application release. PR jobs have read-only permissions; every action stays pinned and publication requires explicit authorization. A release does not authorize a website/server deployment, licence or repository-visibility change, account activation or paid usage.
 
-Retain nearly all selected upstream capabilities through web workflows; extension-only features require web equivalents. Missing integration remains an explicit gap. R0–R7 are eight incremental releases; a candidate/production target requires actual evidence through its target, not later phases. R4 review/chat, R5 workflows, R6 shared server compilation and R7 multi-user job distribution remain required for complete-project acceptance even though earlier partial releases can ship first.
+Keep the same Chrome extension key/identity and preserve project storage. Users should export important work before an update, keep the installation folder in place, save work and reload the extension before reopening it. Do not reload or alter a real user's browser/profile from release tooling.
 
-Use versioned web assets and required service/container/configuration artifacts with notices, immutable runtime/source identities, checksums and rollback instructions. Exercise exact artifacts in declared real browsers, with authenticated server and worker tests where applicable. Missing required scripts/runners/artifacts or unexecuted required gates block distribution. Never substitute planning checks, mock-only tests or extension experiment results for web acceptance.
-
-Schema 3 uses eight ordered phases. `releasePhase` is null in planning/development and R0–R7 for candidate/production. Both release stages require passed prerequisites through the target. Planning permits no passed application phases. Preserve historical evidence, reopen invalidated prerequisites, reset dependents and reassess release claims after failures.
-
-Versions 0.1–0.8 identify increments, not delivery dates. Source commits/pushes do not authorize deployment, changing visibility, license changes, external-account activation or publishing releases. Follow explicit authorization for those actions.
+R0–R7 evidence and stage completion remain in the authoritative plan and phase-status file. Publishing a development download does not turn unexecuted checks or unfinished collaboration stages into accepted features.

@@ -1,8 +1,8 @@
 {
   "name": "overleaf-sync",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Planning and release infrastructure for Overleaf Sync",
+  "description": "LaTeX Local offline editor and application release tooling",
   "license": "SEE LICENSE IN LICENSE",
   "publisher": "cenker-local",
   "repository": {
