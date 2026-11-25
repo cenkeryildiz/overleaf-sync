@@ -1,15 +1,21 @@
-# Overleaf Sync
+# LaTeX Local
 
 [![Build and release](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml/badge.svg)](https://github.com/cenkeryildiz/overleaf-sync/actions/workflows/build.yml)
 
-Planned Windows and macOS VS Code extension for local LaTeX editing with simultaneous collaboration through an independent self-hosted Overleaf-compatible server. No Premium Overleaf account is required by the planned architecture.
+**[Download latest — Chrome / macOS](https://github.com/cenkeryildiz/overleaf-sync/releases/latest/download/LaTeX-Local-Chrome-macOS-arm64.zip)** · [All releases](https://github.com/cenkeryildiz/overleaf-sync/releases)
+
+Offline LaTeX editing and local PDF compilation, verified on Chrome/macOS arm64. No account, server or separate TeX installation is needed for offline work.
+
+Unzip to a permanent folder. In `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the extracted folder. Keep the folder in place; export important projects before replacing an installation.
+
+[Released application source](https://github.com/cenkeryildiz/overleaf-sync/tree/v0.1.0). The planning sections below are historical; current application code and its plan are in the released source.
 
 Implementation status is recorded in the [plan](docs/COLLABORATIVE_LATEX_PLAN.md#21-implementation-status).
 
 - [Collaborative LaTeX — Architecture and Delivery Plan](docs/COLLABORATIVE_LATEX_PLAN.md)
 - [Eight risk-first phases](docs/COLLABORATIVE_LATEX_PLAN.md#17-eight-risk-first-implementation-phases-and-mandatory-completion-gates)
 - [Machine-readable phase status](docs/phase-status.json)
-- [Rolling latest release](https://github.com/cenkeryildiz/overleaf-sync/releases/tag/latest)
+- [Latest application release](https://github.com/cenkeryildiz/overleaf-sync/releases/latest)
 - [Release process and validation](docs/RELEASE.md)
 
 ## Implementation phases

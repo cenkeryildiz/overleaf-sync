@@ -57,9 +57,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish rolling latest planning prerelease
+    name: Legacy planning publisher (disabled)
     needs: [test, package]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: ${{ false }} # Versioned, checked application releases must not be replaced by planning assets.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
