@@ -10,7 +10,7 @@ import { selectSignaling } from './p2p-signal.mjs';
 export const PIECE = 64 * 1024 - 1;           // payload per data-channel message: 64 KiB is the size every WebRTC stack accepts
 export const QUEUE_LIMIT = 96 * 1024 * 1024;  // bytes waiting per peer; a full 64 MB snapshot in base64 frames fits, more drops the peer
 export const OPEN_TIMEOUT = 20_000;           // a connection attempt that never opens its channel is closed (strangers cannot pile up)
-export const MAX_PEERS = 32, CLOSE_GRACE = 2000;
+export const MAX_PEERS = 32, CLOSE_GRACE = 2000, DISCONNECT_GRACE = 3000;
 const HIGH = 1024 * 1024, MORE = 0, LAST = 1;
 const b64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
 const unb64 = text => Uint8Array.from(atob(text), c => c.charCodeAt(0));
@@ -48,6 +48,20 @@ function framed(channel, { onFrame, onFail }) {
   };
 }
 
+// A transient network change may recover; repeated state events must not postpone a persistent loss.
+function watchConnection(pc, onLost) {
+  let timer = null;
+  const clear = () => { clearTimeout(timer); timer = null; };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') clear();
+    else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { clear(); onLost(); }
+    else if (pc.connectionState === 'disconnected' && timer === null) timer = setTimeout(() => {
+      timer = null; if (pc.connectionState !== 'connected') onLost();
+    }, DISCONNECT_GRACE);
+  };
+  return () => { clear(); pc.onconnectionstatechange = null; };
+}
+
 const noFinder = () => Error('Internet rooms are not available: no room finder is configured');
 const candidate = c => c && { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex };
 
@@ -62,7 +76,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
   const emit = event => { for (const listener of listeners) listener(event); };
   const end = (peer, notify = true) => {
     const p = peers.get(peer); if (!p) return;
-    peers.delete(peer); byFrom.delete(p.from); clearTimeout(p.timer);
+    peers.delete(peer); byFrom.delete(p.from); clearTimeout(p.timer); p.stopWatching?.();
     // The channel closes first so messages already queued (e.g. 'revoked') still arrive; closing the connection at once discards them.
     if (p.local) { p.local.closedByHelper(); if (p.open && notify) emit({ ev: 'gone', peer }); return; }
     const pc = p.pc, later = setTimeout(() => { try { pc.close(); } catch {} }, CLOSE_GRACE);
@@ -80,7 +94,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
       entry.timer = setTimeout(() => end(peer), OPEN_TIMEOUT);
       peers.set(peer, entry); byFrom.set(from, peer);
       pc.onicecandidate = event => { if (event.candidate) try { finder.send(from, { t: 'ice', c: candidate(event.candidate) }); } catch {} };
-      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') end(peer); };
+      entry.stopWatching = watchConnection(pc, () => end(peer));
       pc.ondatachannel = ({ channel }) => {
         if (entry.channel) { channel.close(); return; } // one channel per peer
         entry.channel = channel;
@@ -144,7 +158,7 @@ export function p2pHelper({ signaling = selectSignaling(), RTC = globalThis.RTCP
  */
 export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCPeerConnection, iceServers = [], passcode = () => null } = {}) {
   return class P2PSocket {
-    #pc = null; #channel = null; #finder = null; #send = null; #state = 0; #timer;
+    #pc = null; #channel = null; #finder = null; #send = null; #state = 0; #timer; #stopWatching;
     constructor(url) {
       this.url = url; this.binaryType = 'arraybuffer';
       const roomId = /^p2p:([A-Za-z0-9_-]{22})$/.exec(String(url))?.[1];
@@ -160,7 +174,7 @@ export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCP
       this.#send = framed(channel, { onFrame: bytes => this.onmessage?.({ data: bytes.buffer }), onFail: () => this.close() });
       channel.onopen = () => { clearTimeout(this.#timer); this.#state = 1; this.#finder?.close(); this.#finder = null; this.onopen?.(); };
       channel.onclose = () => this.#end();
-      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') this.#fail(Error('No direct connection path to the room was found. This network may require relay fallback, which is not available yet')); };
+      this.#stopWatching = watchConnection(pc, () => this.#fail(Error('No direct connection path to the room was found. This network may require relay fallback, which is not available yet')));
       pc.onicecandidate = event => { if (event.candidate) try { this.#finder?.send('owner', { t: 'ice', c: candidate(event.candidate) }); } catch {} };
       this.#timer = setTimeout(() => this.#fail(Error('The room did not open a direct connection. Keep the owner’s shared project open. This network may require relay fallback, which is not available yet')), OPEN_TIMEOUT);
       await pc.setLocalDescription(await pc.createOffer());
@@ -173,7 +187,7 @@ export function p2pSocket({ signaling = selectSignaling(), RTC = globalThis.RTCP
       else if (m.t === 'bye') this.#fail(Error('The room refused the connection'));
     }
     #fail(error) { if (this.#state === 0) { this.#state = 3; this.#teardown(); this.onerror?.(error); } else this.close(); }
-    #teardown() { clearTimeout(this.#timer); try { this.#channel?.close(); } catch {} try { this.#pc?.close(); } catch {} this.#finder?.close(); this.#finder = null; }
+    #teardown() { clearTimeout(this.#timer); this.#stopWatching?.(); this.#stopWatching = null; try { this.#channel?.close(); } catch {} try { this.#pc?.close(); } catch {} this.#finder?.close(); this.#finder = null; }
     #end() { if (this.#state === 3) return; const was = this.#state; this.#state = 3; this.#teardown(); if (was === 1) this.onclose?.(); }
     send(bytes) { if (this.#state !== 1) throw Error('Not connected'); this.#send(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)); }
     close() { if (this.#state === 0) { this.#state = 3; this.#teardown(); return; } this.#end(); }

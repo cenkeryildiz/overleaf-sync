@@ -161,3 +161,15 @@ test('nobody online: a copy member reopens the room from a saved copy; offline e
   await again.leave();
   await assert.rejects(reopenInternetRoom({ saved, passcode: owner.passcode, username: 'Bo', ...computer(hub) }), /copy permission/);
 });
+
+test('concurrent identity requests share one key and forget waits for an in-flight creation', async () => {
+  const store = identityStore({ memory: true });
+  const requests = Array.from({ length: 12 }, () => store.forRoom(ROOM));
+  const ids = await Promise.all(requests);
+  assert(ids.every(id => id === ids[0]), 'One room must get the same in-flight identity');
+  const message = enc('synthetic identity proof');
+  assert(await (await import('../runtime/chrome-extension/p2p-identity.mjs')).verify(ids[0].key, await ids[1].sign(message), message));
+  const pending = store.forRoom('T'.repeat(22));
+  await store.forget('T'.repeat(22));
+  assert((await pending).key !== (await store.forRoom('T'.repeat(22))).key, 'Forgotten pending identity must not reappear');
+});

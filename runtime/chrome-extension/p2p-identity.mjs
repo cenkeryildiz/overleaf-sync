@@ -39,17 +39,29 @@ export function identityStore({ db = globalThis.indexedDB, memory = !db } = {}) 
     request.onupgradeneeded = () => request.result.createObjectStore('pairs');
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
-  const run = async (mode, act) => { const conn = await open(); try { return await new Promise((resolve, reject) => { const tx = conn.transaction('pairs', mode), r = act(tx.objectStore('pairs')); tx.oncomplete = () => resolve(r?.result); tx.onerror = () => reject(tx.error); }); } finally { conn.close(); } };
+  const run = async (mode, act) => { const conn = await open(); try { return await new Promise((resolve, reject) => { const tx = conn.transaction('pairs', mode), r = act(tx.objectStore('pairs')); tx.oncomplete = () => resolve(r?.result); tx.onabort = () => reject(tx.error || Error('Room identity storage transaction aborted')); }); } finally { conn.close(); } };
   return {
     /** The identity for this room: the stored one, else a new one (stored when `keep`). */
     async forRoom(roomId, { keep = true } = {}) {
       if (held.has(roomId)) return held.get(roomId);
-      let pair = memory || !keep ? null : await run('readonly', s => s.get(roomId)).catch(() => null);
-      let identity;
-      if (pair?.privateKey && pair?.publicKey) identity = wrap(pair, b64u(new Uint8Array(await subtle.exportKey('raw', pair.publicKey))));
-      else { ({ pair, identity } = await newIdentity()); if (!memory && keep) await run('readwrite', s => s.put(pair, roomId)); }
-      held.set(roomId, identity); return identity;
+      const pending = (async () => {
+        if (memory || !keep) return (await newIdentity()).identity;
+        let pair = await run('readonly', s => s.get(roomId));
+        if (!pair) {
+          const fresh = await newIdentity();
+          try { await run('readwrite', s => s.add(fresh.pair, roomId)); return fresh.identity; }
+          catch (error) {
+            if (error?.name !== 'ConstraintError') throw error;
+            pair = await run('readonly', s => s.get(roomId)); // another tab won; never overwrite its identity
+          }
+        }
+        if (!pair?.privateKey || !pair?.publicKey) throw Error('Saved room identity is invalid; it was not replaced');
+        return wrap(pair, b64u(new Uint8Array(await subtle.exportKey('raw', pair.publicKey))));
+      })();
+      held.set(roomId, pending);
+      try { return await pending; }
+      catch (error) { if (held.get(roomId) === pending) held.delete(roomId); throw error; }
     },
-    async forget(roomId) { held.delete(roomId); if (!memory) await run('readwrite', s => s.delete(roomId)).catch(() => {}); },
+    async forget(roomId) { await held.get(roomId)?.catch(() => {}); held.delete(roomId); if (!memory) await run('readwrite', s => s.delete(roomId)).catch(() => {}); },
   };
 }

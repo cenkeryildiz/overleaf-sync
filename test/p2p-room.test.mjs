@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { startHost } from '../runtime/chrome-extension/lan-host.mjs';
 import { joinSession } from '../runtime/chrome-extension/lan-guest.mjs';
 import { memorySignaling, CONNECT, FIND } from '../runtime/chrome-extension/p2p-signal.mjs';
-import { p2pHelper, p2pSocket, QUEUE_LIMIT, OPEN_TIMEOUT } from '../runtime/chrome-extension/p2p-transport.mjs';
+import { p2pHelper, p2pSocket, QUEUE_LIMIT, OPEN_TIMEOUT, DISCONNECT_GRACE } from '../runtime/chrome-extension/p2p-transport.mjs';
 import { parseJoinLink, roomLink, joinLink } from '../runtime/chrome-extension/lan-room.mjs';
 import { RTC, FakePC } from './p2p-fake-rtc.mjs';
 
@@ -132,3 +132,59 @@ test('hostile peers: malformed frames and oversized reassembly drop only that pe
   await until(() => host.participants().length === 0);
   bo.leave(); await host.stop();
 });
+
+
+for (const side of ['owner', 'participant']) {
+  test(`${side}: transient disconnect recovers; a repeated persistent disconnect is bounded and teardown removes its watcher`, async t => {
+    const { host, join, helper } = await room();
+    const ctl = await join('Recovery');
+    t.after(async () => { ctl.leave(); await host.stop(); });
+    const pc = [...FakePC.all].find(p => p.channel?.readyState === 'open' && !!p.offerer === (side === 'owner'));
+    assert(pc);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const state = value => { pc.connectionState = value; pc.onconnectionstatechange?.(); };
+    state('disconnected');
+    t.mock.timers.tick(DISCONNECT_GRACE - 1); await tick();
+    assert.equal(helper.peers, 1); assert.equal(ctl.state, 'live');
+    state('connected');
+    t.mock.timers.tick(DISCONNECT_GRACE + 1); await tick();
+    assert.equal(helper.peers, 1); assert.equal(ctl.state, 'live');
+    state('disconnected');
+    t.mock.timers.tick(DISCONNECT_GRACE - 1); await tick();
+    state('disconnected'); // a duplicate event cannot restart the deadline
+    state('connecting'); // ICE restart that has not recovered is still bounded
+    assert.equal(helper.peers, 1);
+    t.mock.timers.tick(1); await until(() => helper.peers === 0);
+    assert.equal(pc.onconnectionstatechange, null);
+    t.mock.timers.tick(DISCONNECT_GRACE * 2); await tick();
+    assert.equal(helper.peers, 0);
+  });
+  test(`${side}: explicit shutdown cancels pending disconnect cleanup`, async t => {
+    const { host, join, helper } = await room();
+    const ctl = await join('Shutdown');
+    t.after(async () => { ctl.leave(); await host.stop(); });
+    const pc = [...FakePC.all].find(p => p.channel?.readyState === 'open' && !!p.offerer === (side === 'owner'));
+    assert(pc);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    pc.connectionState = 'disconnected'; pc.onconnectionstatechange();
+    if (side === 'owner') helper.close(); else ctl.leave();
+    await until(() => helper.peers === 0);
+    assert.equal(pc.onconnectionstatechange, null);
+    t.mock.timers.tick(DISCONNECT_GRACE * 2); await tick();
+    assert.equal(helper.peers, 0);
+  });
+  test(`${side}: failed/closed bypass the disconnect grace`, async t => {
+    const { host, join, helper } = await room();
+    const ctl = await join('Immediate');
+    t.after(async () => { ctl.leave(); await host.stop(); });
+    const pc = [...FakePC.all].find(p => p.channel?.readyState === 'open' && !!p.offerer === (side === 'owner'));
+    assert(pc);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    pc.connectionState = 'disconnected'; pc.onconnectionstatechange();
+    pc.connectionState = side === 'owner' ? 'failed' : 'closed'; pc.onconnectionstatechange();
+    await until(() => helper.peers === 0);
+    assert.equal(pc.onconnectionstatechange, null);
+    t.mock.timers.tick(DISCONNECT_GRACE * 2); await tick();
+    assert.equal(helper.peers, 0);
+  });
+}
