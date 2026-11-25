@@ -49,7 +49,7 @@ try {
   const started = performance.now();
   await page.goto(root + '/extension/index.html');
   assert.equal(await page.locator('#tex-status').count(), 0);
-  await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.waitForURL(root + '/recovery/project-workspace.html');
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Blank offline project');
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
   const editor = page.getByRole('textbox', { name: /^Source Editor/ }); await editor.waitFor({ timeout: 45000 });

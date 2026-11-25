@@ -137,7 +137,7 @@
       const bundled = globalThis.overleafStandalone ? await (await fetch('/extension/native-template.json')).json() : undefined;
       if (bundled) {
         document.querySelector('#prepare-compiler').hidden = true;
-        const connect = document.querySelector('#connect'); connect.textContent = 'Connection options'; connect.onclick = () => location.assign('/extension/index.html');
+        document.querySelector('#connect').hidden = true;
       }
       const saved = await api.list(), host = document.querySelector('#chooser-list'), chooser = document.querySelector('#chooser');
       document.body.dataset.view = 'chooser'; chooser.hidden = false; chooser.querySelector('.chooser-inner').append(document.querySelector('#status'));
@@ -147,14 +147,16 @@
       if (template || bundled) {
         const form = document.createElement('form'), name = document.createElement('input'), create = document.createElement('button');
         let imported;
-        name.setAttribute('aria-label', 'New local project name'); name.placeholder = 'New local project name'; name.required = true; name.maxLength = 200;
-        create.textContent = 'Create local project'; form.append(name, create); document.querySelector('#chooser-create').append(form);
+        name.setAttribute('aria-label', 'New local project name'); name.placeholder = 'Give your project a name'; name.required = true; name.maxLength = 200;
+        create.textContent = 'Create local project';
+        const nameLabel = document.createElement('label'); nameLabel.textContent = 'Project name'; nameLabel.append(name);
+        form.append(nameLabel, create); document.querySelector('#chooser-create').append(form);
         const main = document.createElement('select'), compiler = document.createElement('select');
         main.setAttribute('aria-label', 'Main document'); compiler.setAttribute('aria-label', 'Compiler');
         for (const value of ['pdflatex', 'xelatex', 'lualatex']) { const option = document.createElement('option'); option.value = value; option.textContent = { pdflatex: 'pdfLaTeX', xelatex: 'XeLaTeX', lualatex: 'LuaLaTeX' }[value]; compiler.append(option); }
         if (bundled) {
-          const label = document.createElement('label'); label.textContent = 'Open source files or a ZIP project';
-          const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.setAttribute('aria-label', label.textContent); label.append(input);
+          const label = document.createElement('label'); label.className = 'project-import'; label.textContent = 'Bring an existing project';
+          const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.setAttribute('aria-label', 'Open source files or a ZIP project'); const hint = document.createElement('span'); hint.textContent = 'Choose LaTeX source files or a ZIP archive'; label.append(hint, input);
           const options = document.createElement('div'); options.hidden = true; options.append(main);
           document.querySelector('#chooser-create').append(label, options);
           input.onchange = async () => {
@@ -184,22 +186,23 @@
         };
       }
       const size = bytes => bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+      document.querySelector('#project-count').textContent = String(latest.length);
       for (const project of latest) {
         const row = document.createElement('div'); row.className = 'project-row';
-        const title = project.name || project.main, badge = document.createElement('span'); badge.className = 'project-icon'; badge.setAttribute('aria-hidden', 'true'); badge.textContent = title.trim().charAt(0).toUpperCase() || 'P';
+        const title = project.name || project.main, badge = document.createElement('span'); badge.className = 'project-icon'; badge.setAttribute('aria-hidden', 'true'); badge.textContent = 'TeX';
         const main = document.createElement('div'); main.className = 'project-main';
         const link = document.createElement('a'); link.href = '/recovery/' + (project.native ? 'native-workspace.html' : 'project-workspace.html') + '#' + project.id;
-        const when = document.createElement('span'); when.className = 'when'; when.textContent = ' — ' + new Date(project.preparedAt).toLocaleString();
-        link.append(title, when);
+        const when = document.createElement('span'); when.className = 'when'; when.textContent = new Date(project.preparedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        link.textContent = title; link.title = title;
         const details = document.createElement('div'); details.className = 'project-meta';
         details.textContent = [project.main, Number.isSafeInteger(project.bytes) ? size(project.bytes) : null, project.pdf ? 'PDF saved' : 'Not compiled yet'].filter(Boolean).join(' · ');
-        main.append(link, details);
+        main.append(link, details, when);
         const tag = document.createElement('span'); tag.className = 'tag'; tag.dataset.kind = project.localOnly ? 'local' : 'shared'; tag.textContent = project.localOnly ? 'Local only' : 'From server';
         row.append(badge, main, tag); host.append(row);
       }
-      if (!saved.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = bundled ? 'Create a project or open your source files or ZIP. No account or connection is needed.' : 'No saved projects yet. Open a shared project while connected and choose Offline → Work offline.'; host.after(empty); }
-      for (const id of ['connect', 'export-project', 'export-file', 'export-pdf', 'undo', 'redo', 'compile', 'to-pdf']) if (!(bundled && id === 'connect')) document.querySelector('#' + id).disabled = true;
-      report(bundled ? 'Projects stay on this device. Export a ZIP before removing the extension.' : saved.length ? 'Choose a saved project or create a local project. Files remain in this browser; export a ZIP to transfer them.' : 'No saved projects. Connect to a shared project and choose Work offline.'); return;
+      if (!saved.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = bundled ? 'Your next project starts here. Create a blank document above, or bring in your LaTeX files.' : 'No saved projects yet. Open a shared project while connected and choose Offline → Work offline.'; host.after(empty); }
+      for (const id of ['connect', 'export-project', 'export-file', 'export-pdf', 'undo', 'redo', 'compile', 'to-pdf']) document.querySelector('#' + id).disabled = true;
+      report(bundled ? '' : saved.length ? 'Choose a saved project or create a local project. Files remain in this browser; export a ZIP to transfer them.' : 'No saved projects. Connect to a shared project and choose Work offline.'); return;
     }
     ({ project, files } = await api.read(location.hash.slice(1))); files = new Map(files.map(file => [file.path, file]));
     self.webpackChunk_overleaf_web.push([[989002], {}, require => {

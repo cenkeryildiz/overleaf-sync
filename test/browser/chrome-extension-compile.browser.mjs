@@ -60,7 +60,7 @@ try {
   page.on('pageerror', pageError);
   page.on('requestfailed', request => { missing.push(new URL(request.url()).pathname); if (missing.length > 12) missing.shift(); });
   await page.goto(root + '/extension/index.html');
-  await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.waitForURL(root + '/recovery/project-workspace.html');
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Offline compilation fixture');
   const initial = performance.now();
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
