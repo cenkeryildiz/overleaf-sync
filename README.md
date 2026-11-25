@@ -15,7 +15,7 @@ Implementation status is recorded in the [plan](docs/COLLABORATIVE_LATEX_PLAN.md
 - [Collaborative LaTeX — Architecture and Delivery Plan](docs/COLLABORATIVE_LATEX_PLAN.md)
 - [Eight risk-first phases](docs/COLLABORATIVE_LATEX_PLAN.md#17-eight-risk-first-implementation-phases-and-mandatory-completion-gates)
 - [Machine-readable phase status](docs/phase-status.json)
-- [Latest application release](https://github.com/cenkeryildiz/overleaf-sync/releases/latest)
+- [Archived planning prerelease](https://github.com/cenkeryildiz/overleaf-sync/releases/tag/latest)
 - [Release process and validation](docs/RELEASE.md)
 
 ## Implementation phases
