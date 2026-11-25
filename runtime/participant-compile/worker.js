@@ -13,7 +13,16 @@ function allowed(value) {
   return url.href;
 }
 const nativeFetch = self.fetch.bind(self), nativeImport = self.importScripts.bind(self), nativeOpen = XMLHttpRequest.prototype.open;
-self.fetch = (url, options) => nativeFetch(allowed(url), { ...options, method: 'GET', credentials: 'omit', redirect: 'error' });
+self.fetch = (url, options) => {
+  const asset = allowed(url), settings = { ...options, method: 'GET', credentials: 'omit', redirect: 'error' };
+  if (location.protocol !== 'chrome-extension:' || !/\/(?:busytex\.wasm|biber\.(?:data|wasm))$/.test(asset)) return nativeFetch(asset, settings);
+  // shortcut: TeX bundles stay raw after memory/lookup regressions; revisit only with safe package loading.
+  // Packaged optional bundles and engine bytes are compressed; Emscripten still receives the exact original stream and WASM MIME.
+  return nativeFetch(asset + '.gz', settings).then(response => response.ok
+    ? new Response(response.body.pipeThrough(new DecompressionStream('gzip')), {
+      headers: { 'Content-Type': asset.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' },
+    }) : response);
+};
 self.importScripts = (...urls) => nativeImport(...urls.map(allowed));
 XMLHttpRequest.prototype.open = function(method, url, ...rest) {
   if (method !== 'GET') throw Error('Worker network method refused');
