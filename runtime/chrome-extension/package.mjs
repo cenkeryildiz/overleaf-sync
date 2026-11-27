@@ -7,7 +7,7 @@ import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assetName, patchEditorUnicode, patchLanRecovery, pathnameAssets, patchPathnameUnicode } from '../browser-recovery/apply.mjs';
 import { compressCompilerAssets } from './compress-compiler.mjs';
-import { refreshSynctex } from '../synctex-selection/apply.mjs';
+import { refreshSynctex, refreshPdfViewer } from '../synctex-selection/apply.mjs';
 const source = dirname(fileURLToPath(import.meta.url)), repository = resolve(source, '../..');
 const destination = resolve(process.argv[2] || '/Users/macc/Downloads/LaTeX_Local_Chrome_Extension');
 const image = process.argv[3] || 'sha256:f2f69f3528aacbbd83c77093e1efec31f363e4447c4d2e87b76862b982d83a66';
@@ -50,6 +50,7 @@ cpSync(join(source, 'zipjs'), join(extension, 'zipjs'), { recursive: true });
 cpSync(join(source, 'manifest.json'), join(destination, 'manifest.json'));
 const editorPath = join(destination, 'js', assetName);
 writeFileSync(editorPath, patchLanRecovery(patchEditorUnicode(refreshSynctex(readFileSync(editorPath, 'utf8'), readFileSync(resolve(repository, 'runtime/synctex-selection/refine.js'), 'utf8')))));
+{ const path = join(destination, 'js/pdf-js-viewer-108321e8423f4015bf44.js'); writeFileSync(path, refreshPdfViewer(readFileSync(path, 'utf8'))); }
 for (const name of Object.keys(pathnameAssets)) { const path = join(destination, 'js', name); writeFileSync(path, patchPathnameUnicode(name, readFileSync(path, 'utf8'))); }
 for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync(join(repository, name), join(destination, name));
 { // the image's service worker with this branch's template (TEX-PKG mirror exception), keeping the image's asset manifest

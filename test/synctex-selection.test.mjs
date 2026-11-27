@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
-import {patchSynctex,patchPdfViewer,refreshSynctex} from '../runtime/synctex-selection/apply.mjs';
+import {patchSynctex,patchPdfViewer,refreshSynctex,refreshPdfViewer} from '../runtime/synctex-selection/apply.mjs';
 const context=vm.createContext({});vm.runInContext(readFileSync(new URL('../runtime/synctex-selection/refine.js',import.meta.url),'utf8'),context);
 function run(text,leaves,selected,{size=text.length,limit=leaves.length,position=0}={}){
  let at=0;const cursor={get type(){return{is:name=>leaves[at].type===name}},get from(){return leaves[at].from},get to(){return leaves[at].to},next(){at++;return at<limit}};
@@ -51,7 +51,25 @@ test('pinned asset validation refuses overwriting a destination from unknown inp
 
 test('imported figure title selects its inclusion, and comments stay untouched',()=>{const text='  \\includegraphics[width=4cm]{figure.pdf}';const r=run(text,[],'Errors');assert.equal(text.slice(r.from,r.to),'\\includegraphics[width=4cm]{figure.pdf}');assert.equal(run('% '+text,[],'Errors'),null)});
 test('generated exam labels use the native hinted questions block and reject wrong counters',()=>{const text='\\begin{questions}\n\\question First\n\\question Second\ncontinued\n\\question Third\n\\end{questions}';for(const [number,anchor]of [[2,'continued'],[3,'Third']]){const r=run(text,[],'\0question:'+number,{position:text.indexOf(anchor)});assert.equal(text.slice(r.from,r.to),'\\question');assert.equal(r.from,text.indexOf('\\question '+(number===2?'Second':'Third')))}assert.equal(run(text,[],'\0question:3',{position:text.indexOf('continued')}),null);assert.equal(run(text+'\nTail',[],'\0question:3',{position:text.length+1}),null)});
-test('only a click on the numeric prefix carries a generated-label hint',()=>{const code=patchPdfViewer('selectText:window.getSelection()?.toString()');const span={textContent:'2. Explain this',getBoundingClientRect:()=>({left:0})};const sandbox={window:{getSelection:()=>({toString:()=> '2'})},n:{clientX:3,target:{closest:()=>span}},getComputedStyle:()=>({fontSize:'10px'})};assert.equal(vm.runInNewContext('('+code.replace('selectText:','{selectText:')+'})',sandbox).selectText,'\0question:2');sandbox.n.clientX=40;assert.equal(vm.runInNewContext('('+code.replace('selectText:','{selectText:')+'})',sandbox).selectText,'2')});
+test('only a click on the rendered numeric label carries a generated-label hint, and selections carry their neighbours',()=>{
+ const code=patchPdfViewer('selectText:window.getSelection()?.toString()'),node={nodeType:3,textContent:'2. If you rate the rate'},span={firstChild:node,textContent:node.textContent,contains:x=>x===node};
+ const selection={toString:()=>'If',rangeCount:1,getRangeAt:()=>({startContainer:node,endContainer:node,startOffset:3,endOffset:5})};
+ const sandbox={window:{getSelection:()=>selection},n:{clientX:6,target:{closest:()=>span}},document:{createRange:()=>{const r={setStart:(_,a)=>r.a=a,setEnd:(_,b)=>r.b=b,getBoundingClientRect:()=>({left:r.a*5,right:r.b*5})};return r}}};
+ const pick=()=>vm.runInNewContext('('+code.replace('selectText:','{selectText:')+'})',sandbox).selectText;
+ assert.equal(pick(),'\0question:2');assert.equal(sandbox.overleafSynctexContext,undefined);
+ sandbox.n.clientX=17;assert.equal(pick(),'If');assert.deepEqual({...sandbox.overleafSynctexContext},{word:'If',before:'2',after:'you'});
+ Object.assign(selection,{toString:()=>'rate',getRangeAt:()=>({startContainer:node,endContainer:node,startOffset:19,endOffset:23})});sandbox.n.clientX=100;assert.equal(pick(),'rate');assert.deepEqual({...sandbox.overleafSynctexContext},{word:'rate',before:'the',after:undefined});
+ const previous=readFileSync(new URL('../runtime/synctex-selection/apply.mjs',import.meta.url),'utf8').match(/const viewerPrevious='(.*)';/)[1].replaceAll('\\\\','\\');
+ assert.equal(refreshPdfViewer('X'+previous+'Y'),'X'+code+'Y');assert.equal(refreshPdfViewer('X'+code+'Y'),'X'+code+'Y');assert.throws(()=>refreshPdfViewer('selectText:other'),/Unknown/);
+});
+test('a word truly repeated on its line selects only the occurrence whose PDF neighbours match',()=>{
+ const text='the rate and the \\textbf{rate} rose';
+ const at=(before,after)=>{context.overleafSynctexContext={word:'rate',before,after};return run(text,[],'rate')};
+ assert.deepEqual({...at('the','rose')},{from:text.lastIndexOf('rate'),to:text.lastIndexOf('rate')+4});
+ assert.deepEqual({...at(undefined,'and')},{from:4,to:8});
+ assert.equal(at('the',undefined),null);assert.equal(at('a','b'),null);assert.equal(run(text,[],'rate'),null);
+ context.overleafSynctexContext={word:'other',before:'the',after:'rose'};assert.equal(run(text,[],'rate'),null);assert.equal(context.overleafSynctexContext,undefined);
+});
 
 test('a graph heading mapped to the end of its float selects the sole inclusion',()=>{const text='\\begin{figure}\n\\includegraphics{plot.pdf}\n\\caption{Caption}\n\\end{figure}';const r=run(text,[],'Errors',{position:text.indexOf('\\end{figure}')});assert.equal(text.slice(r.from,r.to),'\\includegraphics{plot.pdf}');const multiple=text.replace('\\caption{Caption}','\\includegraphics{second.pdf}');assert.equal(run(multiple,[],'Errors',{position:multiple.indexOf('\\end{figure}')}),null)});
 test('a whole word repeated only inside longer words, commands or comments selects its single occurrence',()=>{

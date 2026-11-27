@@ -36,8 +36,9 @@
       return { from, to: from + '\\question'.length };
     }
     if (typeof selected !== 'string' || !selected.trim() || selected.length > 80 || /[\r\n\0]/.test(selected)) return null;
-    const original = selected;
-    selected = selected.replace(/[ﬀﬁﬂﬃﬄ]/g, c => ({ 'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi', 'ﬄ': 'ffl' })[c]).normalize('NFC');
+    const original = selected, plain = text => text.replace(/[ﬀﬁﬂﬃﬄ]/g, c => ({ 'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi', 'ﬄ': 'ffl' })[c]).normalize('NFC');
+    const context = globalThis.overleafSynctexContext; globalThis.overleafSynctexContext = undefined;
+    selected = plain(selected);
     const math = refineMath(view, position, selected, mathAncestor);
     if (math) return math;
     // A coarse SyncTeX line can start before an inline formula or its environment opener.
@@ -68,6 +69,12 @@
     }
     const sameLine = line.text.indexOf(selected);
     if (words.length === 1 && sameLine !== line.text.lastIndexOf(selected)) return { from: line.from + words[0], to: line.from + words[0] + selected.length };
+    if (words.length > 1 && context?.word === original && (context.before || context.after) && /^[\p{L}\p{N}]+$/u.test(selected)) {
+      // A truly repeated word: keep only the occurrence whose typeset neighbours match the PDF; never pick the first.
+      const tokens = [...body.matchAll(/\\?[\p{L}\p{N}@]+/gu)].filter(token => token[0][0] !== '\\'), near = (i, word) => !word || tokens[i]?.[0] === plain(word);
+      const hits = tokens.flatMap((token, i) => token[0] === selected && near(i - 1, context.before) && near(i + 1, context.after) ? [token.index] : []);
+      if (hits.length === 1) return { from: line.from + hits[0], to: line.from + hits[0] + selected.length };
+    }
     if (selected !== original && sameLine >= 0 && sameLine === line.text.lastIndexOf(selected) && !line.text.slice(0, sameLine).includes('%') && line.text[sameLine - 1] !== '\\') return { from: line.from + sameLine, to: line.from + sameLine + selected.length };
     if (sameLine >= 0 && sameLine === line.text.lastIndexOf(selected)) return null;
     if (position > 2000000) return null;

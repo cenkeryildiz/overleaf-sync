@@ -15,11 +15,21 @@ export function patchSynctex(source, core) {
   }
   return core+'\n'+source;
 }
+const viewerOriginal='selectText:window.getSelection()?.toString()';
+// Earlier patch output: the label hit area was a fixed 2 em, which could swallow a short first word.
+const viewerPrevious='selectText:(()=>{const span=n.target?.closest?.(".textLayer span"),label=span?.textContent?.trim().match(/^(\\d+)\\.\\s/);return label&&n.clientX-span.getBoundingClientRect().left<parseFloat(getComputedStyle(span).fontSize)*2?"\\0question:"+label[1]:window.getSelection()?.toString()||span?.textContent?.trim()})()';
+// A numeric label counts only when the click lies on the rendered "N." glyphs. The neighbouring words of a selection
+// go to the editor so a word repeated on its source line can be told apart; it is consumed by the next refine.
+const viewerPatched='selectText:(()=>{const span=n.target?.closest?.(".textLayer span"),node=span?.firstChild,label=node?.nodeType===3&&node.textContent.match(/^(\\s*)(\\d+)\\.(?=\\s)/);let hit=false;if(label){const r=document.createRange();r.setStart(node,label[1].length);r.setEnd(node,label[0].length);const b=r.getBoundingClientRect();hit=n.clientX>=b.left-1&&n.clientX<=b.right+1}const s=window.getSelection(),text=s?.toString()||span?.textContent?.trim();let before,after;const g=s?.rangeCount?s.getRangeAt(0):null;if(g&&g.startContainer===g.endContainer&&g.startContainer.nodeType===3&&span?.contains(g.startContainer)){const t=g.startContainer.textContent;before=t.slice(0,g.startOffset).match(/([\\p{L}\\p{N}]+)[^\\p{L}\\p{N}]*$/u)?.[1];after=t.slice(g.endOffset).match(/^[^\\p{L}\\p{N}]*([\\p{L}\\p{N}]+)/u)?.[1]}globalThis.overleafSynctexContext=hit?undefined:{word:text,before,after};return hit?"\\0question:"+label[2]:text})()';
 export function patchPdfViewer(source) {
-  const from='selectText:window.getSelection()?.toString()';
-  assert(!source.includes(from+'||'),'Unknown or already patched PDF viewer');
-  assert.equal(source.split(from).length-1,1,'Unknown or already patched PDF viewer');
-  return source.replace(from,'selectText:(()=>{const span=n.target?.closest?.(".textLayer span"),label=span?.textContent?.trim().match(/^(\\d+)\\.\\s/);return label&&n.clientX-span.getBoundingClientRect().left<parseFloat(getComputedStyle(span).fontSize)*2?"\\0question:"+label[1]:window.getSelection()?.toString()||span?.textContent?.trim()})()');
+  assert(!source.includes(viewerOriginal+'||'),'Unknown or already patched PDF viewer');
+  assert.equal(source.split(viewerOriginal).length-1,1,'Unknown or already patched PDF viewer');
+  return source.replace(viewerOriginal,viewerPatched);
+}
+export function refreshPdfViewer(source) {
+  if (source.split(viewerPatched).length-1===1) return source;
+  assert.equal(source.split(viewerPrevious).length-1,1,'Unknown PDF viewer patch');
+  return source.replace(viewerPrevious,viewerPatched);
 }
 export function refreshSynctex(source, core) {
   const end = '  globalThis.overleafSynctexSelection = Object.freeze({ refine });\n})();';

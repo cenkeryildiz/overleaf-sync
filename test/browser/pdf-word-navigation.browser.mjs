@@ -20,8 +20,11 @@ word ending.
 
 The corporate rate rose.
 
+The rate and the rate rose.
+
 \begin{itemize}
 \item[1.] Estimation and solution appear as ordinary words.
+\item[2.] If so, stop.
 \end{itemize}
 % Alpha commented out.
 \end{document}
@@ -103,12 +106,19 @@ try {
     const point = await ending.evaluate(n => { const t = n.firstChild, at = t.textContent.indexOf('ending'), r = new Range(); r.setStart(t, at); r.setEnd(t, at + 6); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
     await page.mouse.dblclick(point.x, point.y);
     await page.waitForFunction(line => { const v = document.querySelector('[aria-label^="Source Editor"]').cmView.view; return v.state.doc.lineAt(v.state.selection.main.from).number === line; }, source.slice(0, source.indexOf('ending')).split('\n').length);
-    // "rate" is one word but a repeated substring ("corporate"); the editor must select it, not the line start.
-    const rate = page.locator('.textLayer span').filter({ hasText: /corporate rate/ }).first(); await rate.scrollIntoViewIfNeeded();
-    const at = await rate.evaluate(n => { const t = n.firstChild, i = t.textContent.indexOf(' rate') + 1, r = new Range(); r.setStart(t, i); r.setEnd(t, i + 4); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
-    await page.mouse.dblclick(at.x, at.y);
-    await page.waitForFunction(from => { const s = document.querySelector('[aria-label^="Source Editor"]').cmView.view.state.selection.main; return s.from === from && s.to === from + 4; }, source.indexOf(' rate ') + 1);
-    checked++;
+    // Double-click the nth occurrence of a word inside the first span matching a pattern; the editor must select it exactly.
+    const selects = async (pattern, word, nth, from) => {
+      const span = page.locator('.textLayer span').filter({ hasText: pattern }).first(); await span.scrollIntoViewIfNeeded();
+      const at = await span.evaluate((n, [word, nth]) => { const t = n.firstChild; let i = -1; for (let k = 0; k <= nth; k++) i = t.textContent.indexOf(word, i + 1); const r = new Range(); r.setStart(t, i); r.setEnd(t, i + word.length); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }, [word, nth]);
+      await page.mouse.dblclick(at.x, at.y);
+      await page.waitForFunction(([from, to]) => { const s = document.querySelector('[aria-label^="Source Editor"]').cmView.view.state.selection.main; return s.from === from && s.to === to; }, [from, from + word.length]);
+      checked++;
+    };
+    // "rate" is one word but a repeated substring ("corporate"); a truly repeated word needs its PDF neighbours.
+    await selects(/corporate rate/, 'rate', 1, source.indexOf('corporate rate') + 10);
+    await selects(/rate and the rate/, 'rate', 1, source.indexOf('the rate rose') + 4);
+    // A short first word after a numeric label is a word, not the label.
+    await selects(/If so/, 'If', 0, source.indexOf('If so'));
     await check('mike', source.indexOf('mike') + 1, 0); await page.waitForTimeout(2400); assert.equal(await page.locator('.olx-caret-word').count(), 0);
   }
   assert((await editor.evaluate(n => n.cmView.view.state.doc.toString())) === source, 'source unchanged'); assert.deepEqual(errors, []);
