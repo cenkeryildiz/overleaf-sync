@@ -32,7 +32,8 @@ export function nativeHelper(connectNative = chrome.runtime.connectNative.bind(c
     if (message?.id) { const entry = pending.get(message.id); pending.delete(message.id); if (entry) message.error ? entry.reject(Error(message.error)) : entry.resolve(message.result); }
     else for (const listener of listeners) listener(message);
   });
-  port.onDisconnect.addListener(() => { closed = Error('The sharing helper is not available. ' + HELPER_HINT); for (const entry of pending.values()) entry.reject(closed); pending.clear(); for (const listener of listeners) listener({ ev: 'helper-lost' }); });
+  // Chrome reports a missing optional host here; reading lastError acknowledges it.
+  port.onDisconnect.addListener(() => { void globalThis.chrome?.runtime?.lastError; closed = Error('The sharing helper is not available. ' + HELPER_HINT); for (const entry of pending.values()) entry.reject(closed); pending.clear(); for (const listener of listeners) listener({ ev: 'helper-lost' }); });
   return {
     call: (op, args = {}) => new Promise((resolve, reject) => { if (closed) return reject(closed); const id = next++; pending.set(id, { resolve, reject }); try { port.postMessage({ id, op, ...args }); } catch (error) { pending.delete(id); reject(error); } }),
     send: message => { if (!closed) port.postMessage(message); },

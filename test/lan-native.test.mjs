@@ -4,7 +4,7 @@
 // Run: node --test test/lan-native.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startHost } from '../runtime/chrome-extension/lan-host.mjs';
+import { startHost, nativeHelper, helperAvailable } from '../runtime/chrome-extension/lan-host.mjs';
 import { joinSession, reconcile, treeChanges } from '../runtime/chrome-extension/lan-guest.mjs';
 import { apply, transformX } from '../runtime/chrome-extension/lan-ot.mjs';
 
@@ -487,4 +487,17 @@ test('S2-03 set-main goes through the owner: a binary main is refused, a text ma
   await host.fs({ kind: 'relocate', from: 'sec', to: 'body' }); await until(() => ada.seen.length === 3 && bob.seen.length === 3);
 assert.equal(ada.store.main, 'body/a.tex'); assert.equal(bob.store.main, 'body/a.tex'); assert.ok(same(ada) && same(bob));
   const eve = await join('Eve'); assert.equal(eve.main, 'body/a.tex');
+});
+
+
+test('missing sharing host acknowledges Chrome errors and rejects pending calls', async t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'chrome'); let reads = 0, disconnected;
+  Object.defineProperty(globalThis, 'chrome', { configurable: true, value: { runtime: { get lastError() { reads++; return { message: 'Specified native messaging host not found.' }; } } } });
+  t.after(() => { if (original) Object.defineProperty(globalThis, 'chrome', original); else delete globalThis.chrome; });
+  const port = { onMessage: { addListener() {} }, onDisconnect: { addListener(fn) { disconnected = fn; } }, postMessage() {}, disconnect() {} };
+  const helper = nativeHelper(() => port), events = []; helper.subscribe(event => events.push(event));
+  const pending = [helper.call('addresses'), helper.call('open')]; disconnected();
+  assert.equal(reads, 1); for (const call of pending) await assert.rejects(call, /sharing helper is not available/);
+  await assert.rejects(helper.call('addresses'), /sharing helper is not available/); assert.deepEqual(events, [{ ev: 'helper-lost' }]);
+  assert.equal(await helperAvailable(() => { queueMicrotask(() => disconnected()); return port; }), false); assert.equal(reads, 2);
 });

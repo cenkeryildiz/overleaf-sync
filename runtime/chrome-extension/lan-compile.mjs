@@ -300,7 +300,8 @@ export function texHost(connectNative = (...a) => chrome.runtime.connectNative(.
       if (m.error) p.reject(Object.assign(Error(m.error), { log: m.log }));
       else p.resolve(m.done ? { parts: p.parts, log: m.log } : m.result);
     });
-    port.onDisconnect.addListener(() => { port = null; for (const p of pending.values()) p.reject(Object.assign(Error('The TeX helper is not installed or stopped. Install the helper once, then reopen the browser.'), { lost: true })); pending.clear(); });
+    // Chrome reports a missing optional host here; reading lastError acknowledges it.
+    port.onDisconnect.addListener(() => { void globalThis.chrome?.runtime?.lastError; port = null; for (const p of pending.values()) p.reject(Object.assign(Error('The TeX helper is not installed or stopped. Install the helper once, then reopen the browser.'), { lost: true })); pending.clear(); });
     return port;
   };
   const call = (op, args = {}) => new Promise((resolve, reject) => {

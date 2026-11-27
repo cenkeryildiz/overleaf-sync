@@ -178,7 +178,10 @@ test('a participant copy out of step is retried, a newer request supersedes, an 
   assert.notEqual(await identity('main.tex', 'pdflatex', h.files), await identity('main.tex', 'lualatex', h.files), 'identity includes the engine');
 });
 
-test('texHost stages exact chunks and reassembles streamed PDF and SyncTeX parts', async () => {
+test('texHost stages exact chunks and reassembles streamed PDF and SyncTeX parts', async t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'chrome'); let errorReads = 0;
+  Object.defineProperty(globalThis, 'chrome', { configurable: true, value: { runtime: { get lastError() { errorReads++; return { message: 'Specified native messaging host not found.' }; } } } });
+  t.after(() => { if (original) Object.defineProperty(globalThis, 'chrome', original); else delete globalThis.chrome; });
   const posted = [], listeners = {};
   let hold = false; const port = { postMessage: m => { posted.push(m); if (!hold) queueMicrotask(() => reply(m)); }, onMessage: { addListener: f => { listeners.message = f; } }, onDisconnect: { addListener: f => { listeners.gone = f; } }, disconnect() {} };
   let first = true;
@@ -194,5 +197,5 @@ test('texHost stages exact chunks and reassembles streamed PDF and SyncTeX parts
   const chunks = posted.filter(m => m.op === 'chunk');
   assert.deepEqual(chunks.map(m => m.offset), [0, 270000, 540000]); assert.ok(chunks.every(m => m.data.length <= 360000));
   assert.equal(posted.filter(m => m.op === 'begin').length, 2, 'a just-finished compile is waited for, not reported');
-  hold = true; const asked = host.status(); listeners.gone(); await assert.rejects(asked, error => /not installed/.test(error.message) && error.lost === true); // the helper went away mid-call
+  hold = true; const asked = host.status(); listeners.gone(); assert.equal(errorReads, 1); await assert.rejects(asked, error => /not installed/.test(error.message) && error.lost === true); // the helper went away mid-call
 });
