@@ -170,6 +170,7 @@ export function parseSyncTex(pdfsyncBody) {
                 bottom: s1[1],
                 width: s2[0],
                 height: s2[1],
+                depth: Number(match[7]) / unit,
                 blocks: [],
                 elements: [],
                 page: currentPage.page

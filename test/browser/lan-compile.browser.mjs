@@ -66,7 +66,7 @@ try {
   const [ownerContext, anaContext, beaContext] = [await profile('owner'), await profile('ana', { tex: true }), await profile('bea')]; contexts.push(ownerContext, anaContext, beaContext);
   const owner = await ownerContext.newPage(); owner.on('pageerror', e => errors.push('owner: ' + e.message.slice(0, 200)));
   await owner.goto(root + '/extension/index.html');
-  await owner.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await owner.waitForURL(/\/recovery\/project-workspace\.html$/);
   await owner.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic group compile');
   await owner.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(owner).waitFor({ timeout: 60000 });

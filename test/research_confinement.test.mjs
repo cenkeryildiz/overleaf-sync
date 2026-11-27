@@ -20,12 +20,13 @@ const HELPER = process.env.LATEX_RESEARCH_HELPER ?? join(ROOT, 'runtime/chrome-e
 const PY = process.env.RESEARCH_PYTHON ?? '/Users/macc/miniforge3/envs/myproject/bin/python', RS = process.env.RESEARCH_RSCRIPT ?? '/usr/local/bin/Rscript';
 const IMAGE_ENV_PYTHON = '/Users/macc/miniforge3/envs/image_resizer/bin/python';
 const TEMP = realpathSync(tmpdir()), work = mkdtempSync(join(TEMP, 'lr-test-'));
+const jobs = join(work, 'jobs'); mkdirSync(jobs);
 const home = join(work, 'home'), outside = join(work, 'outside'), scripts = join(work, 'scripts');
 const MARK = `CANARY-${randomBytes(6).toString('hex')}`, SECRET = `SECRET-${randomBytes(6).toString('hex')}`;
 const canary = { ssh: join(home, '.ssh', 'id_canary'), dot: join(home, `.latex-local-canary-${randomBytes(4).toString('hex')}`), data: join(outside, 'data.csv'), sibling: join(outside, 'sibling.txt') };
 const table = [];
 const record = (area, attack, blocked, note = '') => table.push({ area, attack, result: blocked === 'info' ? 'INFO' : blocked ? 'BLOCKED' : 'NOT BLOCKED', note });
-const hostEnv = { PATH: process.env.PATH, HOME: home, TMPDIR: TEMP, FAKE_API_KEY: SECRET, AWS_SECRET_ACCESS_KEY: SECRET, OPENAI_API_KEY: SECRET };
+const hostEnv = { PATH: process.env.PATH, HOME: home, TMPDIR: jobs, FAKE_API_KEY: SECRET, AWS_SECRET_ACCESS_KEY: SECRET, OPENAI_API_KEY: SECRET };
 
 for (const d of [join(home, '.ssh'), outside, scripts]) mkdirSync(d, { recursive: true });
 for (const f of [canary.ssh, canary.dot, canary.sibling]) writeFileSync(f, `${MARK}\n`);
@@ -52,7 +53,7 @@ async function run(request, options) {
 const json = result => { try { return JSON.parse(result.stdout.trim().split('\n').at(-1)); } catch { assert.fail(`no probe JSON: ${JSON.stringify(result).slice(0, 600)}`); } };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const pgrep = pattern => spawnSync('/usr/bin/pgrep', ['-f', pattern], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).length;
-const leftovers = () => readdirSync(TEMP).filter(n => n.startsWith('latex-local-research-'));
+const leftovers = () => readdirSync(jobs).filter(n => n.startsWith('latex-local-research-'));
 
 // Disposable same-user processes a hostile script might signal or attach to, and listeners it might connect to.
 let victim, tcp, tcpHits = 0, unix, unixHits = 0, tcpPort, unixPath = join(outside, 'sock');
@@ -64,7 +65,7 @@ before(async () => {
 });
 after(() => {
   victim?.kill('SIGKILL'); tcp?.close(); unix?.close();
-  for (const n of leftovers()) rmSync(join(TEMP, n), { recursive: true, force: true });
+  for (const n of leftovers()) rmSync(join(jobs, n), { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
   console.log(`\nConfinement attempts (${table.length}):`); console.table(table);
 });
@@ -212,7 +213,7 @@ test('cancel and stdin EOF stop the job; a SIGKILLed helper does not leave the j
   const job = start({ interpreter: PY, script: sleeper, timeout_s: 2 }), pid = await job.started; job.child.kill('SIGKILL');
   const killedAt = Date.now(); while (alive(pid) && Date.now() - killedAt < 15000) await new Promise(r => setTimeout(r, 200));
   record('python', 'helper SIGKILLed mid-job: job reaped by alarm', !alive(pid), `${Date.now() - killedAt} ms (alarm = timeout+5 s)`); assert.ok(!alive(pid), 'job survived its helper');
-  for (const n of leftovers()) rmSync(join(TEMP, n), { recursive: true, force: true }); // a SIGKILLed helper cannot clean its scratch directory: finding
+  for (const n of leftovers()) rmSync(join(jobs, n), { recursive: true, force: true }); // a SIGKILLed helper cannot clean its scratch directory: finding
 });
 
 // ---- R ----------------------------------------------------------------------------------------------------------------

@@ -38,7 +38,7 @@ async function profile(name) {
 }
 try {
   const { context: ownerContext, page: owner } = await profile('owner'), { page: guest } = await profile('guest');
-  await owner.goto(root + '/extension/index.html'); await owner.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await owner.goto(root + '/extension/index.html'); await owner.waitForURL(/\/recovery\/project-workspace\.html$/);
   await owner.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic internet room');
   await owner.getByRole('button', { name: 'Create local project', exact: true }).click(); await editor(owner).waitFor();
   await owner.locator('.textLayer span').filter({ hasText: 'Hello world.' }).first().waitFor();

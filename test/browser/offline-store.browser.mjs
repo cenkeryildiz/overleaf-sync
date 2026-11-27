@@ -38,7 +38,7 @@ try {
     const name = url.pathname.replace(/^\/recovery\//, '');
     if (url.pathname === '/recovery/store.html') return route.fulfill({ contentType: 'text/html', body: shell() });
     if (url.pathname === '/recovery/native-workspace.html') return route.fulfill({ contentType: 'text/html', body: shell('/recovery/native-workspace.mjs', true) });
-    if (name === 'busytex-sdk.mjs') return route.fulfill({ contentType: 'text/javascript', body: 'export class BusyTexRunner{terminate(){}};export class PdfLatex{};export class XeLatex{};export class LuaLatex{};' });
+    if (name === 'busytex-sdk.mjs') return route.fulfill({ contentType: 'text/javascript', body: 'export class BusyTexRunner{async initialize(){} terminate(){}};export class PdfLatex{};export class XeLatex{};export class LuaLatex{};' });
     if (url.pathname.startsWith('/recovery/js/') || url.pathname.startsWith('/recovery/stylesheets/')) return route.fulfill({ contentType: url.pathname.endsWith('.css') ? 'text/css' : 'text/javascript', body: '' });
     if (served.has(name)) return route.fulfill({ contentType: name.endsWith('.js') || name.endsWith('.mjs') ? 'text/javascript' : 'text/plain', body: readFileSync(new URL(name, dir)) });
     return route.fulfill({ status: 404, body: '' });
@@ -94,13 +94,14 @@ try {
   assert.match(results.limit.over, /file and folder limit/); assert.equal(results.limit.files, 1000);
   assert.match(results.limit.createOver, /Invalid offline project/);
 
-  // Saves and outputs: non-BMP/oversized refusal, stale revision, stale compile output, invalid PDF, unsafe native metadata.
+  // Saves and outputs: valid Unicode, malformed/oversized refusal, stale revisions and unsafe compiled/native data.
   results.saves = await page.evaluate(async () => {
     const api = overleafLocalProjects, doc = t.id();
     const ws = await t.create([{ path: 'main.tex', content: 'one' }], [{ path: 'main.tex', id: doc, version: 1 }]);
     const file = (await api.read(ws)).files[0];
-    const refused = { nonBmp: await t.refusal(api.save(file, 'emoji 😀')), oversized: await t.refusal(api.save(file, 'x'.repeat(2000001))), nul: await t.refusal(api.save(file, 'a\0b')) };
-    const saved = await api.save(file, 'two'); refused.staleRevision = await t.refusal(api.save(file, 'three'));
+    const refused = { malformed: await t.refusal(api.save(file, '\ud800')), oversized: await t.refusal(api.save(file, 'x'.repeat(2000001))), nul: await t.refusal(api.save(file, 'a\0b')) };
+    const unicode = await api.save(file, 'emoji 😀');
+    const saved = await api.save(unicode, 'two'); refused.staleRevision = await t.refusal(api.save(file, 'three'));
     const { project, files } = await api.read(ws);
     const pdf = new Blob(['%PDF-1.5 synthetic'], { type: 'application/pdf' }), synctex = new Uint8Array([1]), digest = 'f'.repeat(64);
     refused.staleOutput = await t.refusal(api.output(project, [{ path: 'main.tex', revision: 0 }], pdf, synctex, digest));
@@ -111,16 +112,16 @@ try {
     refused.createSecretMeta = await t.refusal(t.create([{ path: 'main.tex', content: 'x' }], [], { native: { ...t.native, meta: [{ name: 'ol-csrfToken', content: 'secret' }] } }));
     refused.createForeignScript = await t.refusal(t.create([{ path: 'main.tex', content: 'x' }], [], { native: { ...t.native, scripts: ['https://evil.test/x.js'] } }));
     const after = (await api.read(ws)).files[0];
-    return { refused, content: after.content, revision: after.revision, savedRevision: saved.revision, outputDigest: good.outputDigest };
+    return { refused, unicode: unicode.content, content: after.content, revision: after.revision, savedRevision: saved.revision, outputDigest: good.outputDigest };
   });
   const s = results.saves;
-  for (const key of ['nonBmp', 'oversized', 'nul']) assert.match(s.refused[key], /Unsupported local source edit/, key);
+  for (const key of ['malformed', 'oversized', 'nul']) assert.match(s.refused[key], /Unsupported local source edit/, key);
   assert.match(s.refused.staleRevision, /Another tab saved this file/);
   assert.match(s.refused.staleOutput, /Source changed during compilation/);
   assert.match(s.refused.notPdf, /Invalid compiled output/); assert.match(s.refused.badDigest, /Invalid compiled output/);
   assert.match(s.refused.createBadPdf, /Invalid saved PDF/);
   assert.match(s.refused.createSecretMeta, /Invalid native editor metadata/); assert.match(s.refused.createForeignScript, /Invalid native editor metadata/);
-  assert.equal(s.content, 'two'); assert.equal(s.revision, 1); assert.equal(s.savedRevision, 1); assert.equal(s.outputDigest, 'f'.repeat(64));
+  assert.equal(s.unicode, 'emoji 😀'); assert.equal(s.content, 'two'); assert.equal(s.revision, 2); assert.equal(s.savedRevision, 2); assert.equal(s.outputDigest, 'f'.repeat(64));
 
   // R3: a storage quota failure refuses the whole project; nothing partial is kept, and a later attempt succeeds.
   // Chrome applies a quota override only to storage opened afterwards, so this uses a fresh context.
@@ -151,7 +152,9 @@ try {
     return t.create([{ path: 'main.tex', content: 'native main' }, { path: 'figure.png', data: 'AAEC/w==' }], [{ path: 'main.tex', id: doc, version: 2 }], { native: t.native });
   });
   await page.goto(origin + '/recovery/native-workspace.html#' + ws);
-  await page.waitForFunction(() => document.querySelector('#local-status').textContent.startsWith('Native editor — Local only'));
+  await page.waitForFunction(() => document.querySelector('#local-status').textContent.startsWith('Native editor — Local only')).catch(async error => {
+    console.error({ adapterStatus: await page.locator('#local-status').textContent(), errors }); throw error;
+  });
   results.adapter = await page.evaluate(async () => {
     const clientProject = document.querySelector('meta[name="ol-project_id"]').content, transport = io.connect(), events = [];
     const joined = await new Promise(resolve => { transport.on('joinProjectResponse', resolve); transport.connect(); });

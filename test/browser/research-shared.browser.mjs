@@ -96,7 +96,7 @@ try {
   const py = status.python.find(r => { try { return realpathSync(r.path) === python; } catch { return false; } }); assert(py, 'RESEARCH_PYTHON is not discovered by the helper');
   await helperCall(owner, 'select', { kind: 'python', path: py.path }); await helperCall(owner, 'kernel', { name: 'python3' });
   for (const name of ['jupyter', 'math-check', 'python-analysis']) await helperCall(owner, 'feature', { name, on: true });
-  await owner.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await owner.waitForURL(/\/recovery\/project-workspace\.html$/);
   await owner.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic shared research');
   await owner.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(owner).waitFor({ timeout: 60000 });

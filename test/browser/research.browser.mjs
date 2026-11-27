@@ -21,7 +21,7 @@ const work = mkdtempSync(join(tmpdir(), 'latex-research-check-')), extension = j
 cpSync(base, extension, { recursive: true });   // the base package is this branch's parent build: overlay only what this lane changes
 cpSync(join(repository, 'runtime/browser-recovery/native-workspace.mjs'), join(extension, 'recovery/native-workspace.mjs'));
 for (const name of ['research-ui.mjs', 'cells-ui.mjs', 'this-computer.mjs']) cpSync(join(repository, 'runtime/chrome-extension', name), join(extension, 'extension', name));   // research-ui imports the shared panel
-mkdirSync(join(extension, 'extension/research')); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
+mkdirSync(join(extension, 'extension/research'), { recursive: true }); for (const name of ['manuscript.mjs', 'deps.mjs', 'outputs.mjs', 'notebook.mjs']) cpSync(join(repository, 'runtime/research', name), join(extension, 'extension/research', name));
 const manifest = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8'));
 const id = [...createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16)].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
 const results = [], timings = {}, note = (name, detail = '') => { results.push(name); console.log('ok -', name, detail); };
@@ -92,7 +92,7 @@ try {
   const status = await helperCall(page, 'status');
   await helperCall(page, 'select', { kind: 'python', path: pick(status.python, python, 'Python') }); await helperCall(page, 'select', { kind: 'r', path: pick(status.r, rscript, 'R') });
   for (const name of ['math-check', 'python-analysis', 'r-analysis']) await helperCall(page, 'feature', { name, on: true });
-  await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.waitForURL(/\/recovery\/project-workspace\.html$/);
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic research project');
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(page).waitFor({ timeout: 60000 });

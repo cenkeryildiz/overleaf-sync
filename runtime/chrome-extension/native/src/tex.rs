@@ -64,6 +64,23 @@ pub fn compile(root: &Path, bin: &Path, main: &str, compiler: &str, cancel: &Ato
     let profile = out.join("compile.sb");
     let policy = policy(root, tex_root)?;
     fs::write(&profile, policy).map_err(|_| "Compiler confinement unavailable")?;
+    // Merge only inside this job; TEXFONTMAPS' trailing colon retains the installation's other maps.
+    let maps = out.join("fontmaps");
+    let extra = root.join(crate::PACKAGES).join("fonts/map/pdftex/olx/olx-packages.map");
+    if extra.is_file() {
+        let extra = read_output(&extra, root, 4 * 1024 * 1024)?;
+        fs::create_dir(&maps).map_err(|_| "Font map directory unavailable")?;
+        for name in ["pdftex.map", "kanjix.map"] {
+            let found = Command::new("/usr/bin/sandbox-exec").arg("-f").arg(&profile).arg(bin.join("kpsewhich")).arg(name)
+                .current_dir(root).env_clear().env("PATH", format!("{}:/usr/bin:/bin", bin.display())).env("HOME", &temporary)
+                .output().map_err(|_| "Installed font map lookup failed")?;
+            if !found.status.success() { return Err("Installed font map is unavailable".into()); }
+            let base = PathBuf::from(String::from_utf8(found.stdout).map_err(|_| "Invalid font map path")?.trim());
+            let mut content = read_output(&base, tex_root, 4 * 1024 * 1024)?;
+            content.push(b'\n'); content.extend_from_slice(&extra);
+            fs::write(maps.join(name), content).map_err(|_| "Job font map unavailable")?;
+        }
+    }
     let transcript = out.join("process.log");
     let log = OpenOptions::new().create_new(true).write(true).mode(0o600).open(&transcript).map_err(|_| "Compiler log unavailable")?;
     let mut command = Command::new("/usr/bin/sandbox-exec");
@@ -74,6 +91,7 @@ pub fn compile(root: &Path, bin: &Path, main: &str, compiler: &str, cancel: &Ato
         .env_clear().env("PATH", format!("{}:/usr/bin:/bin", bin.display())).env("LANG", "C").env("TMPDIR", &temporary)
         .env("TEXMFOUTPUT", &out).env("TEXMFVAR", &temporary).env("TEXMFCONFIG", &temporary)
         .env("TEXMFHOME", if root.join(crate::PACKAGES).is_dir() { root.join(crate::PACKAGES) } else { temporary.clone() })
+        .env("TEXFONTMAPS", format!("{}:", maps.display()))
         .env("TEXMFCACHE", &temporary).env("VARTEXFONTS", &temporary).env("openin_any", "p").env("openout_any", "p")
         .stdin(Stdio::null()).stdout(Stdio::from(log.try_clone().map_err(|_| "Log unavailable")?)).stderr(Stdio::from(log)).process_group(0);
     // Limits are inherited by TeX's trusted child tools; the parent also bounds elapsed time and total scratch growth.
@@ -170,5 +188,13 @@ pub fn failure_log(root: &Path) -> String {
         assert!(without.is_err() && log.contains("olxfixture.sty"), "the package is not in the installation: {log}");
         let (with, elapsed, _) = run(&[("main.tex", &source), (".latex-local-texmf/tex/latex/olxfixture/olxfixture.sty", &style)]);
         assert!(with.unwrap() > 0); eprintln!("compile with package tree: {elapsed:?}");
+        let font_source = b"\\documentclass{article}\\begin{document}\\font\\testfont=olxfont\\testfont NATIVEFONTMARK\\end{document}\n".to_vec();
+        let tfm_path = Command::new(bin.join("kpsewhich")).arg("cmr10.tfm").output().unwrap();
+        let tfm = fs::read(String::from_utf8(tfm_path.stdout).unwrap().trim()).unwrap();
+        let map = b"olxfont CMR10 <cmr10.pfb\n".to_vec();
+        let (with_font, _, log) = run(&[("main.tex", &font_source),
+            (".latex-local-texmf/fonts/tfm/public/olx/olxfont.tfm", &tfm),
+            (".latex-local-texmf/fonts/map/pdftex/olx/olx-packages.map", &map)]);
+        assert!(with_font.is_ok(), "installed font map must be active without changing the source: {log}");
     }
 }

@@ -8,6 +8,7 @@
 //   PLAYWRIGHT_MODULE=<playwright> EXTENSION_CHROME_PATH=<Chromium that honours --load-extension> LATEX_EXTENSION_BASE=<built extension dir> \
 //   LATEX_RESEARCH_HELPER=<latex-local-research> RESEARCH_PYTHON=<python with ipykernel+pandas+matplotlib> node test/browser/cells.browser.mjs
 import assert from 'node:assert/strict';
+import { downloadProjectFile } from './offline-controls.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
@@ -91,7 +92,7 @@ try {
     rt.connectNative = name => { const port = connect(name), post = port.postMessage.bind(port); port.postMessage = message => { globalThis.__hostOp(name, message?.op); return post(message); }; return port; }; });
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message.slice(0, 200)));
   await page.goto(`chrome-extension://${id}/extension/index.html`);
-  await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.waitForURL(/\/recovery\/project-workspace\.html$/);
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic cells project');
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(page).waitFor({ timeout: 60000 });
@@ -186,8 +187,7 @@ try {
 
   // ---- export and reopen: the ZIP holds every file exactly; importing it runs nothing
   const saved = await files(page), opsAtExport = ops.length;
-  const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
-  const zip = join(work, 'export.zip'); await (await download).saveAs(zip);
+  const zip = join(work, 'export.zip'); await downloadProjectFile(page, 'Download as source (.zip)', zip);
   const listed = execFileSync('/usr/bin/unzip', ['-Z1', zip], { encoding: 'utf8' }).trim().split('\n').filter(p => !p.endsWith('/')).sort();
   assert.deepEqual(listed, Object.keys(saved).sort(), 'the ZIP holds exactly the project files');
   for (const [path, value] of Object.entries(saved)) if (!value.startsWith('hash:')) assert.equal(execFileSync('/usr/bin/unzip', ['-p', zip, path], { encoding: 'utf8' }), value, path);

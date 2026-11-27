@@ -64,34 +64,81 @@ export async function navigation(bytes, project, files) {
   const data = parseSyncTex(text); if (!data) throw Error('Navigation data could not be read');
   const known = new Set(files.filter(file => file.doc).map(file => file.path));
   const root = project.main.includes('/') ? project.main.slice(0, project.main.lastIndexOf('/') + 1) : '';
-  const nodes = [];
-  function add(block) {
-    if (block.elements !== undefined || block.type === 'k' || block.type === 'r') return;
+  const nodes = [], boxes = new Map(), filled = new Set(), { offset } = data;
+  const finite = (...values) => values.every(Number.isFinite);
+  function source(block) {
     let path = block.file?.path?.replace(/^\/home\/web_user\/project_dir\//, '').replace(/^\.\//, '');
     if (!known.has(path) && known.has(root + path)) path = root + path;
-    if (known.has(path) && Number.isSafeInteger(block.line) && block.line > 0 && block.page > 0 &&
-        [block.left, block.bottom, block.height || 0, block.width || 0].every(Number.isFinite)) nodes.push({ path, line: block.line, page: block.page,
-      x: block.left + data.offset.x, y: block.bottom - (block.height || 0) + data.offset.y, width: Math.max(0, block.width || 0), height: Math.max(0, block.height || 0) });
+    return known.has(path) && Number.isSafeInteger(block.line) && block.line > 0 && block.page > 0 ? path : undefined;
+  }
+  // The hbox (typeset line) holding a record, with its depth: backward search resolves this box first.
+  function box(block) {
+    if (block?.type !== 'horizontal' || !finite(block.left, block.bottom, block.width, block.height, block.depth)) return undefined;
+    if (!boxes.has(block)) boxes.set(block, { line: block.line, x: block.left + offset.x, y: block.bottom - block.height + offset.y,
+      width: Math.max(0, block.width), height: Math.max(0, block.height + block.depth) });
+    return boxes.get(block);
+  }
+  function add(block) {
+    const path = block.elements === undefined && source(block);
+    if (!path || !finite(block.left, block.bottom, block.height || 0, block.width || 0)) return;
+    const line = box(block.parent); if (line) filled.add(line);
+    nodes.push({ path, line: block.line, page: block.page, type: block.type, x: block.left + offset.x, y: block.bottom - (block.height || 0) + offset.y,
+      width: Math.max(0, block.width || 0), height: Math.max(0, block.height || 0), box: line });
   }
   for (const lines of Object.values(data.blockNumberLine)) for (const pages of Object.values(lines)) for (const blocks of Object.values(pages)) for (const block of blocks) add(block);
+  // An hbox without project records of its own (e.g. an included graphic) still resolves to the line that built it.
+  const previous = new Map();
+  for (const block of data.hBlocks) {
+    const geometry = box(block); if (!geometry) continue;
+    // The preceding line of the same paragraph or list: its last record dates a lone word on the next line.
+    geometry.previous = previous.get(block.parent); previous.set(block.parent, geometry);
+  }
+  for (const block of data.hBlocks) {
+    const geometry = box(block), path = geometry && !filled.has(geometry) && geometry.width > 0 && geometry.height > 0 && source(block);
+    if (path) nodes.push({ path, line: block.line, page: block.page, type: 'box', ...geometry, box: geometry });
+  }
   if (!nodes.length) throw Error('No project source locations were found');
   return nodes;
 }
 export function forward(nodes, path, line) {
   if (!Number.isSafeInteger(line) || line < 1) return undefined;
-  const best = nodes.filter(node => node.path === path).reduce((best, node) => !best || Math.abs(node.line - line) < Math.abs(best.line - line) ? node : best, undefined);
+  // Kerns, rules and whole boxes serve backward search only; they would widen the highlighted region.
+  const usable = node => node.path === path && !['k', 'r', 'box'].includes(node.type);
+  const best = nodes.filter(usable).reduce((best, node) => !best || Math.abs(node.line - line) < Math.abs(best.line - line) ? node : best, undefined);
   if (!best) return;
   let count = 0, x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
-  for (const node of nodes) if (node.path === path && node.line === best.line && node.page === best.page) {
+  for (const node of nodes) if (usable(node) && node.line === best.line && node.page === best.page) {
     count++; x = Math.min(x, node.x); y = Math.min(y, node.y); right = Math.max(right, node.x + node.width); bottom = Math.max(bottom, node.y + node.height);
   }
   return count === 1 ? best : { ...best, x, y, width: right - x, height: bottom - y };
 }
 export function backward(nodes, page, x, y) {
   if (!Number.isSafeInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y)) return undefined;
-  // Reuse LaTeX Workshop's leaf-box containment/centre rule; parent boxes can point at \input instead of its child.
-  const contains = (a, b) => a.x <= b.x && a.y <= b.y && a.x + a.width >= b.x + b.width && a.y + a.height >= b.y + b.height;
-  const distance = node => Math.hypot(node.x + node.width / 2 - x, node.y + node.height / 2 - y);
-  return nodes.filter(node => node.page === page).reduce((best, node) => !best || contains(best, node) ||
-    (distance(node) < distance(best) && !contains(node, best)) ? node : best, undefined);
+  // Like SyncTeX's edit query: find the clicked typeset line first (smallest containing hbox, else the vertically
+  // then horizontally nearest one), never the nearest record on the whole page, which often sits on another line.
+  // Zero-width rules are struts, tagged with whatever input TeX was reading when a macro built them.
+  const onPage = nodes.filter(node => node.page === page && !(node.type === 'r' && !node.width)), boxed = onPage.filter(node => node.box);
+  const lines = new Map();
+  for (const node of boxed.length ? boxed : onPage) { const box = node.box || node; lines.has(box) ? lines.get(box).push(node) : lines.set(box, [node]); }
+  const gap = (from, size, at) => Math.max(0, from - at, at - from - size), near = (a, b) => Math.abs(a - b) <= 0.5;
+  let records, rank, chosen;
+  for (const [box, list] of lines) {
+    const next = [gap(box.y, box.height, y), gap(box.x, box.width, x), box.width * box.height];
+    if (!rank || next[0] < rank[0] && !near(next[0], rank[0]) || near(next[0], rank[0]) && (next[1] < rank[1] && !near(next[1], rank[1]) ||
+      near(next[1], rank[1]) && next[2] < rank[2])) { records = list; rank = next; chosen = box; }
+  }
+  if (!records) return undefined;
+  // pdfTeX tags the glue/kern that follows a word, placed at the next word's start, with the word's own line;
+  // 'x' records lag one word behind, and a line's first one carries the paragraph's last line.
+  if (records.some(node => node.type !== 'x')) records = records.filter(node => node.type !== 'x');
+  const first = list => list.reduce((a, b) => b.x < a.x ? b : a), last = list => list.reduce((a, b) => b.x > a.x ? b : a);
+  const right = records.filter(node => node.x > x), left = records.filter(node => node.x <= x);
+  if (!right.length) return last(records);
+  const after = first(right), earlier = lines.get(chosen.previous)?.filter(node => node.type !== 'x');
+  // A preceding line that ended its own paragraph (final record tagged with its box line) says nothing about this one.
+  const carried = earlier?.length && last(earlier).line !== chosen.previous.line ? last(earlier) : undefined;
+  const before = left.length ? last(left) : carried;
+  // Material closing a box (paragraph fill, cell glue) carries the line TeX read to end it, as does the box itself:
+  // usually the blank line or the next row, so the record before the click dates the clicked text instead.
+  return before && before.line !== chosen.line && right.every(node => node.line === chosen.line) ? before : after;
 }

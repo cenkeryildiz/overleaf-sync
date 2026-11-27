@@ -8,7 +8,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync, chmodSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,13 +19,14 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HELPER = process.env.LATEX_RESEARCH_HELPER ?? join(ROOT, 'runtime/chrome-extension/research-host/target/release/latex-local-research');
 const ENV_PYTHON = process.env.RESEARCH_PYTHON ?? '/Users/macc/miniforge3/envs/myproject/bin/python';
 const work = mkdtempSync(join(realpathSync(tmpdir()), 'lr-session-')), settings = join(work, 'research.json');
+const jobs = join(work, 'jobs'); mkdirSync(jobs);
 const SECRET = 'SECRET-' + randomBytes(8).toString('hex'), HOME = homedir();
 const PROJECT = 'synthetic-project-1';
 after(() => rmSync(work, { recursive: true, force: true }));
 
 /** One Chrome-style connection: 4-byte little-endian length + JSON, both ways. */
 function connect(extraEnv = {}) {
-  const child = spawn(HELPER, ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/'], { env: { HOME, PATH: '/usr/bin:/bin', LATEX_LOCAL_RESEARCH_SETTINGS: settings, OPENAI_API_KEY: SECRET, FAKE_TOKEN: SECRET, ...extraEnv }, stdio: ['pipe', 'pipe', 'ignore'] });
+  const child = spawn(HELPER, ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/'], { env: { HOME, PATH: '/usr/bin:/bin', LATEX_LOCAL_RESEARCH_SETTINGS: settings, TMPDIR: jobs, OPENAI_API_KEY: SECRET, FAKE_TOKEN: SECRET, ...extraEnv }, stdio: ['pipe', 'pipe', 'ignore'] });
   let buffer = Buffer.alloc(0), next = 1; const waiting = new Map(), events = [], raw = [];
   child.stdout.on('data', chunk => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -51,7 +52,7 @@ function tree(root) {
   const found = new Set([root]); for (let grew = true; grew;) { grew = false; for (const [pid, ppid] of rows) if (found.has(ppid) && !found.has(pid)) { found.add(pid); grew = true; } }
   found.delete(root); return { pids: [...found], rssKb: rows.filter(([pid]) => found.has(pid)).reduce((n, [, , rss]) => n + rss, 0) };
 }
-const leftovers = () => spawnSync('/usr/bin/pgrep', ['-f', 'latex-local-research-[0-9a-f]+/job/kernel.py'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
+const leftovers = () => spawnSync('/usr/bin/pgrep', ['-f', `${jobs}/latex-local-research-[0-9a-f]+/job/kernel.py`], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
 const measurements = {};
 
 async function prepare(host, kernelName) {

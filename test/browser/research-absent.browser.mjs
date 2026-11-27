@@ -66,7 +66,7 @@ async function profileRun(name, { installed }) {
   const page = await context.newPage(); page.on('pageerror', error => errors.push(name + ': ' + error.message.slice(0, 200)));
   const t0 = Date.now();
   await page.goto(`chrome-extension://${id}/extension/index.html`);
-  await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.waitForURL(/\/recovery\/project-workspace\.html$/);
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Absent tools ' + name);
   await page.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(page).waitFor({ timeout: 60000 }); measures[name + 'OpenMs'] = Date.now() - t0;

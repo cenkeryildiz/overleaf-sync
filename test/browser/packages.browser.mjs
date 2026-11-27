@@ -48,7 +48,7 @@ const pane = page => page.locator('#ide-settings-tabs-tabpane-packages'), note_ 
 const requirement = (page, file) => pane(page).locator('li', { has: page.locator('code', { hasText: new RegExp('^' + file.replace('.', '\\.') + '$') }) });
 const installed = page => pane(page).locator('ul[aria-label="Installed packages"] li code').allTextContents();
 async function newProject(page, name, text) {
-  await page.goto(`chrome-extension://${id}/extension/index.html`); await page.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await page.goto(`chrome-extension://${id}/extension/index.html`); await page.waitForURL(/\/recovery\/project-workspace\.html$/);
   await page.getByRole('textbox', { name: 'New local project name', exact: true }).fill(name); await page.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(page).waitFor({ timeout: 60000 }); await setDoc(page, text); await until(async () => (await files(page))['main.tex'] === text, 'saved');
 }
@@ -56,13 +56,13 @@ async function newProject(page, name, text) {
 const doc = String.raw`\documentclass{article}
 \usepackage{accents}
 \usepackage{algxpar}
-\usepackage{rsfso}
+\usepackage{bbm,dsfont}
 \usepackage{nosuchpackagexyz}
 \begin{document}
-PKGMARK $\accentset{\star}{x}$
+PKGMARK $\accentset{\star}{x} + \mathds{1}$
 \end{document}
 `;
-const works = doc.replace('\\usepackage{rsfso}\n', '').replace('\\usepackage{nosuchpackagexyz}\n', '');
+const works = doc.replace('\\usepackage{nosuchpackagexyz}\n', '');
 const plain = '\\documentclass{article}\n\\begin{document}\nPLAINMARK\n\\end{document}\n';
 
 let context;
@@ -91,8 +91,9 @@ try {
   measures.catalogMs = Date.now() - t0; measures.catalogBytes = (measures.downloadedBytes ?? 0) - bytes0;
   const row = async file => until(async () => { const t = await requirement(page, file).innerText(); return !/unknown: Refresh/.test(t) && t; }, file + ' resolved');
   assert.match(await row('accents.sty'), /missing — package accents, \d+ KB, licence mit/); assert.match(await row('algxpar.sty'), /missing — package algxpar with \d+ dependenc/);
-  assert.match(await row('rsfso.sty'), /not available here.*font map/); assert.match(await row('nosuchpackagexyz.sty'), /unknown: not found in TeX Live/); assert.match(await row('article.cls'), /included with the compiler/);
-  note('signed list downloaded; accents and algxpar (with dependencies) missing, rsfso unsupported (font map), an unknown name stays unknown', `${measures.catalogMs} ms, ${measures.catalogBytes} B`);
+  assert.match(await row('bbm.sty'), /missing — package bbm-macros/); assert.match(await row('dsfont.sty'), /missing — package doublestroke/);
+  assert.match(await row('nosuchpackagexyz.sty'), /unknown: not found in TeX Live/); assert.match(await row('article.cls'), /included with the compiler/);
+  note('signed list resolves bbm, doublestroke font maps and transitive dependencies; unknown names stay unknown', `${measures.catalogMs} ms, ${measures.catalogBytes} B`);
 
   // ---- PKG-T03 refusals before a good install
   await context.route('**/archive/accents.tar.xz', async route => { const r = await route.fetch(), b = Buffer.from(await r.body()); b[100] ^= 1; await route.fulfill({ response: r, body: b }); });
@@ -138,6 +139,22 @@ try {
     note('PKG-T06: installing the same packages again makes no request and no storage write'); }
   const before = mirrorRequests().length; await context.setOffline(true); await page.reload(); await editorOf(page).waitFor({ timeout: 60000 });
   await compile(page, 'PKGMARK', 'offline compile after reload'); assert.equal(mirrorRequests().length, before, 'nothing fetched offline'); note('PKG-T02: offline, after a reload, the project still compiles');
+  { const pdf = await page.evaluate(async () => [...new Uint8Array(await (await overleafLocalProjects.read(location.hash.slice(1))).project.pdf.arrayBuffer())]);
+    writeFileSync(join(work, 'font.pdf'), Buffer.from(pdf));
+    const fonts = execFileSync('pdffonts', [join(work, 'font.pdf')], { encoding: 'utf8' });
+    assert.match(fonts, /dsrom10\s+Type 1\s+\S+\s+yes/i, 'double-stroke font is actually embedded, not substituted');
+    note('double-stroke symbols compile offline with their Type 1 font embedded'); }
+  if (process.env.LATEX_TEST_DOCUMENT) {
+    const original = readFileSync(process.env.LATEX_TEST_DOCUMENT, 'utf8');
+    await newProject(page, 'Unchanged original template', original);
+    await page.getByRole('button', { name: 'Recompile', exact: true }).click();
+    await until(async () => /Compiled and saved/.test(await status(page)), 'original unchanged preamble compiles offline', 180000);
+    assert.equal((await files(page))['main.tex'], original);
+    assert.equal(readFileSync(process.env.LATEX_TEST_DOCUMENT, 'utf8'), original);
+    assert.equal(mirrorRequests().length, before, 'original document makes no external request');
+    note('original template compiles offline with the complete byte-identical preamble');
+    await newProject(page, 'Packages after original', works); await compile(page, 'PKGMARK', 'return to package fixture');
+  }
   { const close = await packagesTab(page); await pane(page).getByRole('button', { name: 'Refresh' }).click();
     await until(async () => /Could not reach a TeX Live mirror \(offline\?\); nothing was changed/.test(await note_(page).innerText()), 'offline refresh refused');
     assert.match(await pane(page).locator('#setting-packages-catalog').innerText(), /signature checked/, 'the saved list stays'); await close();
@@ -155,7 +172,7 @@ try {
     await until(async () => !(await installed(page)).includes('accents'), 'removed'); assert.equal((await installed(page)).length, count - 1); await close(); note('Remove deletes one package; the others stay'); }
   assert.deepEqual(errors, [], 'no page errors');
   console.log(JSON.stringify({ packagesBrowser: { passed: results.length, measures } }));
-} catch (error) { console.log('page errors:', errors); throw error; } finally {
+} catch (error) { console.log('page errors:', errors); console.log('status:', await context?.pages().at(-1)?.locator('#local-status').textContent().catch(() => null)); throw error; } finally {
   await context?.close().catch(() => {});
   rmSync(work, { recursive: true, force: true });
 }

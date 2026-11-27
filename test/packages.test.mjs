@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { rsaKeys, verifyDetached, dearmor } from '../runtime/packages/openpgp.mjs';
-import { parseTlpdb, closure, unsupported, fileIndex } from '../runtime/packages/tlpdb.mjs';
+import { parseTlpdb, closure, unsupported, fileIndex, fontMaps } from '../runtime/packages/tlpdb.mjs';
 import { readTar } from '../runtime/packages/tar.mjs';
 import { lsR, MIRRORS } from '../runtime/packages/store.mjs';
 import { fromSources, fromLog } from '../runtime/packages/detect.mjs';
@@ -36,6 +36,17 @@ test('tlpdb records, transitive closure with a cycle, and what the browser compi
   assert.match(unsupported(db.get('nosum')), /checksum/); assert.match(unsupported(db.get('coll')), /Collection/); assert.match(unsupported(undefined), /not in TeX Live/);
   assert.deepEqual(closure(db, ['font', 'missing'], () => false).blocked.map(b => b.name), ['font', 'missing']);
   assert.equal(fileIndex(db).get('b.sty'), 'b');
+});
+
+test('font maps must belong to the verified package; malformed or external map declarations are refused', () => {
+  const pkg = { ...db.get('font'), runfiles: ['fonts/map/dvips/font/font.map'] };
+  assert.equal(unsupported(pkg), null);
+  assert.deepEqual(fontMaps(pkg), ['fonts/map/dvips/font/font.map']);
+  for (const exec of ['addMap ../font.map', 'addMap /font.map', 'addMap font.map extra', 'addMap missing.map']) {
+    assert.match(unsupported({ ...pkg, executes: [exec] }), /font map/);
+  }
+  assert.match(unsupported({ ...pkg, executes: ['addKanjiMap font.map'] }), /Kanji/);
+  assert.match(unsupported({ ...pkg, runfiles: [...pkg.runfiles, 'fonts/map/pdftex/font/font.map'] }), /exactly one/);
 });
 
 // ---- tar: a minimal ustar writer for well-formed and hostile entries

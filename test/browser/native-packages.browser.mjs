@@ -80,7 +80,7 @@ try {
   assert.equal(kpsewhich(PACKAGE + '.sty'), '', `${PACKAGE}.sty must be absent from the chosen TeX installation`); writeFileSync(join(work, 'stamp'), '');
   const [ownerContext, anaContext] = [await profile('owner'), await profile('ana', { tex: true })]; contexts.push(ownerContext, anaContext);
   const owner = await ownerContext.newPage(); owner.on('pageerror', e => errors.push('owner: ' + e.message.slice(0, 200)));
-  await owner.goto(root + '/extension/index.html'); await owner.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await owner.goto(root + '/extension/index.html'); await owner.waitForURL(/\/recovery\/project-workspace\.html$/);
   await owner.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic native packages'); await owner.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(owner).waitFor({ timeout: 60000 });
   const plain = '\\documentclass{article}\n\\begin{document}\nPLAINMARK\n\\end{document}\n';

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Actual standalone package, no server or native registration; synthetic projects only.
 import assert from 'node:assert/strict';
+import { downloadProjectFile } from './offline-controls.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -36,13 +37,14 @@ const deadline = setTimeout(() => context.close(), 240000);
 let stage = 'startup';
 try {
   await context.addInitScript(faultCheck => {
-    globalThis.fixtureWorkers = []; globalThis.fixtureStartupFailed = false;
+    globalThis.fixtureWorkers = []; globalThis.fixtureStartupFailed = sessionStorage.getItem('fixtureStartupFailed') === 'true';
     const NativeWorker = Worker;
     globalThis.Worker = class extends NativeWorker {
       constructor(url, options) {
         super(url, options); fixtureWorkers.push({ url: String(url), worker: this });
         if (faultCheck && !fixtureStartupFailed && String(url).includes('/busytex/busytex_worker.js')) {
           globalThis.fixtureStartupFailed = true;
+          sessionStorage.setItem('fixtureStartupFailed', 'true');
           setTimeout(() => { this.terminate(); this.dispatchEvent(new ErrorEvent('error', { cancelable: true, message: 'Synthetic initialization fault' })); }, 0);
         }
       }
@@ -67,6 +69,10 @@ try {
   let editor = page.getByRole('textbox', { name: /^Source Editor/ }); await editor.waitFor({ timeout: 45000 });
   metrics.editorVisibleMs = Math.round(performance.now() - initial);
   const visible = text => page.locator('.textLayer span').filter({ hasText: text }).first().waitFor({ timeout: 120000 });
+  if (faultCheck) {
+    await page.waitForFunction(() => document.querySelector('.textLayer')?.textContent.includes('Hello world.') || document.querySelector('#local-status[data-error=true]'), null, { timeout: 120000 });
+    if (await page.locator('#local-status[data-error=true]').count()) await page.getByRole('button', { name: 'Recompile', exact: true }).click();
+  }
   await visible('Hello world.'); metrics.firstPdfMs = Math.round(performance.now() - initial);
   const read = () => page.evaluate(() => overleafLocalProjects.read(location.hash.slice(1)));
   const replace = text => editor.evaluate((node, text) => node.cmView.view.dispatch({ changes: { from: 0, to: node.cmView.view.state.doc.length, insert: text } }), text);
@@ -124,8 +130,7 @@ try {
   await page.getByRole('button', { name: 'Recompile', exact: true }).click();
   await page.waitForFunction(async () => { const { project } = await overleafLocalProjects.read(location.hash.slice(1)); return project.pdfImported === false && !!project.outputDigest && !!project.synctex && !project.pdfDigest; }, null, { timeout: 120000 });
   stage = 'export-restart';
-  const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download PDF', exact: true }).click();
-  await (await download).saveAs(join(work, 'output.pdf'));
+  await downloadProjectFile(page, 'Download as PDF', join(work, 'output.pdf'));
   const exported = readFileSync(join(work, 'output.pdf'));
   assert.equal(exported.subarray(0, 5).toString(), '%PDF-');
   execFileSync('pdftotext', [join(work, 'output.pdf'), join(work, 'output.txt')]);
@@ -137,8 +142,7 @@ try {
   const layer = await page.locator('.textLayer').first().evaluate(node => { const r = node.getBoundingClientRect(); return { width: r.width, height: r.height }; });
   assert(Math.abs(layer.width / layer.height - Number(paper[1]) / Number(paper[2])) < .01, 'Native PDF display must preserve page geometry');
 
-  const zip = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
-  await (await zip).saveAs(join(work, 'export.zip'));
+  await downloadProjectFile(page, 'Download as source (.zip)', join(work, 'export.zip'));
   assert.equal(execFileSync('/usr/bin/unzip', ['-p', join(work, 'export.zip'), 'main.tex'], { encoding: 'utf8' }), disabled);
   await page.reload(); await editor.waitFor(); await visible('Manual compilation marker:');
   stage = 'multifile-bibliography';
@@ -252,8 +256,7 @@ Wrapped paragraph text fills the available line and continues across the next PD
     await page.locator('#local-status[data-error=true]').filter({ hasText: /quota|storage|saving/i }).waitFor();
     assert.equal((await read()).files.find(file => file.path === 'main.tex').content, accepted.files.find(file => file.path === 'main.tex').content);
     assert.equal((await read()).project.outputDigest, accepted.project.outputDigest);
-    const held = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
-    await (await held).saveAs(join(work, 'quota-recovery.zip'));
+    await downloadProjectFile(page, 'Download as source (.zip)', join(work, 'quota-recovery.zip'));
     assert.equal(execFileSync('/usr/bin/unzip', ['-p', join(work, 'quota-recovery.zip'), 'main.tex'], { encoding: 'utf8' }), heldText);
     stage = 'crash-reopen';
     const reopen = page.url(), crashed = page.waitForEvent('crash');

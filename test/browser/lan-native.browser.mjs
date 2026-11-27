@@ -79,7 +79,7 @@ try {
   const owner = await ownerContext.newPage(); owner.on('pageerror', error => errors.push('owner: ' + error.message.slice(0, 200)));
   if (process.env.LAN_DEBUG) { owner.on('console', m => console.log('[owner console]', m.text().slice(0, 300))); owner.on('requestfailed', r => console.log('[owner failed]', r.url().slice(0, 120))); }
   await owner.goto(root + '/extension/index.html');
-  await owner.getByRole('link', { name: 'Work offline', exact: true }).click();
+  await owner.waitForURL(/\/recovery\/project-workspace\.html$/);
   await owner.getByRole('textbox', { name: 'New local project name', exact: true }).fill('Synthetic shared project');
   await owner.getByRole('button', { name: 'Create local project', exact: true }).click();
   await editorOf(owner).waitFor({ timeout: 60000 });

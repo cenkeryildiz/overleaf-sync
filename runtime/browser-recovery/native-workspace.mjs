@@ -11,7 +11,6 @@ const status = (text, error = false) => { const node = document.querySelector('#
 {
   // Offline controls live in the native toolbar; server-only Share and History are hidden here.
   const ui = globalThis.overleafOfflineToolbar, bar = document.querySelector('#local-bar');
-  const iconButton = (id, label, iconName) => ui.button({ id, ariaLabel: label, iconName, className: 'olx-icon-only' });
   const chip = ui.button({ className: 'olx-chip', iconName: 'cloud_off', label: 'Local only', ariaLabel: 'Local only options' }); chip.dataset.tone = 'local';
   const head = document.createElement('div'); head.className = 'olx-menu-head';
   const dot = document.createElement('span'); dot.className = 'olx-dot'; dot.dataset.state = 'disconnected';
@@ -28,8 +27,8 @@ const status = (text, error = false) => { const node = document.querySelector('#
   const wrap = document.createElement('div'); wrap.className = 'olx-menu-wrap'; wrap.append(chip, list);
   const separator = document.createElement('span'); separator.className = 'olx-separator';
   if (globalThis.overleafStandalone) bar.append(ui.button({ id: 'local-open-pdf', label: 'Open PDF', ariaLabel: 'Open an existing PDF', iconName: 'picture_as_pdf' }));
-  bar.append(iconButton('local-zip', 'Download project (.zip)', 'folder_zip'), iconButton('local-pdf', 'Download PDF', 'picture_as_pdf'),
-    ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), ...(globalThis.overleafStandalone && (!joined || joined.room) ? [ui.button({ id: 'local-share', label: 'Share', ariaLabel: 'Share on this network', iconName: 'share' })] : []), separator, wrap);
+  // Project ZIP and PDF downloads live in the editor's File menu (its ZIP link is routed to exportZip below).
+  bar.append(ui.button({ id: 'local-review', label: 'Review on server', ariaLabel: 'Review on server', iconName: 'cloud_sync' }), ...(globalThis.overleafStandalone && (!joined || joined.room) ? [ui.button({ id: 'local-share', label: 'Share', ariaLabel: 'Share on this network', iconName: 'share' })] : []), separator, wrap);
   bar.querySelector('#local-status').after(ui.durability());
   ui.mount(bar, { hideLabels: ['Share', 'History'] });
   if (globalThis.overleafStandalone) document.querySelector('#local-review').hidden = true;
@@ -600,21 +599,23 @@ try {
     try { if (joined) await joined.shared.exportCopy('export'); download(await projectZip(resources()), project.project + '.zip', 'application/zip'); }
     catch (error) { status(error.message + '. Your source files are retained.', true); }
   }
-  document.querySelector('#local-zip').onclick = exportZip;
-  document.querySelector('#local-pdf').onclick = async () => {
-    if (!project.pdf) { status('No saved PDF yet. Recompile the project first.', true); return; }
-    try { if (joined) await joined.shared.authorize('download'); download(project.pdf, 'output.pdf', 'application/pdf'); } catch (error) { status(error.message, true); }
-  };
   if (joined) { // visible state only: every handler above still needs an owner-signed ticket, and the owner re-checks the grant
-    const copyControls = ['#local-zip', '#local-pdf', '#local-export', '#local-savecopy'].map(id => document.querySelector(id));
+    const copyControls = ['#local-export', '#local-savecopy'].map(id => document.querySelector(id));
     const allowCopies = grant => { for (const node of copyControls) { node.disabled = grant !== 'copy'; node.title = grant === 'copy' ? '' : 'The project owner has not allowed copies of this project'; } };
     lanEvents.onGrant = allowCopies; allowCopies(joined.shared.store.grant);
   }
   document.addEventListener('click', event => {
     const link = event.target.closest('a[href]'); if (!link) return;
     const url = new URL(link.href, location.href);
+    // Only the navigation is cancelled: the menu's own click handler still runs and closes the menu.
     if (url.origin === location.origin && url.pathname === '/project/' + clientProject + '/download/zip') {
-      event.preventDefault(); event.stopImmediatePropagation(); void exportZip();
+      event.preventDefault(); void exportZip();
+    }
+    // File > Download as PDF links to a server download path; serve the saved PDF here (a joined participant needs the owner's grant).
+    else if (url.origin === location.origin && url.pathname.endsWith('/output.pdf')) {
+      event.preventDefault();
+      if (!project.pdf) { status('No saved PDF yet. Recompile the project first.', true); return; }
+      (joined ? joined.shared.authorize('download') : Promise.resolve()).then(() => download(project.pdf, 'output.pdf', 'application/pdf'), error => status(error.message, true));
     }
   }, true);
   document.querySelector('#local-export').onclick = async () => {

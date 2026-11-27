@@ -2,7 +2,17 @@
 // TEX-PKG-01: TeX Live package database (texlive.tlpdb) -> package records, dependency closure and what the in-browser
 // compiler can activate. Pure; the caller verifies the tlpdb's signature first (openpgp.mjs).
 const NONFREE = new Set(['', 'noinfo', 'nosell', 'nocommercial', 'other-nonfree', 'unknown']);
-const NEEDS = [[/^add(?:Mixed|Kanji)?Map\b/, 'font map (updmap)'], [/^AddFormat\b/, 'format file'], [/^AddHyphen\b/, 'hyphenation patterns']];
+const NEEDS = [[/^addKanjiMap\b/, 'Kanji font map'], [/^AddFormat\b/, 'format file'], [/^AddHyphen\b/, 'hyphenation patterns']];
+
+/** Only declared, package-owned maps are activated; no updmap command is executed. */
+export function fontMaps(pkg) {
+  return pkg.executes.filter(e => /^add(?:Mixed)?Map\b/.test(e)).map(e => {
+    const name = e.match(/^add(?:Mixed)?Map\s+([A-Za-z0-9][A-Za-z0-9._+-]*\.map)$/)?.[1];
+    const paths = name ? pkg.runfiles.filter(p => p.startsWith('fonts/map/') && p.endsWith('/' + name)) : [];
+    if (paths.length !== 1) throw Error('font map must name exactly one file in this package');
+    return paths[0];
+  });
+}
 
 /** One entry per package: {name, revision, category, depends, runfiles (texmf-dist relative), size, sha512, license, shortdesc, executes}. */
 export function parseTlpdb(text) {
@@ -31,6 +41,7 @@ export function unsupported(pkg) {
   if (!pkg) return 'not in TeX Live';
   if (pkg.category !== 'Package') return `a TeX Live ${pkg.category || 'entry'}, not a single package`;
   for (const exec of pkg.executes) for (const [pattern, what] of NEEDS) if (pattern.test(exec)) return `needs a ${what}, which the in-browser compiler cannot add`;
+  try { fontMaps(pkg); } catch (error) { return error.message; }
   if (!/^[0-9a-f]{128}$/.test(pkg.sha512) || !(pkg.size > 0)) return 'has no checksum in the catalog';
   const licenses = pkg.license.split(/\s+/).filter(Boolean);
   if (!licenses.length || licenses.some(l => NONFREE.has(l))) return `licence ${pkg.license || 'not stated'} does not allow redistribution here`;

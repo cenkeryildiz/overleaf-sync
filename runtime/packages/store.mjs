@@ -2,7 +2,7 @@
 // TEX-PKG-01/02 in the browser: the signed TeX Live catalog, an app-owned package store (IndexedDB) and the install flow
 // fetch -> SHA-512 from the signed catalog -> xz -> bounded tar -> exact runfiles -> one atomic activation. Nothing here
 // runs TeX code or is called on open/import/join; every network request is a user's Refresh or Install.
-import { parseTlpdb, closure, fileIndex, unsupported } from './tlpdb.mjs';
+import { parseTlpdb, closure, fileIndex, unsupported, fontMaps } from './tlpdb.mjs';
 import { readTar } from './tar.mjs';
 import { rsaKeys, verifyDetached } from './openpgp.mjs';
 
@@ -124,7 +124,7 @@ export async function install(names, { signal, progress = () => {} } = {}) {
       const entries = readTar(await unxz(bytes, LIMIT.unpacked)), wanted = new Set(pkg.runfiles);
       const files = entries.map(e => ({ path: e.path.replace(/^texmf-dist\//, ''), data: e.data })).filter(f => wanted.has(f.path));   // relocated packages (most) omit texmf-dist/
       if (files.length !== wanted.size) throw Error(`${pkg.name}: the archive does not contain exactly the files the package list names; nothing was installed`);
-      staged.push({ name: pkg.name, revision: pkg.revision, sha512: pkg.sha512, license: pkg.license, size: files.reduce((s, f) => s + f.data.length, 0), files });
+      staged.push({ name: pkg.name, revision: pkg.revision, sha512: pkg.sha512, license: pkg.license, size: files.reduce((s, f) => s + f.data.length, 0), files, maps: fontMaps(pkg) });
     }
     signal?.throwIfAborted();
     progress('Activating…');
@@ -160,7 +160,10 @@ export async function compileSet() {
   if (compileSetCache) return compileSetCache;
   const all = typeof indexedDB === 'undefined' ? [] : await read('packages').catch(() => []);
   const files = all.flatMap(p => p.current.files.map(f => ({ path: '.texmf/texmf-dist/' + f.path, content: f.data })));
-  if (files.length) files.push({ path: '.texmf/texmf-dist/ls-R', content: lsR(all.flatMap(p => p.current.files.map(f => f.path))) });
+  const maps = all.flatMap(p => (p.current.maps ?? []).map(path => new TextDecoder().decode(p.current.files.find(f => f.path === path).data)));
+  const mapPath = 'fonts/map/pdftex/olx/olx-packages.map';
+  if (maps.length) files.push({ path: '.texmf/texmf-dist/' + mapPath, content: new TextEncoder().encode(maps.join('\n') + '\n') });
+  if (files.length) files.push({ path: '.texmf/texmf-dist/ls-R', content: lsR([...all.flatMap(p => p.current.files.map(f => f.path)), ...(maps.length ? [mapPath] : [])]) });
   return compileSetCache = { files, manifest: all.map(p => ({ name: p.name, revision: p.current.revision, sha512: p.current.sha512 })).sort((a, b) => a.name.localeCompare(b.name)) };
 }
 /** kpathsea filename database for a TDS tree (TEXMFDIST trees are searched only through ls-R). */

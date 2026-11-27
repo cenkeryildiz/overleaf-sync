@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from 'node:assert/strict';
+import { downloadProjectFile } from './offline-controls.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -70,8 +71,7 @@ try {
   const pdfVisibleMs = performance.now() - pdfStarted;
   const before = await page.evaluate(async () => { const { project } = await overleafLocalProjects.read(location.hash.slice(1)); return { digest: project.pdfDigest, bytes: [...new Uint8Array(await project.pdf.arrayBuffer())] }; });
   assert.deepEqual(before.bytes, [...Buffer.from(pdf)]);
-  const downloaded = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download PDF', exact: true }).click();
-  await (await downloaded).saveAs(join(work, 'downloaded.pdf'));
+  await downloadProjectFile(page, 'Download as PDF', join(work, 'downloaded.pdf'));
   assert.equal(readFileSync(join(work, 'downloaded.pdf'), 'utf8'), pdf);
   writeFileSync(join(work, 'invalid.pdf'), 'This is not a PDF');
   await openPdf(join(work, 'invalid.pdf'));
@@ -79,7 +79,7 @@ try {
   assert.equal(await page.evaluate(async () => (await overleafLocalProjects.read(location.hash.slice(1))).project.pdfDigest), before.digest);
   await page.reload(); await editor.waitFor();
   await page.locator('.textLayer span').filter({ hasText: 'Existing PDF fixture' }).first().waitFor();
-  await page.getByRole('button', { name: /^New file$/i }).click();
+  await page.getByRole('button', { name: /New file$/i }).click();
   await page.getByRole('textbox', { name: /^File name$/i }).fill('notes.tex');
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await page.getByRole('treeitem', { name: 'notes.tex', exact: true }).waitFor();
@@ -93,7 +93,7 @@ try {
   await page.locator('.rename-input input').pressSequentially('renamed.tex'); await page.locator('.rename-input input').press('Enter');
   await page.getByRole('treeitem', { name: 'renamed.tex', exact: true }).waitFor();
   await page.getByRole('treeitem', { name: 'main.tex', exact: true }).click();
-  await page.getByRole('button', { name: /^New folder$/i }).click();
+  await page.getByRole('button', { name: /New folder$/i }).click();
   await page.getByRole('dialog').getByRole('textbox').fill('chapters');
   await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
   await page.getByRole('treeitem', { name: 'chapters', exact: true }).waitFor();
@@ -168,8 +168,7 @@ try {
   assert(Object.values(guards).every(Boolean));
   const snapshot = await page.evaluate(async () => overleafLocalProjects.read(location.hash.slice(1)));
   for (const [path, text] of Object.entries(files)) assert.equal(snapshot.files.find(file => file.path === path).content, text);
-  const downloadedZip = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download project (.zip)', exact: true }).click();
-  await (await downloadedZip).saveAs(join(work, 'export.zip'));
+  await downloadProjectFile(page, 'Download as source (.zip)', join(work, 'export.zip'));
   for (const [path, text] of Object.entries(files)) assert.equal(execFileSync('/usr/bin/unzip', ['-p', join(work, 'export.zip'), path], { encoding: 'utf8' }), text);
   assert.deepEqual(execFileSync('/usr/bin/unzip', ['-p', join(work, 'export.zip'), 'asset.bin']), binary);
   assert.equal(await page.evaluate(() => globalThis.nativeCalls), 0);
