@@ -58,7 +58,16 @@
         if (content && content.to > content.from && content.to - content.from <= 32768) return { from: content.from, to: content.to };
       }
     }
+    // Native uniqueness counts substrings, so "rate" in "corporate" or "\rate" made a unique word land at column 0.
+    const comment = line.text.search(/(?<!\\)%/), body = comment < 0 ? line.text : line.text.slice(0, comment), words = [];
+    for (let at = body.indexOf(selected); at !== -1 && words.length < 2; at = body.indexOf(selected, at + 1)) {
+      const end = at + selected.length;
+      if (/^[\p{L}\p{N}]/u.test(selected) && /[\p{L}\p{N}\\@]/u.test(body[at - 1] || '')) continue;
+      if (/[\p{L}\p{N}]$/u.test(selected) && /[\p{L}\p{N}]/u.test(body[end] || '')) continue;
+      words.push(at);
+    }
     const sameLine = line.text.indexOf(selected);
+    if (words.length === 1 && sameLine !== line.text.lastIndexOf(selected)) return { from: line.from + words[0], to: line.from + words[0] + selected.length };
     if (selected !== original && sameLine >= 0 && sameLine === line.text.lastIndexOf(selected) && !line.text.slice(0, sameLine).includes('%') && line.text[sameLine - 1] !== '\\') return { from: line.from + sameLine, to: line.from + sameLine + selected.length };
     if (sameLine >= 0 && sameLine === line.text.lastIndexOf(selected)) return null;
     if (position > 2000000) return null;

@@ -18,6 +18,8 @@ Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike no
 Second paragraph here with a final
 word ending.
 
+The corporate rate rose.
+
 \begin{itemize}
 \item[1.] Estimation and solution appear as ordinary words.
 \end{itemize}
@@ -101,6 +103,12 @@ try {
     const point = await ending.evaluate(n => { const t = n.firstChild, at = t.textContent.indexOf('ending'), r = new Range(); r.setStart(t, at); r.setEnd(t, at + 6); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
     await page.mouse.dblclick(point.x, point.y);
     await page.waitForFunction(line => { const v = document.querySelector('[aria-label^="Source Editor"]').cmView.view; return v.state.doc.lineAt(v.state.selection.main.from).number === line; }, source.slice(0, source.indexOf('ending')).split('\n').length);
+    // "rate" is one word but a repeated substring ("corporate"); the editor must select it, not the line start.
+    const rate = page.locator('.textLayer span').filter({ hasText: /corporate rate/ }).first(); await rate.scrollIntoViewIfNeeded();
+    const at = await rate.evaluate(n => { const t = n.firstChild, i = t.textContent.indexOf(' rate') + 1, r = new Range(); r.setStart(t, i); r.setEnd(t, i + 4); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
+    await page.mouse.dblclick(at.x, at.y);
+    await page.waitForFunction(from => { const s = document.querySelector('[aria-label^="Source Editor"]').cmView.view.state.selection.main; return s.from === from && s.to === from + 4; }, source.indexOf(' rate ') + 1);
+    checked++;
     await check('mike', source.indexOf('mike') + 1, 0); await page.waitForTimeout(2400); assert.equal(await page.locator('.olx-caret-word').count(), 0);
   }
   assert((await editor.evaluate(n => n.cmView.view.state.doc.toString())) === source, 'source unchanged'); assert.deepEqual(errors, []);
