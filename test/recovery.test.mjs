@@ -138,6 +138,12 @@ test('offline navigation uses exact project paths and refuses malformed or overs
   const nodes = [{ path: 'one/child.tex', line: 5, page: 1, x: 10, y: 20, width: 30, height: 10 }, { path: 'two/child.tex', line: 7, page: 2, x: 5, y: 6, width: 10, height: 10 }];
   assert.equal(forward(nodes, 'one/child.tex', 5), nodes[0]); assert.equal(forward(nodes, 'child.tex', 5), undefined);
   assert.equal(backward(nodes, 2, 7, 8), nodes[1]); assert.equal(backward(nodes, 3, 7, 8), undefined);
+  // The terminal glue and the last word can share an x, tagged two source lines apart.
+  const box = { x: 0, y: 0, width: 100, height: 10, line: 12 }, record = (x, line) => ({ path: 'main.tex', page: 1, x, y: 0, width: 0, height: 10, type: 'g', line, box });
+  const end = record(100, 12), word = record(100, 10), before = record(50, 10);
+  for (const tied of [[before, end, word], [before, word, end]]) assert.equal(backward(tied, 1, 90, 5), word);
+  assert.equal(backward([before, end], 1, 90, 5), before);
+  const next = record(100, 11); assert.equal(backward([before, next], 1, 90, 5), next);
   const project = { main: 'main.tex', compiler: 'pdflatex' }, files = [{ path: 'main.tex', content: 'base' }, { path: 'figure.png', data: 'AA==' }];
   assert.equal(await fingerprint(project, files), await fingerprint(project, files.toReversed()));
   assert.notEqual(await fingerprint(project, files), await fingerprint(project, [{ ...files[0], content: 'changed' }, files[1]]));

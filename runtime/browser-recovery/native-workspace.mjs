@@ -57,6 +57,44 @@ function outputFiles() {
     type: path === 'output.pdf' ? 'pdf' : path === 'output.log' ? 'log' : 'synctex.gz', build,
     url: `/recovery/native-output/${project.id}/${build}/${path}`, ...(path === 'output.pdf' ? { size: project.pdf.size, ranges: [], createdAt: new Date() } : {}) }));
 }
+/** The word under a source caret and which occurrence of it on that line it is (0-based), or undefined. */
+function caretWord(text, line, column) {
+  const source = text?.split('\n')[line - 1]; if (source === undefined || !Number.isSafeInteger(column)) return;
+  const words = [...source.replace(/(?<!\\)%.*/, '').replace(/\\(?:begin|end)\s*\{[^}]*\}/g, m => ' '.repeat(m.length)).matchAll(/\\?[\p{L}\p{N}]+/gu)].filter(m => !m[0].startsWith('\\'));   // never a command name
+  const at = words.find(m => m.index <= column && column <= m.index + m[0].length); if (!at || at[0].length < 2) return;
+  return { word: at[0], occurrence: words.filter(m => m[0] === at[0] && m.index < at.index).length };
+}
+// Source → PDF: besides the viewer's yellow line highlight, mark the caret's word itself. The region is the one returned
+// to the viewer (PDF points); the mark lives in that page, so it scrolls and zooms with it, and fades like the highlight.
+let marking = 0;
+function markWord(target, node) {
+  document.querySelectorAll('.olx-caret-word').forEach(n => n.remove()); const run = ++marking;
+  if (!target) return;
+  const place = (tries = 0) => {
+    if (run !== marking) return;
+    const page = document.querySelector(`.pdfViewer .page[data-page-number="${node.page}"]`), layer = page?.querySelector('.textLayer');
+    const points = Number(page?.style.width.match(/\*\s*([\d.]+)px/)?.[1]), scale = points > 0 && page.getBoundingClientRect().width / points;   // pdf.js: width = scale × page points
+    if (!layer?.querySelector('span') || !scale) { if (tries < 30) setTimeout(() => place(tries + 1), 100); return; }   // page still rendering
+    const origin = page.getBoundingClientRect(), slack = 2 * scale, found = [];
+    const area = { left: origin.left + node.x * scale - slack, top: origin.top + node.y * scale - slack, right: origin.left + (node.x + node.width) * scale + slack, bottom: origin.top + (node.y + node.height) * scale + slack };
+    for (const span of layer.querySelectorAll('span')) {
+      const text = span.firstChild; if (text?.nodeType !== 3) continue;
+      for (const m of text.textContent.matchAll(/[\p{L}\p{N}]+/gu)) if (m[0] === target.word) {
+        const range = new Range(); range.setStart(text, m.index); range.setEnd(text, m.index + m[0].length); const r = range.getBoundingClientRect();
+        if (r.left + r.width / 2 >= area.left && r.left + r.width / 2 <= area.right && r.top + r.height / 2 >= area.top && r.top + r.height / 2 <= area.bottom) found.push(r);
+      }
+    }
+    if (!found.length) return;   // e.g. the word was typeset by a macro or inside math
+    found.sort((a, b) => Math.abs(a.top - b.top) > 2 ? a.top - b.top : a.left - b.left);
+    const rect = found[target.occurrence]; if (!rect) return;   // no substitute when this occurrence was not typeset
+    const mark = document.createElement('div'); mark.className = 'olx-caret-word';
+    Object.assign(mark.style, { position: 'absolute', zIndex: 3, left: rect.left - origin.left - 1 + 'px', top: rect.top - origin.top - 1 + 'px', width: rect.width + 2 + 'px', height: rect.height + 2 + 'px',
+      background: 'rgba(255, 110, 0, 0.35)', outline: '2px solid rgb(225, 75, 0)', borderRadius: '2px', pointerEvents: 'none', transition: 'opacity 1s' });
+    page.append(mark);
+    setTimeout(() => { mark.style.opacity = '0'; setTimeout(() => mark.remove(), 1100); }, 1100);   // the viewer's highlight shows for ~1.1 s, then fades over 1 s
+  };
+  place();
+}
 function download(bytes, name, type = 'application/octet-stream') {
   const url = URL.createObjectURL(new Blob([bytes], { type })), link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -515,6 +553,7 @@ try {
       if (!nav || outputDigest !== await sourceKey(saved.files, await packageSet())) return Response.json({ error: 'Recompile current source first' }, { status: 409 });
       if (url.pathname.endsWith('/code')) {
         const path = url.searchParams.get('file')?.split('/').filter(part => part && part !== '.').join('/'), node = forward(nav, path, Number(url.searchParams.get('line')));
+        markWord(node?.line === Number(url.searchParams.get('line')) ? caretWord(saved.files.find(file => file.path === path)?.content, node.line, Number(url.searchParams.get('column'))) : undefined, node);
         return node ? Response.json({ pdf: [{ page: node.page, h: node.x, v: node.y, width: node.width, height: node.height }] }) : Response.json({ error: 'No location' }, { status: 404 });
       }
       const node = backward(nav, Number(url.searchParams.get('page')), Number(url.searchParams.get('h')), Number(url.searchParams.get('v')));

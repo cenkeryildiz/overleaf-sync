@@ -134,10 +134,14 @@ export function backward(nodes, page, x, y) {
   const first = list => list.reduce((a, b) => b.x < a.x ? b : a), last = list => list.reduce((a, b) => b.x > a.x ? b : a);
   const right = records.filter(node => node.x > x), left = records.filter(node => node.x <= x);
   if (!right.length) return last(records);
-  const after = first(right), earlier = lines.get(chosen.previous)?.filter(node => node.type !== 'x');
+  const earlier = lines.get(chosen.previous)?.filter(node => node.type !== 'x');
   // A preceding line that ended its own paragraph (final record tagged with its box line) says nothing about this one.
   const carried = earlier?.length && last(earlier).line !== chosen.previous.line ? last(earlier) : undefined;
   const before = left.length ? last(left) : carried;
+  // At a paragraph's last word, the word's own glue and the paragraph-closing glue share one x: prefer the record that
+  // continues the clicked text over the line TeX read to end the paragraph.
+  const nearest = first(right), tied = right.filter(node => Math.abs(node.x - nearest.x) <= 0.5);
+  const after = tied.find(node => node.line === before?.line) ?? tied.find(node => node.line !== chosen.line) ?? nearest;
   // Material closing a box (paragraph fill, cell glue) carries the line TeX read to end it, as does the box itself:
   // usually the blank line or the next row, so the record before the click dates the clicked text instead.
   return before && before.line !== chosen.line && right.every(node => node.line === chosen.line) ? before : after;
